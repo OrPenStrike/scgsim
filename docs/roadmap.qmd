@@ -1,0 +1,34 @@
+---
+title: "Roadmap and Current Status"
+---
+
+## Current status
+
+| Surface | State |
+|---|---|
+| Documentation and public contracts | Phase-1 candidate |
+| Installable/importable package and version metadata | Phase-1 product scaffold target |
+| `scgsim.palace` | Planned; not implemented |
+| `scgsim.aedt` | Planned; not implemented |
+| Common run/handoff and profiles | Planned; not implemented |
+| Unified reports | Planned; not implemented |
+| Notebook interfaces | Planned; not implemented |
+
+The docs-first repository base is empty of product code. This site therefore
+does not provide installation or execution instructions yet.
+
+## Near term
+
+1. Land and validate the package/version scaffold.
+2. Define the common artifact, profile, receipt, and handoff models.
+3. Implement Palace Electrostatic and Eigenmode, emphasizing Surface EPR.
+4. Implement version-locked PyAEDT paths for HFSS Eigenmode, HFSS Driven
+   Modal/Terminal, Q3D, and Q2D.
+5. Add notebook contracts and Plotly reports only as real APIs become available.
+
+## Later
+
+- Palace Driven
+- Palace Magnetostatic
+
+Meep remains excluded.

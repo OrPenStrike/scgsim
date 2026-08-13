@@ -1,0 +1,22 @@
+---
+title: "Backend Support Matrix"
+---
+
+No backend is implemented in Phase 1. The table is a roadmap, not a capability
+claim.
+
+| Backend surface | Public namespace | Phase-1 state | Planned order |
+|---|---|---|---|
+| Palace Electrostatic | `scgsim.palace` | Planned; not implemented | Near term, with Surface EPR emphasis |
+| Palace Eigenmode | `scgsim.palace` | Planned; not implemented | Near term |
+| Palace Driven | `scgsim.palace` | Planned; not implemented | Later |
+| Palace Magnetostatic | `scgsim.palace` | Planned; not implemented | Later |
+| HFSS Eigenmode | `scgsim.aedt` | Planned; not implemented | Near term |
+| HFSS Driven Modal | `scgsim.aedt` | Planned; not implemented | Near term |
+| HFSS Driven Terminal | `scgsim.aedt` | Planned; not implemented | Near term |
+| Q3D | `scgsim.aedt` | Planned; not implemented | Near term |
+| Q2D | `scgsim.aedt` | Planned; not implemented | Near term |
+| Meep | None | Excluded | Not planned |
+
+Backend support requires real implementation, validation, and evidence. A
+namespace name or source-lane identity is not support.

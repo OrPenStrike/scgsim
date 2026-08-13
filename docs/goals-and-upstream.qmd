@@ -1,0 +1,45 @@
+---
+title: "Goals, Non-goals, and Upstream Relationship"
+---
+
+## Goals
+
+SCGSim is an independent downstream toolkit for research-stable,
+superconducting-circuit simulation workflows. Its direction is:
+
+- one explicit geometry-to-results contract across supported solvers;
+- public, reviewable provenance and failure behavior;
+- notebook-first workflows that stay readable to researchers;
+- results-first feedback to the [gsim community](https://github.com/gdsfactory/gsim)
+  through public fixtures and evidence;
+- Agent-driven development with exact revision and validation records.
+
+## Non-goals
+
+SCGSim does not:
+
+- claim to be official gsim or replace upstream gsim;
+- promise that every code change receives Human review;
+- automatically accept upstream gsim APIs as SCGSim APIs;
+- maintain compatibility shims for older experimental interfaces;
+- support Meep;
+- use external gdsfactory or cloud execution as a fallback;
+- publish private designs, controls, paths, or run artifacts.
+
+## Starting-source identities
+
+The integrated starting lane is:
+
+| Authority | Exact identity | Meaning |
+|---|---|---|
+| gsim downstream source | `0.2.0+scq.1`, `main@8f5dc6c05255d003a9c6d8959537bcf8068379d3`, tree `505a53741953666da17d81b7036eba3ac296cd1a` | Source input for selective downstream integration; not automatic SCGSim API acceptance. |
+| Semantic Geometry Builder | `e74a343154c6b19b6ba32d6fb297e700cfe08ff2` | Geometry and topology authority consumed by SCGSim. |
+
+These identities establish provenance only. They imply neither a numerical
+Surface-EPR result nor a live Palace solve.
+
+## Upstream feedback
+
+The default feedback route is public fixtures, evidence, and concrete findings.
+Upstream source contribution is optional and case-specific rather than the
+definition of downstream success.

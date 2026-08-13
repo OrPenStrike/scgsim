@@ -1,0 +1,71 @@
+project:
+  type: website
+  output-dir: _site
+  render:
+    - README.md
+    - docs/*.qmd
+
+website:
+  title: "SCGSim"
+  description: "Independent downstream research toolkit for superconducting-circuit simulation"
+  page-navigation: true
+  reader-mode: true
+  search: true
+  repo-url: https://github.com/OrPenStrike/scgsim
+  repo-actions: [source, issue]
+  navbar:
+    left:
+      - text: "Overview"
+        href: README.md
+      - text: "Architecture"
+        href: docs/architecture.qmd
+      - text: "Backends"
+        href: docs/backend-support.qmd
+      - text: "Notebook UX"
+        href: docs/notebook-ux.qmd
+    right:
+      - text: "SCQ Design Kit"
+        href: https://github.com/arfiligol/SCQ_Design
+  sidebar:
+    style: docked
+    collapse-level: 1
+    contents:
+      - text: "Overview"
+        href: README.md
+      - text: "Goals and upstream relationship"
+        href: docs/goals-and-upstream.qmd
+      - text: "Architecture and data flow"
+        href: docs/architecture.qmd
+      - text: "Backend support matrix"
+        href: docs/backend-support.qmd
+      - text: "Notebook UX contracts"
+        href: docs/notebook-ux.qmd
+      - text: "Geometry and SGB Route A/B"
+        href: docs/geometry-sgb.qmd
+      - text: "Execution profiles and handoff"
+        href: docs/execution-profiles.qmd
+      - text: "Unified report model"
+        href: docs/report-model.qmd
+      - text: "Provenance and data boundaries"
+        href: docs/provenance.qmd
+      - text: "Roadmap and current status"
+        href: docs/roadmap.qmd
+      - text: "Folder tree and ownership"
+        href: docs/ownership.qmd
+
+format:
+  html:
+    theme:
+      light: [cosmo, docs/theme-light.scss]
+      dark: [cosmo, docs/theme-dark.scss]
+    css: docs/styles.css
+    html-math-method: mathjax
+    respect-user-color-scheme: true
+    toc: true
+    page-layout: article
+    grid:
+      sidebar-width: 260px
+      body-width: 960px
+      margin-width: 240px
+      gutter-width: 2.5rem
+    code-copy: true
