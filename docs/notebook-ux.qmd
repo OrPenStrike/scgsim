@@ -11,13 +11,13 @@ Phase 1.
 
 The control surface has seven visible sections:
 
-1. Design / Geometry
-2. Meshing
-3. Solver
-4. Execution
-5. Output / Run Identity
-6. Validation / Failure
-7. Data Classification / Provenance
+1. `Design And Geometry Controls`
+2. `Meshing Controls`
+3. `Solver Controls`
+4. `Execution Controls`
+5. `Output And Run Identity Controls`
+6. `Validation And Failure Controls`
+7. `Data Classification And Provenance`
 
 The visible workflow stages are:
 

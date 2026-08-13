@@ -10,8 +10,8 @@ from solver-generated labels.
 
 | Route | Public intent | Current state |
 |---|---|---|
-| Route A | Thin-film or surface-based semantic handoff | Planned consumer path |
-| Route B | Closed PEC boundary shell around excluded conductor interior; the metal interior is not volume-meshed or solved | Planned consumer path |
+| Route A | Zero-thickness face-metal PEC sheets with finite bump shells | Planned consumer path |
+| Route B | The closed exterior boundary shell of a finite construction metal volume is PEC; its interior is excluded from Palace solution domains and receives no tetrahedra | Planned consumer path |
 
 Only Route A and Route B are in the current direction. Their availability in
 SGB does not make a solver backend implemented.

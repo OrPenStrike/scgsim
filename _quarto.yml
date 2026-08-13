@@ -23,9 +23,6 @@ website:
         href: docs/backend-support.qmd
       - text: "Notebook UX"
         href: docs/notebook-ux.qmd
-    right:
-      - text: "SCQ Design Kit"
-        href: https://github.com/arfiligol/SCQ_Design
   sidebar:
     style: docked
     collapse-level: 1
