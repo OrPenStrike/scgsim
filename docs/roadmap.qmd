@@ -6,28 +6,27 @@ title: "Roadmap and Current Status"
 
 | Surface | State |
 |---|---|
-| Documentation and public contracts | Phase-1 candidate; not integrated |
-| Installable/importable package and version metadata | Implemented and CI-validated in a separate runtime candidate; not integrated |
+| Documentation and public contracts | Integrated Phase-1 scaffold |
+| Installable/importable package and version metadata | Implemented, CI-validated, and integrated |
 | `scgsim.palace` | Planned; not implemented |
 | `scgsim.aedt` | Planned; not implemented |
 | Common run/handoff and profiles | Planned; not implemented |
 | Unified reports | Planned; not implemented |
 | Notebook interfaces | Planned; not implemented |
 
-The exact `develop` base remains empty of product code. The separate runtime
-candidate provides only package/version metadata and build/CI packaging checks:
-Python `~=3.12.0`, `scgsim.__version__ == "0.1.0.dev0"`, and no runtime
-dependencies. This site therefore does not provide installation or execution
-instructions yet.
+The current implementation provides only package/version metadata and build/CI
+packaging checks: Python `~=3.12.0`,
+`scgsim.__version__ == "0.1.0.dev0"`, and no runtime dependencies. This site
+therefore does not provide solver or execution instructions yet.
 
 ## Near term
 
-1. Integrate the documentation and package/version scaffold candidates.
-2. Define the common artifact, profile, receipt, and handoff models.
-3. Implement Palace Electrostatic and Eigenmode, emphasizing Surface EPR.
-4. Implement version-locked PyAEDT paths for HFSS Eigenmode, HFSS Driven
+1. Define the common artifact, profile, receipt, and handoff models.
+2. Implement Palace Electrostatic and Eigenmode, emphasizing Surface EPR.
+3. Implement version-locked PyAEDT paths for HFSS Eigenmode, HFSS Driven
    Modal/Terminal, Q3D, and Q2D.
-5. Add notebook contracts and Plotly reports only as real APIs become available.
+4. Add notebook implementations and Plotly reports only as real APIs become
+   available.
 
 ## Later
 
