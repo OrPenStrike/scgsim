@@ -11,6 +11,17 @@ requires-python = "~=3.12.0"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 
+[project.optional-dependencies]
+palace = [
+    "gdsfactory>=9,<10",
+    "gdstk",
+    "gmsh",
+]
+dev = [
+    "jupytext",
+    "nbformat",
+]
+
 [project.urls]
 Homepage = "https://github.com/OrPenStrike/scgsim"
 
@@ -19,3 +30,9 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ruff.lint.per-file-ignores]
+"notebooks/palace_route_a_electrostatic.py" = ["E402"]
+"notebooks/palace_route_b_electrostatic.py" = ["E402"]
+"notebooks/palace_route_a_eigenmode.py" = ["E402"]
+"notebooks/palace_route_b_eigenmode.py" = ["E402"]

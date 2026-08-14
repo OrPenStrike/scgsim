@@ -4,16 +4,28 @@ Copyright 2026 OrPenStrike and contributors.
 SCGSim is an independent downstream toolkit and is not an official or
 endorsed release of gsim.
 
-Phase 1 is the original public-package scaffold only, with no gsim source
-copied or modified.
+Phase 1 includes a Route-A/Route-B candidate implementation with scoped gsim-derived
+code and explicit attributions under Apache-2.0:
 
-Future implementation references are:
-  integrated gsim base: 8f5dc6c05255d003a9c6d8959537bcf8068379d3
-  implementation tree: 505a53741953666da17d81b7036eba3ac296cd1a
-  SGB authority: e74a343154c6b19b6ba32d6fb297e700cfe08ff2
+Implementation references are:
+  gsim 0.2.0+scq.1 source SHA: 8f5dc6c05255d003a9c6d8959537bcf8068379d3
+  gsim portable handoff source SHA: 8cf5fa79fa3abb176940dbfc520ff34a44f4770e
+  SGB integrated Core base SHA: e74a343154c6b19b6ba32d6fb297e700cfe08ff2
+  SGB junction-sheet development source SHA: f3fd898d6e4eaf31595c9aaca6a0658f0cb7f3b1
+  Palace runtime: v0.16.1; config schema: v0.16.0
 
-Future adapted source work must preserve upstream notices and
-prominently document all source modifications.
+All adapted files in this candidate must preserve upstream notices and
+document source modifications that are specific to Route-A/Route-B behavior.
+
+Route-A/Route-B implementation (v0.1.0.dev0 candidate): adapted from
+gsim 0.2.0+scq.1 @
+8f5dc6c05255d003a9c6d8959537bcf8068379d3 and
+semantic-geometry-builder@e74a343154c6b19b6ba32d6fb297e700cfe08ff2 under Apache-2.0.
+
+The Semantic Geometry Builder Core is incorporated as `scgsim.sgb`. Its
+original public module structure was retained while imports and package
+ownership were modified for the SCGSim in-project namespace. SCGSim does not
+ship a second external SGB runtime implementation.
 
 This project is licensed under the Apache License, Version 2.0. A copy of the
 license is included in the LICENSE file in this repository.
