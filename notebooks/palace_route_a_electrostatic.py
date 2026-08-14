@@ -141,11 +141,8 @@ stack = build_kosen2024_flip_chip_xmon_stack(
     d0_top_ground_mask_layer=tuple(LAYER.D0_TOP_GROUND_MASK),
     indium_bump_layer=tuple(LAYER.D0_D1_INDIUM_BUMP),
     coupon_padding_um=GEOMETRY_CONTROLS["coupon_padding_um"],
-    air_below_thickness_um=GEOMETRY_CONTROLS["auto_vacuum_padding_um"][2],
-    air_above_thickness_um=GEOMETRY_CONTROLS["auto_vacuum_padding_um"][2],
+    include_airbox=False,
 )
-for airbox_id in ("AIR_BELOW", "AIR_ABOVE"):
-    stack["solution_regions"].pop(airbox_id)
 solution_regions = stack["solution_regions"]
 assert tuple(solution_regions) == (
     "D0_SUBSTRATE",
