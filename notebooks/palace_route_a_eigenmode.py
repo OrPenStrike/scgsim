@@ -30,8 +30,7 @@ GEOMETRY_CONTROLS = {
     "logical_metal": "D1_BOTTOM_M1",
     "inductance_h": 1e-12,
     "coupon_padding_um": 75.0,
-    "air_below_thickness_um": float(OUTER_VACUUM_THICKNESS_UM),
-    "air_above_thickness_um": float(OUTER_VACUUM_THICKNESS_UM),
+    "auto_vacuum_padding_um": (0.0, 0.0, float(OUTER_VACUUM_THICKNESS_UM)),
 }
 
 # %% [markdown]
@@ -108,7 +107,7 @@ VALIDATION_CONTROLS = {
 # %%
 PROVENANCE = {
     "classification": "public",
-    "orpen_sc_pdk_revision": "a16e8a123ce3ebfbda30aba31024506c2dcfd0c8",
+    "orpen_sc_pdk_revision": "6bef7a185991c0c49d41f6faf36984b4c36e45ff",
     "gsim_meshing_methodology": "8f5dc6c05255d003a9c6d8959537bcf8068379d3",
     "palace_runtime": "0.16.1",
     "palace_schema": "0.16.0",
@@ -143,16 +142,16 @@ stack = build_kosen2024_flip_chip_xmon_stack(
     d0_top_ground_mask_layer=tuple(LAYER.D0_TOP_GROUND_MASK),
     indium_bump_layer=tuple(LAYER.D0_D1_INDIUM_BUMP),
     coupon_padding_um=GEOMETRY_CONTROLS["coupon_padding_um"],
-    air_below_thickness_um=GEOMETRY_CONTROLS["air_below_thickness_um"],
-    air_above_thickness_um=GEOMETRY_CONTROLS["air_above_thickness_um"],
+    air_below_thickness_um=GEOMETRY_CONTROLS["auto_vacuum_padding_um"][2],
+    air_above_thickness_um=GEOMETRY_CONTROLS["auto_vacuum_padding_um"][2],
 )
+for airbox_id in ("AIR_BELOW", "AIR_ABOVE"):
+    stack["solution_regions"].pop(airbox_id)
 solution_regions = stack["solution_regions"]
 assert tuple(solution_regions) == (
-    "AIR_BELOW",
     "D0_SUBSTRATE",
     "D0_TO_D1_GAP",
     "D1_SUBSTRATE",
-    "AIR_ABOVE",
 )
 assert (
     len(
@@ -164,12 +163,12 @@ assert (
     == 1
 )
 assert (
-    solution_regions["AIR_BELOW"]["geometry"]["z_max_um"]
-    == solution_regions["D0_SUBSTRATE"]["geometry"]["z_min_um"]
+    solution_regions["D0_SUBSTRATE"]["geometry"]["z_max_um"]
+    == solution_regions["D0_TO_D1_GAP"]["geometry"]["z_min_um"]
 )
 assert (
-    solution_regions["D1_SUBSTRATE"]["geometry"]["z_max_um"]
-    == solution_regions["AIR_ABOVE"]["geometry"]["z_min_um"]
+    solution_regions["D0_TO_D1_GAP"]["geometry"]["z_max_um"]
+    == solution_regions["D1_SUBSTRATE"]["geometry"]["z_min_um"]
 )
 run_dir = OUTPUT_CONTROLS["run_dir"]
 if run_dir.exists() and any(run_dir.iterdir()):
@@ -183,6 +182,7 @@ sim = EigenmodeSim()
 sim.set_geometry(component)
 sim.set_stack(stack)
 sim.set_output_dir(run_dir)
+sim.set_vacuum_region(padding=GEOMETRY_CONTROLS["auto_vacuum_padding_um"])
 sim.set_surface_epr(representation=GEOMETRY_CONTROLS["route"], specs=EPR_SPECS)
 sim.add_port(
     GEOMETRY_CONTROLS["port_name"],
@@ -218,6 +218,43 @@ sim.set_numerical(
 mesh_path = sim.mesh()
 assert f"$MeshFormat\n{VALIDATION_CONTROLS['msh_version']} 0 8" in mesh_path.read_text()
 manifest = json.loads((run_dir / "metadata" / "mesh_manifest.json").read_text())
+auto_stack = json.loads((run_dir / "geometry" / "design.stack.json").read_text())
+auto_regions = auto_stack["solution_regions"]
+assert tuple(auto_regions) == (
+    "D0_SUBSTRATE",
+    "D0_TO_D1_GAP",
+    "D1_SUBSTRATE",
+    "VACUUM_REGION",
+)
+auto_vacuum = auto_regions["VACUUM_REGION"]
+assert auto_vacuum["material_id"] == "vacuum"
+assert auto_vacuum["material_kind"] == "vacuum"
+assert auto_vacuum["metadata"]["source"] == "set_vacuum_region"
+assert (
+    auto_vacuum["geometry"]["domain_bounds_um"]
+    == auto_regions["D0_SUBSTRATE"]["geometry"]["domain_bounds_um"]
+)
+assert auto_regions["D0_TO_D1_GAP"]["material_id"] == "vacuum"
+assert auto_stack["metadata"]["component_contract"] == (
+    "kosen2024_flip_chip_xmon_qubit public zero-argument cell"
+)
+volume_groups = {
+    group["name"]: group
+    for group in manifest["groups"]
+    if group["section"] == "volumes"
+}
+assert {"D0_SUBSTRATE", "D0_TO_D1_GAP", "D1_SUBSTRATE", "VACUUM_REGION"} <= set(
+    volume_groups
+)
+assert set(volume_groups["D0_TO_D1_GAP"]["tags"]).isdisjoint(
+    volume_groups["VACUUM_REGION"]["tags"]
+)
+assert not [
+    group
+    for group in manifest["groups"]
+    if group["section"] == "volumes"
+    and group.get("physical_attribute", {}).get("material_kinds") == ["conductor"]
+]
 port_group = next(
     group for group in manifest["groups"] if group["section"] == "port_surfaces"
 )
@@ -225,6 +262,29 @@ assert len(port_group["owner_semantic_ids"]) == VALIDATION_CONTROLS["port_owner_
 assert (
     len(port_group["adjacent_solution_volume_ids"])
     == VALIDATION_CONTROLS["adjacent_solution_volume_count"]
+)
+assert port_group["embedded_volume_id"] == "D0_TO_D1_GAP"
+assert port_group["interface_of"] == ["D0_TO_D1_GAP", "D1_SUBSTRATE"]
+gate = json.loads(
+    (
+        run_dir
+        / "metadata"
+        / "semantic_geometry"
+        / "engine_gate_gmsh_brep_conformality.json"
+    ).read_text()
+)
+port_records = [
+    record
+    for record in gate["records"]
+    if record["source_record_kind"] == "route_a_lumped_port_mesh"
+]
+assert len(port_records) == 2
+assert all(
+    record["status"] == "pass"
+    and record["shared_mesh_node_count"] > 0
+    and record["expected_terminal_curve_ids"] == record["credited_terminal_curve_ids"]
+    and all(record["per_terminal_curve_shared_node_counts"].values())
+    for record in port_records
 )
 
 # %% [markdown]
@@ -234,10 +294,14 @@ assert (
 config_path = sim.write_config()
 config = json.loads(config_path.read_text())
 assert len(config["Boundaries"]["LumpedPort"]) == 1
+port_config = config["Boundaries"]["LumpedPort"][0]
 port_information = json.loads(
     (run_dir / "metadata" / "port_information.json").read_text()
 )
-assert port_information["ports"][0]["name"] == GEOMETRY_CONTROLS["port_name"]
+port_information = port_information["ports"][0]
+assert port_information["name"] == GEOMETRY_CONTROLS["port_name"]
+assert port_config["L"] == GEOMETRY_CONTROLS["inductance_h"]
+assert port_config["Direction"] == port_information["direction"]
 
 # %% [markdown]
 # ## Prepare And Inspect Handoff

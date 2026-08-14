@@ -26,8 +26,7 @@ GEOMETRY_CONTROLS = {
     "route": "B",
     "component": "kosen2024_flip_chip_xmon_qubit",
     "coupon_padding_um": 75.0,
-    "air_below_thickness_um": float(OUTER_VACUUM_THICKNESS_UM),
-    "air_above_thickness_um": float(OUTER_VACUUM_THICKNESS_UM),
+    "auto_vacuum_padding_um": (0.0, 0.0, float(OUTER_VACUUM_THICKNESS_UM)),
 }
 TERMINALS = {
     "xmon_pad": "xmon_pad",
@@ -103,7 +102,7 @@ VALIDATION_CONTROLS = {"msh_version": "2.2", "terminal_count": 5, "no_solver_run
 # %%
 PROVENANCE = {
     "classification": "public",
-    "orpen_sc_pdk_revision": "a16e8a123ce3ebfbda30aba31024506c2dcfd0c8",
+    "orpen_sc_pdk_revision": "6bef7a185991c0c49d41f6faf36984b4c36e45ff",
     "gsim_meshing_methodology": "8f5dc6c05255d003a9c6d8959537bcf8068379d3",
     "palace_runtime": "0.16.1",
     "palace_schema": "0.16.0",
@@ -138,16 +137,16 @@ stack = build_kosen2024_flip_chip_xmon_stack(
     d0_top_ground_mask_layer=tuple(LAYER.D0_TOP_GROUND_MASK),
     indium_bump_layer=tuple(LAYER.D0_D1_INDIUM_BUMP),
     coupon_padding_um=GEOMETRY_CONTROLS["coupon_padding_um"],
-    air_below_thickness_um=GEOMETRY_CONTROLS["air_below_thickness_um"],
-    air_above_thickness_um=GEOMETRY_CONTROLS["air_above_thickness_um"],
+    air_below_thickness_um=GEOMETRY_CONTROLS["auto_vacuum_padding_um"][2],
+    air_above_thickness_um=GEOMETRY_CONTROLS["auto_vacuum_padding_um"][2],
 )
+for airbox_id in ("AIR_BELOW", "AIR_ABOVE"):
+    stack["solution_regions"].pop(airbox_id)
 solution_regions = stack["solution_regions"]
 assert tuple(solution_regions) == (
-    "AIR_BELOW",
     "D0_SUBSTRATE",
     "D0_TO_D1_GAP",
     "D1_SUBSTRATE",
-    "AIR_ABOVE",
 )
 assert (
     len(
@@ -159,12 +158,12 @@ assert (
     == 1
 )
 assert (
-    solution_regions["AIR_BELOW"]["geometry"]["z_max_um"]
-    == solution_regions["D0_SUBSTRATE"]["geometry"]["z_min_um"]
+    solution_regions["D0_SUBSTRATE"]["geometry"]["z_max_um"]
+    == solution_regions["D0_TO_D1_GAP"]["geometry"]["z_min_um"]
 )
 assert (
-    solution_regions["D1_SUBSTRATE"]["geometry"]["z_max_um"]
-    == solution_regions["AIR_ABOVE"]["geometry"]["z_min_um"]
+    solution_regions["D0_TO_D1_GAP"]["geometry"]["z_max_um"]
+    == solution_regions["D1_SUBSTRATE"]["geometry"]["z_min_um"]
 )
 run_dir = OUTPUT_CONTROLS["run_dir"]
 if run_dir.exists() and any(run_dir.iterdir()):
@@ -178,6 +177,7 @@ sim = ElectrostaticSim()
 sim.set_geometry(component)
 sim.set_stack(stack)
 sim.set_output_dir(run_dir)
+sim.set_vacuum_region(padding=GEOMETRY_CONTROLS["auto_vacuum_padding_um"])
 sim.set_surface_epr(representation=GEOMETRY_CONTROLS["route"], specs=EPR_SPECS)
 for terminal_name, net_id in TERMINALS.items():
     sim.add_terminal(terminal_name, net_id=net_id)
@@ -193,6 +193,37 @@ sim.set_numerical(**MESH_CONTROLS, **SOLVER_CONTROLS)
 mesh_path = sim.mesh()
 assert f"$MeshFormat\n{VALIDATION_CONTROLS['msh_version']} 0 8" in mesh_path.read_text()
 manifest = json.loads((run_dir / "metadata" / "mesh_manifest.json").read_text())
+auto_stack = json.loads((run_dir / "geometry" / "design.stack.json").read_text())
+auto_regions = auto_stack["solution_regions"]
+assert tuple(auto_regions) == (
+    "D0_SUBSTRATE",
+    "D0_TO_D1_GAP",
+    "D1_SUBSTRATE",
+    "VACUUM_REGION",
+)
+auto_vacuum = auto_regions["VACUUM_REGION"]
+assert auto_vacuum["material_id"] == "vacuum"
+assert auto_vacuum["material_kind"] == "vacuum"
+assert auto_vacuum["metadata"]["source"] == "set_vacuum_region"
+assert (
+    auto_vacuum["geometry"]["domain_bounds_um"]
+    == auto_regions["D0_SUBSTRATE"]["geometry"]["domain_bounds_um"]
+)
+assert auto_regions["D0_TO_D1_GAP"]["material_id"] == "vacuum"
+assert auto_stack["metadata"]["component_contract"] == (
+    "kosen2024_flip_chip_xmon_qubit public zero-argument cell"
+)
+volume_groups = {
+    group["name"]: group
+    for group in manifest["groups"]
+    if group["section"] == "volumes"
+}
+assert {"D0_SUBSTRATE", "D0_TO_D1_GAP", "D1_SUBSTRATE", "VACUUM_REGION"} <= set(
+    volume_groups
+)
+assert set(volume_groups["D0_TO_D1_GAP"]["tags"]).isdisjoint(
+    volume_groups["VACUUM_REGION"]["tags"]
+)
 bump_groups = [
     group
     for group in manifest["groups"]
