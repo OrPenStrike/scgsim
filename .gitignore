@@ -1,0 +1,24 @@
+# Bytecode and Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Packaging/build artifacts
+build/
+dist/
+*.egg-info/
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
+
+# Local test/runtime artifacts
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+/.quarto/
+/_site/
+**/*.quarto_ipynb
