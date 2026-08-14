@@ -549,7 +549,10 @@ def _cell_bounds_um(cell: Any) -> dict[str, float]:
 
 def _polygons_by_layer(cell: Any) -> dict[tuple[int, int], tuple[Any, ...]]:
     result: dict[tuple[int, int], list[Any]] = {}
-    for polygon in cell.get_polygons(apply_repetitions=True):
+    # Canonical public PDK cells use hierarchy.  SGB's Level-0 contract is
+    # flattened layout polygons, so preserve every referenced source polygon
+    # rather than silently lowering only the top cell's direct shapes.
+    for polygon in cell.get_polygons(apply_repetitions=True, depth=None):
         result.setdefault(
             (int(polygon.layer), int(polygon.datatype)),
             [],
@@ -929,6 +932,10 @@ def _fused_gdstk_components(
             "or",
             precision=1e-9,
         )
+        # GDS permits conductor fragments to share an exact edge.  gdstk's
+        # boolean union may retain them separately; normalize this mechanical
+        # source fact without using layout names or proximity inference.
+        regions = gdstk.offset(regions or (), 0.0, join="miter", precision=1e-9)
         if not regions or len(regions) != 1:
             raise ValueError("fused selector component must lower to one polygon")
         outer, holes = _split_gdstk_cutline_loop(_ring_from_gdstk_polygon(regions[0]))
@@ -964,6 +971,10 @@ def _derived_ground_polygons(
     cell_bounds_um: Mapping[str, float],
     domain_bounds_by_semantic_id: Mapping[str, Mapping[str, Any]],
 ) -> tuple[LayoutPolygonSpec, ...]:
+    import gdstk
+
+    from scgsim.sgb.planning import _split_gdstk_cutline_loop
+
     mask_layer = entity.geometry.get("mask_layer")
     if mask_layer is None:
         mask_key = (
@@ -972,18 +983,71 @@ def _derived_ground_polygons(
         )
     else:
         mask_key = (int(mask_layer[0]), int(mask_layer[1]))
-    holes = tuple(
-        _ring_from_gdstk_polygon(polygon)
-        for polygon in _merged_gdstk_polygons(polygons_by_layer.get(mask_key, ()))
-    )
     exterior = _rectangle_ring(
         _ground_plane_bounds(entity, domain_bounds_by_semantic_id, cell_bounds_um)
     )
+    base = (gdstk.Polygon(exterior),)
+    without_mask = gdstk.boolean(
+        base,
+        _merged_gdstk_polygons(polygons_by_layer.get(mask_key, ())),
+        "not",
+        precision=1e-9,
+    )
+    include_layer = entity.geometry.get("include_layer")
+    include_points = entity.geometry.get("include_selector_points_um", ())
+    if include_layer is None and include_points:
+        raise ValueError(
+            f"{entity.semantic_id} include_selector_points_um requires include_layer"
+        )
+    included: list[Any] = []
+    if include_layer is not None:
+        if (
+            not isinstance(include_layer, Sequence)
+            or isinstance(include_layer, str | bytes)
+            or len(include_layer) != 2
+        ):
+            raise TypeError(
+                f"{entity.semantic_id} include_layer must be a GDS layer pair"
+            )
+        candidates = polygons_by_layer.get(
+            (int(include_layer[0]), int(include_layer[1])), ()
+        )
+        # The public PDK may represent one logical conductor with adjacent
+        # source polygons.  Fuse exact geometric contacts before applying an
+        # explicit topology selector; this is mechanical normalization, not
+        # identity inference.
+        components = _fused_gdstk_components(candidates)
+        for point in include_points:
+            if (
+                not isinstance(point, Sequence)
+                or isinstance(point, str | bytes)
+                or len(point) != 2
+            ):
+                raise TypeError(
+                    f"{entity.semantic_id} include_selector_points_um requires 2D points"
+                )
+            selector = (float(point[0]), float(point[1]))
+            matches = [
+                polygon
+                for polygon, _, _ in components
+                if _point_in_layout_polygon(selector, polygon)
+            ]
+            if len(matches) != 1:
+                raise ValueError(
+                    f"{entity.semantic_id} include selector {tuple(point)!r} matched {len(matches)} source polygons"
+                )
+            included.extend(_layout_polygon_region(gdstk, matches[0]))
+    regions = gdstk.boolean(without_mask or (), tuple(included), "or", precision=1e-9)
+    if not regions or len(regions) != 1:
+        raise ValueError(
+            f"{entity.semantic_id} derived ground must lower to one planar region"
+        )
+    outer, holes = _split_gdstk_cutline_loop(_ring_from_gdstk_polygon(regions[0]))
     return (
         LayoutPolygonSpec(
             polygon_id=f"{entity.semantic_id}__P0000",
             layer=f"{mask_key[0]}/{mask_key[1]}",
-            exterior=exterior,
+            exterior=outer,
             holes=holes,
             object_name=entity.semantic_id,
             net_name=entity.net_id,
@@ -991,6 +1055,10 @@ def _derived_ground_polygons(
                 "gds_layer": mask_key[0],
                 "gds_datatype": mask_key[1],
                 "source": "die_face_minus_ground_mask",
+                "include_layer": include_layer,
+                "include_selector_points_um": tuple(
+                    tuple(float(value) for value in point) for point in include_points
+                ),
             },
         ),
     )
@@ -1235,9 +1303,11 @@ def _port_sheet_target_layer_matches(
     entity: SemanticEntitySpec, target_layer: str
 ) -> bool:
     semantic_group = entity.metadata.get("semantic_group_id")
+    logical_layer = entity.metadata.get("logical_layer_id")
     return target_layer in {
         f"{entity.geometry.get('gds_layer')}/{entity.geometry.get('gds_datatype')}",
         semantic_group if isinstance(semantic_group, str) else "",
+        logical_layer if isinstance(logical_layer, str) else "",
     }
 
 

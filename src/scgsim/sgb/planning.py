@@ -254,6 +254,17 @@ def build_route_construction_plan(
     )
     _timed(
         timings,
+        "validate_route_b_port_sheet_sidewall_topology",
+        lambda: _validate_route_b_port_sheet_sidewall_topology(
+            route=route,
+            points=points,
+            curves=curves,
+            surface_loops=surface_loops,
+            surfaces=surfaces,
+        ),
+    )
+    _timed(
+        timings,
         "validate_curve_plan_coverage",
         lambda: validate_curve_plan_coverage(
             points=points,
@@ -1873,6 +1884,7 @@ def plan_route_surfaces(
                         sheet_entity,
                         cap_face,
                     )
+                    cap_owner_ids = (sheet_entity.semantic_id, cap_solution_id)
                     records.append(
                         SurfacePlanRecord(
                             surface_id=(
@@ -1886,7 +1898,12 @@ def plan_route_surfaces(
                                 "hole_loops": (),
                                 "plane": geometry_ref["plane"],
                                 "representation": "surface_sheet",
-                                "source_polygon_ids": sheet_entity.polygon_ids,
+                                "source_polygon_ids": _unique_ids(
+                                    (
+                                        *contact.lower_source_fragment_ids,
+                                        *contact.upper_source_fragment_ids,
+                                    )
+                                ),
                             },
                             interface_id=(
                                 f"MS__{sheet_entity.semantic_id}__"
@@ -1894,18 +1911,25 @@ def plan_route_surfaces(
                             ),
                             valid_routes=(route,),
                             metadata={
-                                "interface_kinds": ("MS",),
-                                "owner_semantic_ids": (
-                                    sheet_entity.semantic_id,
-                                    cap_solution_id,
+                                "physical_name": (
+                                    f"MS__{_entity_physical_group_id(sheet_entity)}"
+                                    "__SHEET_CONTACT_CAP"
                                 ),
+                                "interface_kinds": ("MS",),
+                                "owner_semantic_ids": cap_owner_ids,
                                 "physical_owner_semantic_ids": (
-                                    sheet_entity.semantic_id,
-                                    cap_solution_id,
+                                    _physical_group_owner_ids(
+                                        build_input, cap_owner_ids
+                                    )
                                 ),
                                 "boundary_volume_ids": (cap_solution_id,),
                                 "exposed_surface_role": "sheet_contact_cap",
                                 "sheet_contact_cap": True,
+                                "source_contact_id": contact.contact_id,
+                                "source_contact_owner_semantic_ids": (
+                                    contact.lower_entity_id,
+                                    contact.upper_entity_id,
+                                ),
                             },
                         )
                     )
@@ -2164,6 +2188,12 @@ def plan_route_surfaces(
                     build_input,
                     sidewall_owner_ids,
                 )
+                sidewall_physical_name = (
+                    f"MA__{'__'.join(sidewall_physical_owner_ids)}__SIDEWALL"
+                    if entity.part_role == "bump_body"
+                    and sidewall_interface_kind == "MA"
+                    else None
+                )
                 records.append(
                     SurfacePlanRecord(
                         surface_id=surface_id,
@@ -2189,6 +2219,7 @@ def plan_route_surfaces(
                         valid_routes=(route,),
                         solver_use="solver_active",
                         metadata={
+                            "physical_name": sidewall_physical_name,
                             "interface_kinds": (
                                 ()
                                 if sidewall_interface_id is None
@@ -2412,8 +2443,320 @@ def _lower_port_sheet_regions(
                 records,
                 port_surface=port_surface,
             )
+        elif records:
+            records = _partition_route_b_port_sheet_sidewalls(
+                records,
+                port_surface=port_surface,
+                remainder=remainder,
+                overlaps_by_host={
+                    overlap.host_semantic_id: overlap for overlap in region.overlaps
+                },
+            )
         records.append(port_surface)
     return tuple(records)
+
+
+def _partition_route_b_port_sheet_sidewalls(
+    surfaces: Sequence[SurfacePlanRecord],
+    *,
+    port_surface: SurfacePlanRecord,
+    remainder: Mapping[str, Any],
+    overlaps_by_host: Mapping[str, Any],
+) -> list[SurfacePlanRecord]:
+    """Split only the two overlap-bound Route-B PEC sidewalls at the port plane."""
+    port_z_um = _geometry_ref_surface_z_um(port_surface.geometry_ref)
+    terminal_segments_by_host = {
+        host_id: tuple(
+            (start, end)
+            for boundary in (remainder["outer_loop"], *remainder["hole_loops"])
+            for start, end in _ring_edges(_clean_loop(boundary))
+            if any(
+                _segment_overlap_interval(start, end, overlap_start, overlap_end)
+                is not None
+                for overlap_start, overlap_end in _ring_edges(
+                    _clean_loop(overlap.overlap_loop)
+                )
+            )
+        )
+        for host_id, overlap in overlaps_by_host.items()
+    }
+    if any(not segments for segments in terminal_segments_by_host.values()):
+        missing = tuple(
+            host_id
+            for host_id, segments in terminal_segments_by_host.items()
+            if not segments
+        )
+        raise ValueError(
+            f"{port_surface.surface_id} has no finite terminal segment for {missing!r}"
+        )
+    result: list[SurfacePlanRecord] = []
+    split_hosts: set[str] = set()
+    for surface in surfaces:
+        shell_part = str(surface.geometry_ref.get("shell_part", ""))
+        if (
+            surface.surface_role != "cutout_boundary_shell"
+            or surface.owner_semantic_id not in overlaps_by_host
+            or not shell_part.startswith("sidewall_")
+        ):
+            result.append(surface)
+            continue
+        points = tuple(surface.geometry_ref.get("quad_points", ()))
+        if len(points) != 4:
+            raise ValueError(
+                f"{surface.surface_id} Route B port host sidewall requires a quad"
+            )
+        quad = tuple(
+            (float(point[0]), float(point[1]), float(point[2])) for point in points
+        )
+        if not any(
+            _segment_overlap_interval(quad[0][:2], quad[1][:2], start, end) is not None
+            for start, end in terminal_segments_by_host[surface.owner_semantic_id]
+        ):
+            result.append(surface)
+            continue
+        z_min_um = min(point[2] for point in quad)
+        z_max_um = max(point[2] for point in quad)
+        if not z_min_um < z_max_um:
+            raise ValueError(
+                f"{surface.surface_id} Route B port host sidewall has empty height"
+            )
+        overlap = overlaps_by_host[surface.owner_semantic_id]
+        binding = {
+            "port_surface_id": port_surface.surface_id,
+            "overlap_id": str(overlap.overlap_id),
+            "host_semantic_id": surface.owner_semantic_id,
+        }
+        if _same_z(port_z_um, z_min_um) or _same_z(port_z_um, z_max_um):
+            if not surface.metadata.get("route_b_port_sheet_bindings"):
+                raise ValueError(
+                    f"{port_surface.surface_id} requires an imprinted "
+                    f"sidewall child for {surface.surface_id}"
+                )
+            result.append(
+                replace(
+                    surface,
+                    metadata=_route_b_port_sheet_partition_metadata(
+                        surface.metadata,
+                        binding=binding,
+                        port_z_um=port_z_um,
+                    ),
+                )
+            )
+            split_hosts.add(surface.owner_semantic_id)
+            continue
+        if not z_min_um < port_z_um < z_max_um:
+            raise ValueError(
+                f"{port_surface.surface_id} must cut {surface.surface_id} at its "
+                "finite sidewall interior"
+            )
+        lower_quad = (
+            quad[0],
+            quad[1],
+            (quad[2][0], quad[2][1], port_z_um),
+            (quad[3][0], quad[3][1], port_z_um),
+        )
+        upper_quad = (
+            (quad[0][0], quad[0][1], port_z_um),
+            (quad[1][0], quad[1][1], port_z_um),
+            quad[2],
+            quad[3],
+        )
+        parent_surface_id = surface.parent_surface_id or surface.surface_id
+        partition_metadata = _route_b_port_sheet_partition_metadata(
+            surface.metadata,
+            binding=binding,
+            port_z_um=port_z_um,
+        )
+        result.extend(
+            (
+                replace(
+                    surface,
+                    surface_id=(
+                        f"{surface.surface_id}__{port_surface.surface_id}__LOWER"
+                    ),
+                    parent_surface_id=parent_surface_id,
+                    partition_label="port_lower",
+                    geometry_ref={
+                        **dict(surface.geometry_ref),
+                        "quad_points": lower_quad,
+                    },
+                    metadata=partition_metadata,
+                ),
+                replace(
+                    surface,
+                    surface_id=(
+                        f"{surface.surface_id}__{port_surface.surface_id}__UPPER"
+                    ),
+                    parent_surface_id=parent_surface_id,
+                    partition_label="port_upper",
+                    geometry_ref={
+                        **dict(surface.geometry_ref),
+                        "quad_points": upper_quad,
+                    },
+                    metadata=partition_metadata,
+                ),
+            )
+        )
+        split_hosts.add(surface.owner_semantic_id)
+    if set(overlaps_by_host) != split_hosts:
+        missing = tuple(
+            host_id for host_id in overlaps_by_host if host_id not in split_hosts
+        )
+        raise ValueError(
+            f"{port_surface.surface_id} requires finite Route B sidewalls "
+            f"for {missing!r}"
+        )
+    return result
+
+
+def _route_b_port_sheet_partition_metadata(
+    metadata: Mapping[str, Any],
+    *,
+    binding: Mapping[str, str],
+    port_z_um: float,
+) -> dict[str, Any]:
+    bindings = tuple(
+        dict(existing)
+        for existing in metadata.get("route_b_port_sheet_bindings", ())
+        if isinstance(existing, Mapping)
+    )
+    if len(bindings) != len(metadata.get("route_b_port_sheet_bindings", ())):
+        raise ValueError("Route B port sidewall bindings must be structured records")
+    if dict(binding) not in bindings:
+        bindings = (*bindings, dict(binding))
+    return {
+        **dict(metadata),
+        "route_b_port_sheet_sidewall_partition": True,
+        "route_b_port_sheet_plane_z_um": port_z_um,
+        "route_b_port_sheet_bindings": bindings,
+    }
+
+
+def _validate_route_b_port_sheet_sidewall_topology(
+    *,
+    route: RouteLiteral,
+    points: Sequence[PointPlanRecord],
+    curves: Sequence[CurvePlanRecord],
+    surface_loops: Sequence[SurfaceLoopRecord],
+    surfaces: Sequence[SurfacePlanRecord],
+) -> None:
+    """Require each Route-B port overlap to reuse just its bound PEC curve set."""
+    if route != "B":
+        return
+    loops_by_id = {loop.loop_id: loop for loop in surface_loops}
+    surfaces_by_id = {surface.surface_id: surface for surface in surfaces}
+    points_by_id = {point.point_id: point.coordinate for point in points}
+    curves_by_id = {curve.curve_id: curve for curve in curves}
+    for port_surface in (
+        surface for surface in surfaces if surface.surface_role == "lumped_port"
+    ):
+        owners = tuple(
+            str(owner) for owner in port_surface.metadata["owner_semantic_ids"]
+        )
+        overlaps_by_host = {
+            str(overlap["host_semantic_id"]): overlap
+            for overlap in port_surface.metadata["source_provenance"]["overlaps"]
+            if isinstance(overlap, Mapping)
+        }
+        port_curve_ids = {
+            curve_ref.curve_id
+            for loop_id in (port_surface.outer_loop_ref, *port_surface.hole_loop_refs)
+            for curve_ref in loops_by_id[loop_id].curve_refs
+        }
+        if not port_curve_ids:
+            raise ValueError(
+                f"{port_surface.surface_id} has no canonical terminal curves"
+            )
+        for host_id in owners:
+            overlap = overlaps_by_host.get(host_id)
+            if overlap is None:
+                raise ValueError(
+                    f"{port_surface.surface_id} lacks exact overlap provenance "
+                    f"for {host_id}"
+                )
+            expected_terminal_curve_ids = {
+                curve_id
+                for curve_id in port_curve_ids
+                if _route_b_port_terminal_curve_matches_overlap(
+                    curves_by_id[curve_id],
+                    points_by_id=points_by_id,
+                    overlap_loop=overlap["overlap_loop"],
+                )
+            }
+            if not expected_terminal_curve_ids:
+                raise ValueError(
+                    f"{port_surface.surface_id} has no expected Route B terminal "
+                    f"curves for {host_id}"
+                )
+            credited_terminal_curve_ids = {
+                curve.curve_id
+                for curve in curves
+                if curve.curve_id in port_curve_ids
+                and any(
+                    candidate.surface_role == "cutout_boundary_shell"
+                    and candidate.owner_semantic_id == host_id
+                    and str(candidate.geometry_ref.get("shell_part", "")).startswith(
+                        "sidewall_"
+                    )
+                    and candidate.metadata.get("route_b_port_sheet_sidewall_partition")
+                    and _route_b_port_sheet_binding_matches(
+                        candidate,
+                        port_surface_id=port_surface.surface_id,
+                        overlap_id=str(overlap["overlap_id"]),
+                        host_semantic_id=host_id,
+                    )
+                    for candidate in (
+                        surfaces_by_id[surface_id]
+                        for surface_id in curve.used_by_surface_ids
+                        if surface_id in surfaces_by_id
+                    )
+                )
+            }
+            if credited_terminal_curve_ids != expected_terminal_curve_ids:
+                missing = sorted(
+                    expected_terminal_curve_ids - credited_terminal_curve_ids
+                )
+                extra = sorted(
+                    credited_terminal_curve_ids - expected_terminal_curve_ids
+                )
+                raise ValueError(
+                    f"{port_surface.surface_id} Route B terminal curves for "
+                    f"{host_id} PEC sidewall differ; missing={missing!r}, "
+                    f"extra={extra!r}"
+                )
+
+
+def _route_b_port_sheet_binding_matches(
+    surface: SurfacePlanRecord,
+    *,
+    port_surface_id: str,
+    overlap_id: str | None,
+    host_semantic_id: str,
+) -> bool:
+    return any(
+        isinstance(binding, Mapping)
+        and binding.get("port_surface_id") == port_surface_id
+        and binding.get("overlap_id") == overlap_id
+        and binding.get("host_semantic_id") == host_semantic_id
+        for binding in surface.metadata.get("route_b_port_sheet_bindings", ())
+    )
+
+
+def _route_b_port_terminal_curve_matches_overlap(
+    curve: CurvePlanRecord,
+    *,
+    points_by_id: Mapping[str, tuple[float, float, float]],
+    overlap_loop: Any,
+) -> bool:
+    start = points_by_id.get(curve.start_point_id)
+    end = points_by_id.get(curve.end_point_id)
+    if start is None or end is None:
+        return False
+    return any(
+        _segment_overlap_interval(start[:2], end[:2], overlap_start, overlap_end)
+        is not None
+        for overlap_start, overlap_end in _ring_edges(_clean_loop(overlap_loop))
+    )
 
 
 def _route_a_port_sheet_sheet_contract(
@@ -2428,6 +2771,10 @@ def _route_a_port_sheet_sheet_contract(
             surface
             for surface in planned_surfaces
             if surface.metadata.get("representation") == "surface_sheet"
+            # Route-A contact caps are per bump/face contact and bound a
+            # single solution volume.  A layout junction sheet replaces the
+            # actual two-volume face interface, never one of those caps.
+            and surface.surface_role == "A_planned_interface"
             and host_id in _surface_owner_ids(surface)
         )
         if len(host_sheets) != 1:
@@ -2615,8 +2962,10 @@ def _port_sheet_raw_direction(
 def _port_sheet_target_layer_matches(
     entity: SemanticEntitySpec, target_layer: str
 ) -> bool:
+    logical_layer = entity.metadata.get("logical_layer_id")
     return target_layer in {
         str(entity.metadata.get("semantic_group_id", "")),
+        logical_layer if isinstance(logical_layer, str) else "",
         f"{entity.geometry.get('gds_layer')}/{entity.geometry.get('gds_datatype')}",
     }
 

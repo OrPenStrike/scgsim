@@ -1222,30 +1222,39 @@ def _with_port_sheet_metadata(
                 index
                 for index, layer in enumerate(rewritten_layers)
                 if isinstance(layer, Mapping)
-                and layer.get("semantic_id") == target_layer
+                and (
+                    layer.get("semantic_id") == target_layer
+                    or (
+                        isinstance(layer.get("metadata"), Mapping)
+                        and layer["metadata"].get("logical_layer_id") == target_layer
+                    )
+                )
             ]
-            if len(matches) != 1:
+            if not matches:
                 raise ValueError(
-                    f"authored port target_layer {target_layer!r} must match exactly one logical stack layer."
+                    f"authored port target_layer {target_layer!r} must match a logical stack layer."
                 )
-            index = matches[0]
-            layer = rewritten_layers[index]
-            if not isinstance(layer, Mapping):  # guarded by the exact match above
-                raise TypeError("matched logical stack layer must be a mapping.")
-            if layer.get("role") != "metal" or layer.get("part_role") != "face_metal":
-                raise ValueError(
-                    f"authored port target_layer {target_layer!r} must have face-metal semantics."
-                )
-            geometry = layer.get("geometry")
-            if not isinstance(geometry, Mapping):
-                raise TypeError(
-                    f"authored port target_layer {target_layer!r} must define geometry mapping."
-                )
-            rewritten = dict(layer)
-            rewritten_geometry = dict(geometry)
-            rewritten_geometry["split_polygons_as_entities"] = True
-            rewritten["geometry"] = rewritten_geometry
-            rewritten_layers[index] = rewritten
+            for index in matches:
+                layer = rewritten_layers[index]
+                if not isinstance(layer, Mapping):
+                    raise TypeError("matched logical stack layer must be a mapping.")
+                if (
+                    layer.get("role") != "metal"
+                    or layer.get("part_role") != "face_metal"
+                ):
+                    raise ValueError(
+                        f"authored port target_layer {target_layer!r} must have face-metal semantics."
+                    )
+                geometry = layer.get("geometry")
+                if not isinstance(geometry, Mapping):
+                    raise TypeError(
+                        f"authored port target_layer {target_layer!r} must define geometry mapping."
+                    )
+                rewritten = dict(layer)
+                rewritten_geometry = dict(geometry)
+                rewritten_geometry["split_polygons_as_entities"] = True
+                rewritten["geometry"] = rewritten_geometry
+                rewritten_layers[index] = rewritten
         payload["layers"] = rewritten_layers
         metadata["port_sheet_source_layers"] = copy.deepcopy(list(records))
     payload["metadata"] = metadata

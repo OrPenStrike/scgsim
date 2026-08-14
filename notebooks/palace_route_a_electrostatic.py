@@ -10,26 +10,39 @@
 # ---
 
 # %% [markdown]
-# # Route A Electrostatic Candidate
+# # Public OrPen Xmon — Route A Electrostatic
+# This manual-only example builds the public zero-argument PDK component. It
+# prepares geometry, mesh, config, and an LTlab Slurm handoff; it never submits
+# or runs Palace.
 
 # %% [markdown]
 # ## Design And Geometry Controls
-# Public synthetic GDS and an explicit SGB stack; Route A uses the same component/stack path.
 
 # %%
 from pathlib import Path
 
+from orpen_sc_pdk.tech import OUTER_VACUUM_THICKNESS_UM
+
 GEOMETRY_CONTROLS = {
     "route": "A",
-    "terminal_name": "public_terminal",
-    "terminal_net": "PUBLIC_NET",
+    "component": "kosen2024_flip_chip_xmon_qubit",
+    "coupon_padding_um": 75.0,
+    "air_below_thickness_um": float(OUTER_VACUUM_THICKNESS_UM),
+    "air_above_thickness_um": float(OUTER_VACUUM_THICKNESS_UM),
+}
+TERMINALS = {
+    "xmon_pad": "xmon_pad",
+    "coupler_1": "coupler_1",
+    "coupler_2": "coupler_2",
+    "coupler_3": "coupler_3",
+    "coupler_4": "coupler_4",
 }
 
 # %% [markdown]
 # ## Meshing Controls
 
 # %%
-MESH_CONTROLS = {"refined_mesh_size": 25.0, "max_mesh_size": 80.0}
+MESH_CONTROLS = {"refined_mesh_size": 15.0, "max_mesh_size": 80.0}
 
 # %% [markdown]
 # ## Solver Controls
@@ -49,7 +62,7 @@ SOLVER_CONTROLS = {
 
 # %%
 EXECUTION_CONTROLS = {
-    "profile_names": ("ltlab-local", "ltlab-slurm", "f1-slurm"),
+    "machine_profiles": ("ltlab-local", "ltlab-slurm", "f1-slurm"),
     "selected_profile": "ltlab-slurm",
     "executable": "palace",
     "setup_commands": ("module load palace",),
@@ -65,31 +78,36 @@ EXECUTION_CONTROLS = {
 # ## Output And Run Identity Controls
 
 # %%
-OUTPUT_CONTROLS = {"run_dir": Path(".artifacts") / "public_route_a_electrostatic"}
+try:
+    NOTEBOOK_DIR = Path(__file__).resolve().parent
+except NameError:
+    NOTEBOOK_DIR = (
+        Path.cwd() / "notebooks" if (Path.cwd() / "notebooks").is_dir() else Path.cwd()
+    )
+
+OUTPUT_CONTROLS = {
+    "run_dir": NOTEBOOK_DIR
+    / ".artifacts"
+    / "kosen2024_flip_chip_xmon_route_a_electrostatic",
+    "output_formats": ("gds", "xao", "msh2", "json", "sbatch", "tar.gz"),
+}
 
 # %% [markdown]
 # ## Validation And Failure Controls
 
 # %%
-VALIDATION_CONTROLS = {
-    "msh_version": "2.2",
-    "terminal_count": 1,
-    "surface_epr_types": ("MA", "MS", "SA"),
-}
+VALIDATION_CONTROLS = {"msh_version": "2.2", "terminal_count": 5, "no_solver_run": True}
 
 # %% [markdown]
 # ## Data Classification And Provenance
-# Runtime authority is `scgsim.sgb`. SGB base/import SHAs are derivation history;
-# gsim mesh methodology is `8f5dc6c05255d003a9c6d8959537bcf8068379d3`.
+# All inputs are public.  The PDK is an optional reproducible example extra;
+# no local path, private geometry, result, or receipt is stored in provenance.
 
 # %%
 PROVENANCE = {
-    "data_classification": "public-synthetic",
-    "scgsim_sgb": "scgsim.sgb",
-    "sgb_derivation_base": "e74a343154c6b19b6ba32d6fb297e700cfe08ff2",
-    "sgb_derivation_imported": "f3fd898d6e4eaf31595c9aaca6a0658f0cb7f3b1",
-    "gsim_mesh_methodology": "8f5dc6c05255d003a9c6d8959537bcf8068379d3",
-    "gsim_portable_handoff": "8cf5fa79fa3abb176940dbfc520ff34a44f4770e",
+    "classification": "public",
+    "orpen_sc_pdk_revision": "a16e8a123ce3ebfbda30aba31024506c2dcfd0c8",
+    "gsim_meshing_methodology": "8f5dc6c05255d003a9c6d8959537bcf8068379d3",
     "palace_runtime": "0.16.1",
     "palace_schema": "0.16.0",
 }
@@ -98,8 +116,11 @@ PROVENANCE = {
 import json
 
 import gdsfactory as gf
+import orpen_sc_pdk
+from orpen_sc_pdk import LAYER, LAYER_STACK, get_material_records
 
 from scgsim.palace import ElectrostaticSim
+from scgsim.sgb import build_kosen2024_flip_chip_xmon_stack
 
 EPR_SPECS = {
     "MA": {"thickness": 0.003, "permittivity": 10.0, "loss_tangent": 0.0},
@@ -111,66 +132,47 @@ EPR_SPECS = {
 # ## Build Component
 
 # %%
+orpen_sc_pdk.activate()
 gf.clear_cache()
-gf.gpdk.PDK.activate()
-component = gf.Component("public_route_a_plate")
-component.add_polygon([(0, 0), (80, 0), (80, 80), (0, 80)], layer=(1, 0))
-stack = {
-    "solution_regions": {
-        "AIR_ABOVE": {
-            "role": "solution_region",
-            "is_airbox": True,
-            "material_id": "vacuum",
-            "geometry_kind": "domain",
-            "geometry": {
-                "domain": "AIR_ABOVE",
-                "z_min_um": 0,
-                "z_max_um": 40,
-                "padding_um": 50,
-            },
-        },
-        "SUBSTRATE": {
-            "role": "solution_region",
-            "material_id": "substrate",
-            "geometry_kind": "domain",
-            "geometry": {
-                "domain": "SUBSTRATE",
-                "z_min_um": -20,
-                "z_max_um": 0,
-                "padding_um": 50,
-            },
-        },
-    },
-    "materials": {
-        "vacuum": {"kind": "vacuum", "permittivity": 1.0, "loss_tangent": 0.0},
-        "substrate": {"kind": "dielectric", "permittivity": 11.45, "loss_tangent": 0.0},
-        "aluminum": {"kind": "conductor"},
-    },
-    "layers": [
+component = gf.get_component(GEOMETRY_CONTROLS["component"])
+stack = build_kosen2024_flip_chip_xmon_stack(
+    component=component,
+    layer_stack=LAYER_STACK,
+    material_records=get_material_records(),
+    d0_top_ground_mask_layer=tuple(LAYER.D0_TOP_GROUND_MASK),
+    indium_bump_layer=tuple(LAYER.D0_D1_INDIUM_BUMP),
+    coupon_padding_um=GEOMETRY_CONTROLS["coupon_padding_um"],
+    air_below_thickness_um=GEOMETRY_CONTROLS["air_below_thickness_um"],
+    air_above_thickness_um=GEOMETRY_CONTROLS["air_above_thickness_um"],
+)
+solution_regions = stack["solution_regions"]
+assert tuple(solution_regions) == (
+    "AIR_BELOW",
+    "D0_SUBSTRATE",
+    "D0_TO_D1_GAP",
+    "D1_SUBSTRATE",
+    "AIR_ABOVE",
+)
+assert (
+    len(
         {
-            "layer": 1,
-            "datatype": 0,
-            "semantic_id": "PUBLIC_METAL",
-            "role": "metal",
-            "material_id": "aluminum",
-            "priority": 1,
-            "part_role": "face_metal",
-            "net_id": "PUBLIC_NET",
-            "geometry_kind": "layout_extrusion",
-            "host_void_semantic_id": "AIR_ABOVE",
-            "geometry": {
-                "z_um": 0,
-                "thickness_um": 0.2,
-                "geometry_source": "gds_polygon",
-            },
-            "route_representations": {
-                "A": "surface_sheet",
-                "B": "cutout_boundary_shell",
-            },
-            "metadata": {"source_layer_name": "PUBLIC_METAL"},
+            json.dumps(region["geometry"]["domain_bounds_um"], sort_keys=True)
+            for region in solution_regions.values()
         }
-    ],
-}
+    )
+    == 1
+)
+assert (
+    solution_regions["AIR_BELOW"]["geometry"]["z_max_um"]
+    == solution_regions["D0_SUBSTRATE"]["geometry"]["z_min_um"]
+)
+assert (
+    solution_regions["D1_SUBSTRATE"]["geometry"]["z_max_um"]
+    == solution_regions["AIR_ABOVE"]["geometry"]["z_min_um"]
+)
+run_dir = OUTPUT_CONTROLS["run_dir"]
+if run_dir.exists() and any(run_dir.iterdir()):
+    raise FileExistsError(f"Preserving existing inspectable run folder: {run_dir}")
 
 # %% [markdown]
 # ## Configure Problem And EPR
@@ -179,16 +181,12 @@ stack = {
 sim = ElectrostaticSim()
 sim.set_geometry(component)
 sim.set_stack(stack)
-sim.set_output_dir(OUTPUT_CONTROLS["run_dir"])
-sim.set_airbox(margin_x=25, margin_y=25, z_above=20)
+sim.set_output_dir(run_dir)
 sim.set_surface_epr(representation=GEOMETRY_CONTROLS["route"], specs=EPR_SPECS)
-sim.add_terminal(
-    GEOMETRY_CONTROLS["terminal_name"], net_id=GEOMETRY_CONTROLS["terminal_net"]
-)
+for terminal_name, net_id in TERMINALS.items():
+    sim.add_terminal(terminal_name, net_id=net_id)
 sim.set_electrostatic(
-    save_fields=0,
-    unassigned_conductor_policy="error",
-    exterior_boundary_policy="ground",
+    unassigned_conductor_policy="ground", exterior_boundary_policy="none"
 )
 sim.set_numerical(**MESH_CONTROLS, **SOLVER_CONTROLS)
 
@@ -196,110 +194,63 @@ sim.set_numerical(**MESH_CONTROLS, **SOLVER_CONTROLS)
 # ## Build Mesh
 
 # %%
-run_dir = OUTPUT_CONTROLS["run_dir"]
 mesh_path = sim.mesh()
-assert mesh_path.name == "palace.msh"
-assert f"$MeshFormat\n{VALIDATION_CONTROLS['msh_version']} 0 8" in mesh_path.read_text(
-    encoding="utf-8"
-)
-manifest = json.loads(
-    (run_dir / "metadata" / "mesh_manifest.json").read_text(encoding="utf-8")
-)
-assert any(group["section"] == "volumes" for group in manifest["groups"])
+assert f"$MeshFormat\n{VALIDATION_CONTROLS['msh_version']} 0 8" in mesh_path.read_text()
+manifest = json.loads((run_dir / "metadata" / "mesh_manifest.json").read_text())
+assert not [
+    group
+    for group in manifest["groups"]
+    if group["section"] == "volumes"
+    and group.get("physical_attribute", {}).get("material_kinds") == ["conductor"]
+]
 
 # %% [markdown]
 # ## Write And Validate Config
 
 # %%
 config_path = sim.write_config()
-config = json.loads(config_path.read_text(encoding="utf-8"))
-assert "Metadata" not in config
-assert config["Boundaries"]["Postprocessing"]["Dielectric"]
-index_map = json.loads(
-    (run_dir / "metadata" / "palace_index_map.json").read_text(encoding="utf-8")
-)
+index_map = json.loads((run_dir / "metadata" / "palace_index_map.json").read_text())
 terminal_entries = [
     entry for entry in index_map["entries"] if entry["section"] == "Boundaries.Terminal"
 ]
 assert len(terminal_entries) == VALIDATION_CONTROLS["terminal_count"]
-terminal_entry = terminal_entries[0]
-assert terminal_entry["terminal_name"] == GEOMETRY_CONTROLS["terminal_name"]
-assert terminal_entry["net_id"] == GEOMETRY_CONTROLS["terminal_net"]
-terminal_groups = [
-    group
-    for group in manifest["groups"]
-    if group["section"] == "boundary_surfaces"
-    and group["structured"]
-    and group["name"] in terminal_entry["physical_names"]
-]
-assert terminal_groups
-assert {group["conductor_component_id"] for group in terminal_groups} == set(
-    terminal_entry["conductor_component_ids"]
-)
-assert all(
-    group["net_id"] == GEOMETRY_CONTROLS["terminal_net"] for group in terminal_groups
-)
-epr_types = {
-    entry["metadata"]["interface_type"]
-    for entry in index_map["entries"]
-    if entry["section"] == "Boundaries.Postprocessing.Dielectric"
-}
-assert epr_types == set(VALIDATION_CONTROLS["surface_epr_types"])
+assert {entry["net_id"] for entry in terminal_entries} == set(TERMINALS.values())
 
 # %% [markdown]
 # ## Prepare And Inspect Handoff
 
 # %%
-plan = sim.prepare_handoff(
+handoff = sim.prepare_handoff(
     profile=EXECUTION_CONTROLS["selected_profile"],
     executable=EXECUTION_CONTROLS["executable"],
     resources=EXECUTION_CONTROLS["resources"],
     setup_commands=EXECUTION_CONTROLS["setup_commands"],
 )
-assert plan.script_path.name == "run_palace.sbatch" and plan.archive_path.is_file()
-handoff = json.loads(plan.metadata_path.read_text(encoding="utf-8"))
-assert handoff["status"] == "prepared" and handoff["problem"] == "Electrostatic"
-assert handoff["source_revisions"]["scgsim_sgb"] == PROVENANCE["scgsim_sgb"]
 assert (
-    handoff["source_revisions"]["sgb_derivation"]["base"]
-    == PROVENANCE["sgb_derivation_base"]
-)
-assert (
-    handoff["source_revisions"]["sgb_derivation"]["imported_development"]
-    == PROVENANCE["sgb_derivation_imported"]
-)
-assert (
-    handoff["source_revisions"]["gsim_meshing"] == PROVENANCE["gsim_mesh_methodology"]
-)
-assert (
-    handoff["source_revisions"]["gsim_portable_handoff"]
-    == PROVENANCE["gsim_portable_handoff"]
-)
-assert (
-    handoff["palace_identity"]["runtime"].removeprefix("v")
-    == PROVENANCE["palace_runtime"]
-)
-assert (
-    handoff["palace_identity"]["config_schema"].removeprefix("v")
-    == PROVENANCE["palace_schema"]
+    handoff.script_path.name == "run_palace.sbatch" and handoff.archive_path.is_file()
 )
 
 # %% [markdown]
 # ## Physics Analysis Results
-# Deferred: this notebook prepares a manual handoff and does not solve.
+# No Palace process is started by this notebook.  Physics results remain absent
+# until the prepared manual handoff is submitted and resolved by its owner.
+
+# %%
+run_status = json.loads((run_dir / "metadata" / "palace_run_metadata.json").read_text())
+assert run_status["status"] == "not_run"
 
 # %% [markdown]
 # ## Simulation Performance / Benchmarks
-# Palace was not run; solver cost is unavailable. The following values describe
-# real preparation artifacts only.
 
 # %%
-preparation_facts = {
-    "mesh_bytes": mesh_path.stat().st_size,
-    "mesh_groups": len(manifest["groups"]),
-    "handoff_archive_bytes": plan.archive_path.stat().st_size,
-    "data_classification": PROVENANCE["data_classification"],
-    "runtime_authority": handoff["source_revisions"]["scgsim_sgb"],
-    "solver_cost": "unavailable: Palace was not run",
-}
-preparation_facts  # noqa: B018
+resource_record = json.loads(
+    (run_dir / "metadata" / "palace_resource_record.json").read_text()
+)
+assert resource_record["status"] == "not_submitted"
+print(
+    {
+        "mesh": str(mesh_path),
+        "config": str(config_path),
+        "handoff": str(handoff.archive_path),
+    }
+)

@@ -488,7 +488,13 @@ def _group_tag_plans(
     tags: tuple[TagPlanRecord, ...],
 ) -> tuple[tuple[TagPlanRecord, ...], ...]:
     grouped: dict[tuple[str, int, str, str], list[TagPlanRecord]] = {}
+    contracts: dict[tuple[str, int], tuple[str, str]] = {}
     for tag in tags:
+        key = (tag.physical_name, tag.dimension)
+        contract = (tag.role, tag.solver_use)
+        if key in contracts and contracts[key] != contract:
+            raise ValueError(f"{tag.physical_name} has heterogeneous tag sources")
+        contracts[key] = contract
         grouped.setdefault(
             (tag.physical_name, tag.dimension, tag.role, tag.solver_use),
             [],

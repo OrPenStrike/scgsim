@@ -29,3 +29,10 @@ ship a second external SGB runtime implementation.
 
 This project is licensed under the Apache License, Version 2.0. A copy of the
 license is included in the LICENSE file in this repository.
+
+Public Xmon example input (optional `examples` extra):
+  OrPen SC PDK @ a16e8a123ce3ebfbda30aba31024506c2dcfd0c8
+  `kosen2024_flip_chip_xmon_qubit`, an independent public parametric
+  adaptation identified by its source component as CC BY 4.0 with attribution.
+  SCGSim consumes its public PDK technology and component records; it does not
+  include a mask or private layout artifact.

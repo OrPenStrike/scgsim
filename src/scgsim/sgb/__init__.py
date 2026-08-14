@@ -44,6 +44,7 @@ from scgsim.sgb.models import (
     Vector3D,
     VolumePlanRecord,
 )
+from scgsim.sgb.orpen import build_kosen2024_flip_chip_xmon_stack
 from scgsim.sgb.pipeline import (
     SemanticGeometryBuilder,
     build_route_construction_plan,
@@ -113,6 +114,7 @@ __all__ = [
     "VolumePlanRecord",
     "build_gds_stack_geometry_input",
     "build_gdsfactory_geometry_input",
+    "build_kosen2024_flip_chip_xmon_stack",
     "build_route_construction_plan",
     "export_physical_group_records",
     "plan_conductor_contact_patches",

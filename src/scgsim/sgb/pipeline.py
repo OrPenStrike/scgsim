@@ -9,8 +9,10 @@ plan to the bottom-up OCC backend, then export physical groups.
 from __future__ import annotations
 
 import json
+import re
 import time
-from dataclasses import asdict
+from collections.abc import Mapping
+from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
 
@@ -315,7 +317,44 @@ def _timing_counts(plan: Any, built_plan: Any) -> dict[str, Any]:
 
 def _write_stage_sidecar(path: Path, stage_name: str, payload: Any) -> None:
     path.mkdir(parents=True, exist_ok=True)
+    # Sidecars are retained with handoff artifacts.  They may describe files
+    # the builder used locally, but must not publish a workstation path.  Keep
+    # paths inside this run addressable from the run root and reduce any
+    # external input to a non-location-bearing label.
+    public_payload = _redact_local_paths(payload, run_root=path.parents[1])
     path.joinpath(f"{stage_name}.json").write_text(
-        json.dumps(payload, indent=2, sort_keys=True, default=asdict),
+        json.dumps(public_payload, indent=2, sort_keys=True, default=asdict),
         encoding="utf-8",
     )
+
+
+def _redact_local_paths(payload: Any, *, run_root: Path) -> Any:
+    """Return sidecar-safe data without machine-local absolute path strings."""
+    if is_dataclass(payload) and not isinstance(payload, type):
+        return _redact_local_paths(asdict(payload), run_root=run_root)
+    if isinstance(payload, str):
+        candidate = Path(payload)
+        if candidate.is_absolute():
+            return _redact_one_path(candidate, run_root=run_root)
+        return re.sub(
+            r"(?<!\S)(/[^\s]+)",
+            lambda match: _redact_one_path(Path(match.group(1)), run_root=run_root),
+            payload,
+        )
+    if isinstance(payload, Mapping):
+        return {
+            key: _redact_local_paths(value, run_root=run_root)
+            for key, value in payload.items()
+        }
+    if isinstance(payload, tuple):
+        return tuple(_redact_local_paths(value, run_root=run_root) for value in payload)
+    if isinstance(payload, list):
+        return [_redact_local_paths(value, run_root=run_root) for value in payload]
+    return payload
+
+
+def _redact_one_path(candidate: Path, *, run_root: Path) -> str:
+    try:
+        return str(candidate.relative_to(run_root))
+    except ValueError:
+        return f"<external>/{candidate.name}"
