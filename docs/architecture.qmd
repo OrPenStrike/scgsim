@@ -1,0 +1,41 @@
+---
+title: "Architecture and Data Flow"
+---
+
+SCGSim keeps semantic geometry, solver preparation, execution, result loading,
+and presentation distinguishable. A solver backend may implement its own
+physics, but it must not redefine geometry identity, run identity, or common
+provenance.
+
+```{mermaid}
+flowchart LR
+  G["SGB semantic geometry and topology"] --> B["Solver-specific backend preparation"]
+  B --> C["Common run-and-handoff contract"]
+  C --> P["Selected machine profile"]
+  P --> A["Immutable artifacts and receipts"]
+  A --> R["Solver-specific physical results"]
+  R --> U["Unified Plotly report envelope"]
+```
+
+## Contract boundaries
+
+| Boundary | Authority |
+|---|---|
+| Geometry names, topology, Route A/B surfaces | SGB |
+| Palace and AEDT implementation | Planned `scgsim.palace` and `scgsim.aedt` owners |
+| Run identity, handoff, profiles, receipts | One common SCGSim contract |
+| Physical result meaning | Solver-specific, never flattened into a false common quantity |
+| Report navigation, provenance, cost presentation | Planned unified report envelope |
+
+## Phase-1 truth
+
+At this docs-first base, the architecture is a contract, not an implemented
+pipeline. A separate **NOT_INTEGRATED** runtime candidate implements only the
+importable package, version metadata, and build/CI packaging scaffold. The
+exact `develop` base still contains no package code.
+
+`scgsim.palace` and `scgsim.aedt` are absent rather than placeholder modules;
+importing either produces the normal `ModuleNotFoundError`. Every backend,
+run/handoff, report, notebook, solver, and execution box above remains planned.
+
+See [Folder tree and ownership](ownership.qmd) for repository placement.

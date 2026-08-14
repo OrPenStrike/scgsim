@@ -1,0 +1,30 @@
+---
+title: "Geometry and SGB Route A/B"
+---
+
+Semantic Geometry Builder (SGB) is the authority for geometry and topology.
+SCGSim consumes its stable identities and must not reconstruct geometry meaning
+from solver-generated labels.
+
+## Current Surface-EPR direction
+
+| Route | Public intent | Current state |
+|---|---|---|
+| Route A | Zero-thickness face-metal PEC sheets with finite bump shells | Planned consumer path |
+| Route B | The closed exterior boundary shell of a finite construction metal volume is PEC; its interior is excluded from Palace solution domains and receives no tetrahedra | Planned consumer path |
+
+Only Route A and Route B are in the current direction. Their availability in
+SGB does not make a solver backend implemented.
+
+## Identity requirements
+
+A future handoff must preserve:
+
+- source SGB revision;
+- semantic surface and volume identities;
+- route choice and topology receipt;
+- generated mesh/config identity;
+- the mapping from solver entities back to semantic geometry.
+
+The starting SGB authority is
+`e74a343154c6b19b6ba32d6fb297e700cfe08ff2`.

@@ -1,0 +1,25 @@
+---
+title: "Unified Report Model"
+---
+
+SCGSim plans a Plotly-default report envelope that gives different solvers one
+consistent reading experience without pretending their physical quantities are
+identical.
+
+## Common envelope
+
+Every future report may organize:
+
+1. physical quantities;
+2. convergence and solver diagnostics;
+3. simulation cost and resource benchmarks;
+4. provenance and artifact identities.
+
+## Honesty rule
+
+Solver-specific quantities remain solver-specific. Electrostatic matrices,
+eigenfrequencies, driven network responses, field-energy participation, Q3D
+matrices, and Q2D per-unit-length results must retain their own units,
+extraction authority, and failure meaning.
+
+Plotly is the planned default presentation layer, not a Phase-1 implemented API.

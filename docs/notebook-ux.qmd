@@ -1,0 +1,59 @@
+---
+title: "Notebook UX Contracts"
+---
+
+Notebooks are a planned first-class public interface. They must show controls,
+artifact-producing stages, diagnostics, results, and cleanup rather than hide
+the workflow behind one orchestration cell. No notebook API is implemented in
+Phase 1.
+
+## Palace notebook contract
+
+The control surface has seven visible sections:
+
+1. `Design And Geometry Controls`
+2. `Meshing Controls`
+3. `Solver Controls`
+4. `Execution Controls`
+5. `Output And Run Identity Controls`
+6. `Validation And Failure Controls`
+7. `Data Classification And Provenance`
+
+The visible workflow stages are:
+
+```text
+Build Component
+-> Configure EPR
+-> Mesh
+-> Config
+-> Handoff
+-> Physics Results
+-> Simulation Performance / Benchmark
+```
+
+This contract permits Route A or Route B for the current Surface-EPR direction.
+It publishes no private component, selector, dimension, screenshot, config,
+mesh, receipt, or artifact.
+
+## AEDT notebook contract
+
+The planned PyAEDT notebook flow retains these fourteen visible phases:
+
+1. Setup and Imports
+2. Setup and Run Controls
+3. Create Simulation Component / Coupon
+4. Initialize AEDT Project / App
+5. Import GDS and Build the HFSS/Q3D/Q2D Model
+6. Geometry Verification
+7. Materials and Boundaries
+8. Ports / Nets / Excitations, when applicable
+9. Simulation Setup
+10. Simulation Configuration
+11. Solve and Export
+12. Adaptive-Pass Convergence / Solver Diagnostics
+13. Results: Plots and Readable Tables
+14. Save and Release AEDT
+
+This is a version-locked procedure contract supplied by `scq-ansys-aedt`. It is
+planned SCGSim UX, not evidence of a current PyAEDT implementation or live AEDT
+session.

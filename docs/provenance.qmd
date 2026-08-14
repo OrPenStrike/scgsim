@@ -1,0 +1,27 @@
+---
+title: "Provenance and Data Boundaries"
+---
+
+## Public provenance contract
+
+A future run or report should bind, as applicable:
+
+- SCGSim and backend revision;
+- SGB source and geometry/topology identity;
+- solver and schema version;
+- machine profile and run receipt;
+- config, mesh, handoff, result, and report artifact identities;
+- validation and failure state.
+
+The current source-lane identities are recorded in
+[Goals and upstream relationship](goals-and-upstream.qmd#starting-source-identities).
+
+## Publication boundary
+
+Public SCGSim documentation and fixtures must contain no private names, paths,
+dimensions, screenshots, meshes, configs, receipts, data, or artifacts.
+Sanitization alone does not grant publication authority.
+
+Private consumer validation may inform a public aggregate statement only when
+the statement has separate publication authority and contains no private
+identity or payload.

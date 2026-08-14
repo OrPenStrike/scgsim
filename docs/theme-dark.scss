@@ -1,0 +1,21 @@
+/*-- scss:defaults --*/
+
+$body-bg: #111827;
+$body-color: #dbe6f3;
+$link-color: #7bb7f0;
+$navbar-bg: #0f1724;
+$navbar-fg: #dbe6f3;
+$sidebar-bg: #111827;
+$sidebar-fg: #dbe6f3;
+$border-color: #2b3a4f;
+$code-bg: #182235;
+$code-color: #b8e6c1;
+$pre-color: $code-color;
+$callout-color-note: #7bb7f0;
+
+/*-- scss:rules --*/
+
+:root {
+  --scq-surface: #182235;
+  --scq-line-subtle: #2b3a4f;
+}
