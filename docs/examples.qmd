@@ -1,0 +1,29 @@
+---
+title: "Examples"
+---
+
+This section is the public notebook-oriented reading surface. It maps the four
+accepted workflow categories to their canonical contracts and, once real public
+runs exist, will place their results and evidence beside the corresponding
+example. It does not invent notebooks or results ahead of implementation.
+
+## Workflow categories
+
+| Category | What the public workflow will show | Current public state | Source required before evidence can appear here |
+|---|---|---|---|
+| Palace Electrostatic / Surface EPR | SGB Route A/B geometry, the seven Palace control sections, mesh/config/handoff, physical results, and simulation cost | Planned; no public SCGSim notebook or run yet | A public SCGSim notebook using an implemented Electrostatic backend, plus publication-authorized run receipts and results |
+| Palace Eigenmode | Semantic geometry, the seven Palace control sections, eigenmode solve diagnostics, modal results, and simulation cost | Planned; no public SCGSim notebook or run yet | A public SCGSim notebook using an implemented Eigenmode backend, plus publication-authorized run receipts and results |
+| PyAEDT HFSS | The accepted fourteen-phase flow for HFSS Eigenmode and Driven Modal/Terminal | Deferred; no public SCGSim notebook or run yet | A public version-locked PyAEDT notebook and publication-authorized solver evidence |
+| PyAEDT Q3D / Q2D | The accepted fourteen-phase flow for capacitance and cross-section extraction | Deferred; no public SCGSim notebook or run yet | A public version-locked PyAEDT notebook and publication-authorized extraction evidence |
+
+The canonical section names and stage ordering remain in
+[Notebook UX Contracts](notebook-ux.qmd). Backend availability and planned
+order remain in the [Backend Support Matrix](backend-support.qmd).
+
+## Evidence boundary
+
+A future example may link its public source notebook, exact source revision,
+run receipt, artifacts, physical results, convergence diagnostics, cost, and
+provenance only after each item exists and has publication authority. Private
+consumer names, paths, dimensions, screenshots, meshes, configs, receipts,
+artifacts, and unpublished results never belong on this site.

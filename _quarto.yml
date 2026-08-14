@@ -4,6 +4,7 @@ project:
   render:
     - README.md
     - docs/*.qmd
+    - docs/specs/*.qmd
 
 website:
   title: "SCGSim"
@@ -17,38 +18,59 @@ website:
     left:
       - text: "Overview"
         href: README.md
+      - text: "Examples"
+        href: docs/examples.qmd
       - text: "Architecture"
         href: docs/architecture.qmd
-      - text: "Backends"
+      - text: "Specs"
         href: docs/backend-support.qmd
-      - text: "Notebook UX"
-        href: docs/notebook-ux.qmd
   sidebar:
-    style: docked
-    collapse-level: 1
-    contents:
-      - text: "Overview"
-        href: README.md
-      - text: "Goals and upstream relationship"
-        href: docs/goals-and-upstream.qmd
-      - text: "Architecture and data flow"
-        href: docs/architecture.qmd
-      - text: "Backend support matrix"
-        href: docs/backend-support.qmd
-      - text: "Notebook UX contracts"
-        href: docs/notebook-ux.qmd
-      - text: "Geometry and SGB Route A/B"
-        href: docs/geometry-sgb.qmd
-      - text: "Execution profiles and handoff"
-        href: docs/execution-profiles.qmd
-      - text: "Unified report model"
-        href: docs/report-model.qmd
-      - text: "Provenance and data boundaries"
-        href: docs/provenance.qmd
-      - text: "Roadmap and current status"
-        href: docs/roadmap.qmd
-      - text: "Folder tree and ownership"
-        href: docs/ownership.qmd
+    - id: overview
+      title: "Overview"
+      style: floating
+      collapse-level: 1
+      contents:
+        - text: "Overview"
+          href: README.md
+        - text: "Goals and upstream relationship"
+          href: docs/goals-and-upstream.qmd
+        - text: "Roadmap and current status"
+          href: docs/roadmap.qmd
+    - id: examples
+      title: "Examples"
+      style: floating
+      collapse-level: 1
+      contents:
+        - text: "Examples"
+          href: docs/examples.qmd
+        - text: "Notebook UX contracts"
+          href: docs/notebook-ux.qmd
+    - id: architecture
+      title: "Architecture"
+      style: floating
+      collapse-level: 1
+      contents:
+        - text: "Architecture and data flow"
+          href: docs/architecture.qmd
+        - text: "Geometry and SGB Route A/B"
+          href: docs/geometry-sgb.qmd
+        - text: "Execution profiles and handoff"
+          href: docs/execution-profiles.qmd
+        - text: "Unified report model"
+          href: docs/report-model.qmd
+    - id: specs
+      title: "Specs"
+      style: floating
+      collapse-level: 1
+      contents:
+        - text: "Backend support matrix"
+          href: docs/backend-support.qmd
+        - text: "Palace Electrostatic + SGB"
+          href: docs/specs/palace-electrostatic-sgb.qmd
+        - text: "Provenance and data boundaries"
+          href: docs/provenance.qmd
+        - text: "Folder tree and ownership"
+          href: docs/ownership.qmd
 
 format:
   html:
