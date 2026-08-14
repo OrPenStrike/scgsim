@@ -167,8 +167,10 @@ def _structured_volume_group(
         )
     material_ids = tuple(source.material_id for source in sources)
     material_kinds = tuple(_volume_material_kind(source) for source in sources)
-    if len(material_ids) != len(material_kinds):
-        raise ValueError(f"{first_tag.physical_name} material metadata is unaligned")
+    if len(set(material_ids)) != 1 or len(set(material_kinds)) != 1:
+        raise ValueError(
+            f"{first_tag.physical_name} grouped material metadata is not uniform"
+        )
     return StructuredFinalPhysicalGroupRecord(
         physical_name=first_tag.physical_name,
         dimension=first_tag.dimension,
@@ -187,8 +189,8 @@ def _structured_volume_group(
             "route": plan.route,
         },
         physical_attribute={
-            "material_ids": material_ids,
-            "material_kinds": material_kinds,
+            "material_ids": (material_ids[0],),
+            "material_kinds": (material_kinds[0],),
         },
     )
 

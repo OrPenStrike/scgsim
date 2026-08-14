@@ -39,6 +39,7 @@ from scgsim.sgb.models.input import (
     GeometryBuildInput,
     LayoutPolygonSpec,
     SemanticEntitySpec,
+    VacuumRegionSpec,
 )
 from scgsim.sgb.models.regions import (
     PortSheetOverlapRecord,
@@ -109,6 +110,7 @@ __all__ = [
     "SurfaceRefRecord",
     "TagPlanRecord",
     "TagSourceKindLiteral",
+    "VacuumRegionSpec",
     "Vector3D",
     "VolumePlanRecord",
 ]

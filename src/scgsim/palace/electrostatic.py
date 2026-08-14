@@ -8,11 +8,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from scgsim.sgb import VacuumRegionSpec
+
 from ._config import TerminalBinding, build_electrostatic_config
 from ._epr import normalize_surface_epr_specs
 from ._mesh import MeshBuildResult, build_route_mesh
 from ._staged import (
     apply_airbox_to_stack,
+    apply_vacuum_region_to_stack,
     validate_non_negative_int,
     validate_nonempty_string,
     validate_positive_number,
@@ -51,6 +54,7 @@ class ElectrostaticSim:
         }
     )
     _materials: dict[str, Mapping[str, Any]] | None = field(default=None, init=False)
+    vacuum_region: VacuumRegionSpec | None = None
     _mesh_result: MeshBuildResult | None = field(default=None, init=False)
     config_path: Path | None = field(default=None, init=False)
     handoff_plan: HandoffPlan | None = field(default=None, init=False)
@@ -103,6 +107,10 @@ class ElectrostaticSim:
         z_above: float | None = None,
         z_below: float | None = None,
     ) -> None:
+        if self.vacuum_region is not None:
+            raise ValueError(
+                "set_airbox is mutually exclusive with set_vacuum_region()."
+            )
         self.airbox = {
             "margin_x": validate_positive_number(margin_x, "margin_x"),
             "margin_y": validate_positive_number(margin_y, "margin_y"),
@@ -111,6 +119,18 @@ class ElectrostaticSim:
             self.airbox["z_above"] = validate_positive_number(z_above, "z_above")
         if z_below is not None:
             self.airbox["z_below"] = validate_positive_number(z_below, "z_below")
+        self._invalidate_mesh()
+
+    def set_vacuum_region(
+        self,
+        padding: float | list[float] | tuple[float, ...] | Mapping[str, Any] = 0.0,
+    ) -> None:
+        """Set an auto-generated vacuum envelope around non-vacuum solution regions."""
+        if self.airbox:
+            raise ValueError(
+                "set_vacuum_region is mutually exclusive with set_airbox()."
+            )
+        self.vacuum_region = VacuumRegionSpec.from_padding(padding)
         self._invalidate_mesh()
 
     def add_terminal(self, name: str, *, net_id: str) -> None:
@@ -211,9 +231,22 @@ class ElectrostaticSim:
             )
         if self.surface_epr_specs is None:
             raise ValueError("set_surface_epr() must run before mesh().")
+        prepared_stack = self.stack
+        if self.vacuum_region is not None:
+            prepared_stack = apply_vacuum_region_to_stack(
+                self.stack,
+                self.vacuum_region,
+            )
+        prepared_materials = prepared_stack.get("materials")
+        if isinstance(prepared_materials, Mapping):
+            self._materials = {
+                str(material_id): dict(material)
+                for material_id, material in prepared_materials.items()
+                if isinstance(material, Mapping)
+            }
         self._mesh_result = build_route_mesh(
             component=self.component,
-            stack=apply_airbox_to_stack(self.stack, self.airbox),
+            stack=apply_airbox_to_stack(prepared_stack, self.airbox),
             route=self.route,
             output_dir=self.output_dir,
             refined_mesh_size=self.numerical["refined_mesh_size"],

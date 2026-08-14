@@ -137,6 +137,479 @@ _INTERFACE_KIND_ORDER = ("MM", "SS", "AA", "MS", "MA", "SA")
 _TOPOLOGY_EPS_UM = 1e-9
 
 
+def _prepare_auto_vacuum_solution_regions(
+    build_input: GeometryBuildInput,
+    route: RouteLiteral,
+) -> GeometryBuildInput:
+    """Replace auto VACUUM_REGION with planner-side complement components."""
+    auto_region = _auto_vacuum_solution_region(build_input)
+    if auto_region is None:
+        return build_input
+    if auto_region.material_kind != "vacuum":
+        raise ValueError(
+            "auto vacuum region must have vacuum material_kind before planning"
+        )
+
+    auto_metadata = dict(auto_region.metadata)
+    auto_padding = _auto_vacuum_padding(auto_metadata, auto_region.semantic_id)
+    auto_bounds = _auto_vacuum_envelope_bounds(build_input, route=route)
+    auto_bounds = {
+        "x_min_um": auto_bounds["x_min_um"] - auto_padding["x_minus_um"],
+        "y_min_um": auto_bounds["y_min_um"] - auto_padding["y_minus_um"],
+        "x_max_um": auto_bounds["x_max_um"] + auto_padding["x_plus_um"],
+        "y_max_um": auto_bounds["y_max_um"] + auto_padding["y_plus_um"],
+        "z_min_um": auto_bounds["z_min_um"] - auto_padding["z_minus_um"],
+        "z_max_um": auto_bounds["z_max_um"] + auto_padding["z_plus_um"],
+    }
+    if not auto_bounds["x_min_um"] < auto_bounds["x_max_um"]:
+        raise ValueError("auto VACUUM_REGION has non-positive padded x extent")
+    if not auto_bounds["y_min_um"] < auto_bounds["y_max_um"]:
+        raise ValueError("auto VACUUM_REGION has non-positive padded y extent")
+    if not auto_bounds["z_min_um"] < auto_bounds["z_max_um"]:
+        raise ValueError("auto VACUUM_REGION has non-positive padded z extent")
+    auto_region = replace(
+        auto_region,
+        geometry={
+            **dict(auto_region.geometry),
+            "domain_bounds_um": {
+                "x_min_um": auto_bounds["x_min_um"],
+                "y_min_um": auto_bounds["y_min_um"],
+                "x_max_um": auto_bounds["x_max_um"],
+                "y_max_um": auto_bounds["y_max_um"],
+            },
+            "z_min_um": auto_bounds["z_min_um"],
+            "z_max_um": auto_bounds["z_max_um"],
+            "outer_loop": _domain_bounds_loop(auto_bounds),
+            "hole_loops": (),
+        },
+    )
+    envelope_loop = _domain_bounds_loop(auto_bounds)
+    auto_z_min_um = float(auto_bounds["z_min_um"])
+    auto_z_max_um = float(auto_bounds["z_max_um"])
+    if not (auto_z_max_um > auto_z_min_um):
+        raise ValueError("auto VACUUM_REGION z_max_um must exceed z_min_um")
+
+    all_entities = tuple(build_input.entities)
+    obstacle_entities = tuple(
+        entity
+        for entity in all_entities
+        if _is_auto_vacuum_subtractor(entity, route=route)
+        and entity.semantic_id != auto_region.semantic_id
+        and not bool(entity.metadata.get("is_auto_vacuum_region"))
+    )
+
+    z_events = {auto_z_min_um, auto_z_max_um}
+    for entity in obstacle_entities:
+        entity_z_min_um, entity_z_max_um = _entity_z_range_um(entity)
+        if not (
+            isfinite(entity_z_min_um)
+            and isfinite(entity_z_max_um)
+            and entity_z_max_um > entity_z_min_um
+        ):
+            raise ValueError(f"{entity.semantic_id} has non-positive z extent")
+        z_events.update((entity_z_min_um, entity_z_max_um))
+    z_slices = sorted(z_events)
+    if len(z_slices) < 2:
+        raise ValueError("auto VACUUM_REGION has no valid z sweep")
+
+    import gdstk
+
+    components: list[SemanticEntitySpec] = []
+    component_index = 0
+    for z_start, z_end in pairwise(z_slices):
+        if z_end - z_start <= _TOPOLOGY_EPS_UM:
+            continue
+        if (
+            z_start < auto_z_min_um - _TOPOLOGY_EPS_UM
+            or z_end > auto_z_max_um + _TOPOLOGY_EPS_UM
+        ):
+            continue
+
+        base_region = _solution_entity_xy_region(
+            gdstk,
+            auto_region,
+            z_min_um=z_start,
+            z_max_um=z_end,
+        )
+        if not base_region:
+            continue
+
+        active_subtractor_region: tuple[Any, ...] = ()
+        active_subtractors: list[str] = []
+        for entity in obstacle_entities:
+            obstacle_z_min_um, obstacle_z_max_um = _entity_z_range_um(entity)
+            if (
+                obstacle_z_min_um >= z_end - _TOPOLOGY_EPS_UM
+                or obstacle_z_max_um <= z_start + _TOPOLOGY_EPS_UM
+            ):
+                continue
+            subtractor_regions = _solution_entity_xy_region(
+                gdstk,
+                entity,
+                z_min_um=z_start,
+                z_max_um=z_end,
+            )
+            if not subtractor_regions:
+                continue
+            active_subtractors.append(entity.semantic_id)
+            if active_subtractor_region:
+                active_subtractor_region = _boolean_gdstk_region(
+                    gdstk,
+                    active_subtractor_region,
+                    subtractor_regions,
+                    "or",
+                )
+            else:
+                active_subtractor_region = subtractor_regions
+
+        vacuum_region_refs = _geometry_refs_from_gdstk_region(
+            {"outer_loop": envelope_loop},
+            _boolean_gdstk_region(
+                gdstk,
+                base_region,
+                active_subtractor_region,
+                "not",
+            ),
+        )
+        if not vacuum_region_refs:
+            continue
+
+        for geometry_ref in sorted(
+            vacuum_region_refs,
+            key=lambda region: _loop_signature(region["outer_loop"]),
+        ):
+            component_index += 1
+            component_id = (
+                auto_region.semantic_id
+                if component_index == 1
+                else f"{auto_region.semantic_id}__{component_index:04d}"
+            )
+            components.append(
+                SemanticEntitySpec(
+                    semantic_id=component_id,
+                    role=auto_region.role,
+                    material_id=auto_region.material_id,
+                    material_kind=auto_region.material_kind,
+                    priority=auto_region.priority,
+                    geometry_kind=auto_region.geometry_kind,
+                    host_void_semantic_id=auto_region.host_void_semantic_id,
+                    route_representations=auto_region.route_representations,
+                    geometry={
+                        "geometry_kind": auto_region.geometry.get(
+                            "geometry_kind",
+                            auto_region.geometry_kind,
+                        ),
+                        "outer_loop": geometry_ref["outer_loop"],
+                        "hole_loops": geometry_ref.get("hole_loops", ()),
+                        "z_min_um": float(z_start),
+                        "z_max_um": float(z_end),
+                        "domain_bounds_um": _loop_domain_bounds(
+                            geometry_ref["outer_loop"],
+                            geometry_ref.get("hole_loops", ()),
+                        ),
+                        "from_soln_region": auto_region.semantic_id,
+                    },
+                    metadata={
+                        **auto_metadata,
+                        "is_auto_vacuum_region": True,
+                        "auto_vacuum_group_id": auto_region.semantic_id,
+                        "auto_vacuum_component_index": component_index,
+                        "auto_vacuum_z_range_um": (float(z_start), float(z_end)),
+                        "auto_vacuum_subtracting_solution_ids": tuple(
+                            sorted(set(active_subtractors))
+                        ),
+                    },
+                    polygon_ids=(),
+                    labels=(),
+                )
+            )
+
+    if not components:
+        raise ValueError("auto VACUUM_REGION leaves no finite sweep vacuum geometry")
+
+    retained_entities = tuple(
+        entity
+        for entity in all_entities
+        if entity.semantic_id != auto_region.semantic_id
+    )
+    return replace(
+        build_input,
+        entities=tuple(components) + tuple(retained_entities),
+        solution_regions=build_input.solution_regions,
+    )
+
+
+def _is_auto_vacuum_subtractor(
+    entity: SemanticEntitySpec,
+    route: RouteLiteral,
+) -> bool:
+    if bool(entity.metadata.get("is_auto_vacuum_region")):
+        return False
+    if _is_solution_entity(entity):
+        return True
+
+    representation = entity.route_representations.get(route)
+    return representation in {"cutout_boundary_shell", "material_volume"}
+
+
+def _auto_vacuum_surface_sheet_for_xy_envelope(
+    entity: SemanticEntitySpec,
+    route: RouteLiteral,
+) -> bool:
+    return route == "A" and entity.route_representations.get(route) == "surface_sheet"
+
+
+def _auto_vacuum_entity_xy_bounds(
+    build_input: GeometryBuildInput,
+    entity: SemanticEntitySpec,
+) -> dict[str, float]:
+    geometry = entity.geometry
+    domain_bounds = geometry.get("domain_bounds_um")
+    if isinstance(domain_bounds, Mapping):
+        required = ("x_min_um", "x_max_um", "y_min_um", "y_max_um")
+        missing = [name for name in required if name not in domain_bounds]
+        if missing:
+            raise ValueError(
+                f"{entity.semantic_id} has missing {tuple(missing)} in domain_bounds_um for auto vacuum envelope."
+            )
+        values = [domain_bounds.get(name) for name in required]
+        if any(not isfinite(float(value)) for value in values):
+            raise ValueError(
+                f"{entity.semantic_id} has non-finite domain_bounds_um for auto vacuum envelope."
+            )
+        x_min_um, x_max_um, y_min_um, y_max_um = (float(value) for value in values)
+        if not (x_min_um < x_max_um and y_min_um < y_max_um):
+            raise ValueError(
+                f"{entity.semantic_id} has non-positive XY extent for auto vacuum envelope."
+            )
+        return {
+            "x_min_um": x_min_um,
+            "x_max_um": x_max_um,
+            "y_min_um": y_min_um,
+            "y_max_um": y_max_um,
+        }
+
+    if "outer_loop" in geometry:
+        outer_loop = _clean_loop(geometry["outer_loop"])
+        hole_loops = tuple(_clean_loop(loop) for loop in geometry.get("hole_loops", ()))
+        if not all(
+            isfinite(coordinate)
+            for loop in (outer_loop, *hole_loops)
+            for point in loop
+            for coordinate in point
+        ):
+            raise ValueError(
+                f"{entity.semantic_id} has non-finite loop geometry for auto vacuum envelope."
+            )
+        return _loop_domain_bounds(outer_loop, hole_loops)
+
+    polygon_ids = tuple(entity.polygon_ids)
+    if not polygon_ids:
+        raise ValueError(
+            f"{entity.semantic_id} must define domain_bounds_um, outer_loop, or polygon_ids for auto vacuum envelope."
+        )
+    polygons = {polygon.polygon_id: polygon for polygon in build_input.polygons}
+    points: list[tuple[float, float]] = []
+    for polygon_id in polygon_ids:
+        try:
+            polygon = polygons[polygon_id]
+        except KeyError as exc:
+            raise ValueError(
+                f"{entity.semantic_id} references an unknown layout polygon for auto vacuum envelope."
+            ) from exc
+        loop = _clean_loop(polygon.exterior)
+        if len(loop) < 3:
+            raise ValueError(
+                f"{entity.semantic_id} references degenerate polygon {polygon_id!r} for auto vacuum envelope."
+            )
+        points.extend(loop)
+        for hole in polygon.holes:
+            hole_loop = _clean_loop(hole)
+            if not all(
+                isfinite(coordinate) for point in hole_loop for coordinate in point
+            ):
+                raise ValueError(
+                    f"{entity.semantic_id} references non-finite polygon {polygon_id!r} for auto vacuum envelope."
+                )
+            points.extend(hole_loop)
+    if not points:
+        raise ValueError(
+            f"{entity.semantic_id} has no geometry points for auto vacuum envelope."
+        )
+    if not all(isfinite(coordinate) for point in points for coordinate in point):
+        raise ValueError(
+            f"{entity.semantic_id} has non-finite polygon geometry for auto vacuum envelope."
+        )
+    return {
+        "x_min_um": min(point[0] for point in points),
+        "x_max_um": max(point[0] for point in points),
+        "y_min_um": min(point[1] for point in points),
+        "y_max_um": max(point[1] for point in points),
+    }
+
+
+def _auto_vacuum_padding(
+    auto_metadata: Mapping[str, Any],
+    auto_region_id: str,
+) -> dict[str, float]:
+    raw = auto_metadata.get("vacuum_region_padding_um")
+    if not isinstance(raw, Mapping):
+        raise TypeError(
+            f"{auto_region_id} requires metadata vacuum_region_padding_um for auto envelope."
+        )
+    required = (
+        "x_minus_um",
+        "x_plus_um",
+        "y_minus_um",
+        "y_plus_um",
+        "z_minus_um",
+        "z_plus_um",
+    )
+    values = {}
+    for key in required:
+        value = raw.get(key)
+        if (
+            value is None
+            or not isinstance(value, (int, float))
+            or isinstance(value, bool)
+        ):
+            raise ValueError(
+                f"{auto_region_id} vacuum padding {key!r} must be a finite non-negative number."
+            )
+        value = float(value)
+        if not isfinite(value) or value < 0.0:
+            raise ValueError(
+                f"{auto_region_id} vacuum padding {key!r} must be a finite non-negative number."
+            )
+        values[key] = value
+    if set(values.keys()) != set(required):
+        raise ValueError(
+            f"{auto_region_id} metadata vacuum_region_padding_um must define exact six-face keys."
+        )
+    return values
+
+
+def _auto_vacuum_envelope_bounds(
+    build_input: GeometryBuildInput,
+    *,
+    route: RouteLiteral,
+) -> dict[str, float]:
+    bounds: list[dict[str, float]] = []
+    for entity in build_input.entities:
+        is_subtractor = _is_auto_vacuum_subtractor(entity, route=route)
+        include_for_xy = _auto_vacuum_surface_sheet_for_xy_envelope(entity, route)
+        if not is_subtractor and not include_for_xy:
+            continue
+        if bool(entity.metadata.get("is_auto_vacuum_region")):
+            continue
+        xy_bounds = _auto_vacuum_entity_xy_bounds(build_input, entity)
+        entry = {
+            **xy_bounds,
+            "z_min_um": float("nan"),
+            "z_max_um": float("nan"),
+        }
+        if is_subtractor:
+            z_min_um, z_max_um = _entity_z_range_um(entity)
+            if not (isfinite(z_min_um) and isfinite(z_max_um) and z_max_um > z_min_um):
+                raise ValueError(
+                    f"{entity.semantic_id} has non-positive or non-finite z extent."
+                )
+            entry["z_min_um"] = float(z_min_um)
+            entry["z_max_um"] = float(z_max_um)
+        elif (
+            route == "A"
+            and entity.route_representations.get(route) == "surface_sheet"
+            and not is_subtractor
+        ):
+            entry["z_min_um"] = float("nan")
+            entry["z_max_um"] = float("nan")
+
+        bounds.append(entry)
+
+    if not bounds:
+        raise ValueError(
+            "Cannot auto-compute vacuum envelope without route-aware positive occupancy."
+        )
+
+    finite_z_bounds = tuple(bound for bound in bounds if isfinite(bound["z_min_um"]))
+    if not finite_z_bounds:
+        raise ValueError(
+            "Cannot auto-compute vacuum envelope without route-aware finite z occupancy."
+        )
+    return {
+        "x_min_um": min(item["x_min_um"] for item in bounds),
+        "x_max_um": max(item["x_max_um"] for item in bounds),
+        "y_min_um": min(item["y_min_um"] for item in bounds),
+        "y_max_um": max(item["y_max_um"] for item in bounds),
+        "z_min_um": min(item["z_min_um"] for item in finite_z_bounds),
+        "z_max_um": max(item["z_max_um"] for item in finite_z_bounds),
+    }
+
+
+def _auto_vacuum_solution_region(
+    build_input: GeometryBuildInput,
+) -> SemanticEntitySpec | None:
+    candidates = tuple(
+        entity
+        for entity in build_input.entities
+        if _is_solution_entity(entity)
+        and bool(entity.metadata.get("is_auto_vacuum_region"))
+    )
+    if not candidates:
+        return None
+    if len(candidates) > 1:
+        raise ValueError("exactly one auto VACUUM_REGION solution entity is required")
+    return candidates[0]
+
+
+def _solution_entity_xy_region(
+    gdstk: Any,
+    entity: SemanticEntitySpec,
+    *,
+    z_min_um: float | None = None,
+    z_max_um: float | None = None,
+) -> tuple[Any, ...]:
+    del z_min_um, z_max_um
+    geometry = entity.geometry
+    if "outer_loop" in geometry:
+        outer_loop = _clean_loop(geometry["outer_loop"])
+        split_outer_loop, *split_hole_loops = _split_gdstk_cutline_loop(outer_loop)
+        holes = tuple(
+            _clean_loop(loop)
+            for loop in (
+                tuple(geometry.get("hole_loops", ())) + tuple(split_hole_loops)
+            )
+            if len(loop) >= 3
+        )
+        if not holes:
+            return (gdstk.Polygon(split_outer_loop),)
+        return _filter_gdstk_polygons(
+            gdstk.boolean(
+                (gdstk.Polygon(split_outer_loop),),
+                tuple(gdstk.Polygon(hole_loop) for hole_loop in holes),
+                "not",
+                precision=1e-9,
+            )
+        )
+    bounds = _solution_bounds(entity)
+    return (gdstk.Polygon(_domain_bounds_loop(bounds)),)
+
+
+def _loop_domain_bounds(
+    outer_loop: tuple[tuple[float, float], ...],
+    hole_loops: tuple[tuple[tuple[float, float], ...], ...] = (),
+) -> dict[str, float]:
+    points = tuple(
+        point for loop in (outer_loop, *hole_loops) for point in _clean_loop(loop)
+    )
+    return {
+        "x_min_um": min(point[0] for point in points),
+        "y_min_um": min(point[1] for point in points),
+        "x_max_um": max(point[0] for point in points),
+        "y_max_um": max(point[1] for point in points),
+    }
+
+
 def build_route_construction_plan(
     build_input: GeometryBuildInput,
     *,
@@ -158,6 +631,7 @@ def build_route_construction_plan(
     or be explicitly marked `construction_only`.
     """
     timings: list[dict[str, Any]] = []
+    build_input = _prepare_auto_vacuum_solution_regions(build_input, route=route)
     _timed(
         timings,
         "validate_selected_route",
@@ -236,6 +710,14 @@ def build_route_construction_plan(
         lambda: validate_surface_sheet_interface_coverage(
             build_input,
             route=route,
+            surfaces=surfaces,
+        ),
+    )
+    surfaces = _timed(
+        timings,
+        "merge_solution_sidewall_interfaces",
+        lambda: _merge_solution_sidewall_interfaces(
+            build_input,
             surfaces=surfaces,
         ),
     )
@@ -3175,6 +3657,12 @@ def plan_route_volumes(
     records: list[VolumePlanRecord] = []
     for entity in build_input.entities:
         if _is_solution_entity(entity):
+            physical_owner_semantic_id = (
+                "VACUUM_REGION"
+                if bool(entity.metadata.get("is_auto_vacuum_region"))
+                and entity.material_kind == "vacuum"
+                else None
+            )
             all_refs = tuple(
                 SurfaceRefRecord(
                     surface_id=surface.surface_id,
@@ -3258,6 +3746,7 @@ def plan_route_volumes(
                             "representation": "solution_volume",
                             "material_kind": entity.material_kind,
                             "geometry_ref": dict(entity.geometry),
+                            "physical_owner_semantic_id": physical_owner_semantic_id,
                             "inner_pec_void_shell_contact_ids": {
                                 component_id: tuple(
                                     contact_ids_by_component.get(component_id, ())
@@ -3279,12 +3768,14 @@ def plan_route_volumes(
                             "representation": "solution_volume",
                             "material_kind": entity.material_kind,
                             "geometry_ref": dict(entity.geometry),
+                            "physical_owner_semantic_id": physical_owner_semantic_id,
                         },
                     )
                 )
             continue
         representation = entity.route_representations.get(route)
         if route == "C" and representation == "material_volume":
+            physical_owner_semantic_id = _entity_physical_group_id(entity)
             records.append(
                 VolumePlanRecord(
                     volume_id=f"VOL__{entity.semantic_id}",
@@ -3312,9 +3803,7 @@ def plan_route_volumes(
                             entity,
                             representation=representation,
                         ),
-                        "physical_owner_semantic_id": _entity_physical_group_id(
-                            entity,
-                        ),
+                        "physical_owner_semantic_id": physical_owner_semantic_id,
                     },
                 )
             )
@@ -4267,6 +4756,9 @@ def _physical_group_owner_ids(
 
 
 def _entity_physical_group_id(entity: SemanticEntitySpec) -> str:
+    auto_group_id = entity.metadata.get("auto_vacuum_group_id")
+    if isinstance(auto_group_id, str) and auto_group_id:
+        return auto_group_id
     if entity.part_role not in HIGH_COUNT_LOCAL_CONDUCTOR_PART_ROLES:
         return entity.semantic_id
     for key in ("physical_group_name", "physical_group_id", "semantic_group_id"):
@@ -4281,6 +4773,8 @@ def _plan_substrate_air_surfaces(
     *,
     route: RouteLiteral,
 ) -> tuple[SurfacePlanRecord, ...]:
+    import gdstk
+
     records: list[SurfacePlanRecord] = list(
         _plan_solution_domain_boundary_surfaces(build_input, route=route)
     )
@@ -4288,44 +4782,65 @@ def _plan_substrate_air_surfaces(
     for lower, upper, z_um, bounds in _solution_interface_planes(build_input):
         kind = _solution_interface_kind(lower, upper)
         owner_ids = _solution_interface_owner_ids(kind, lower, upper)
-        base_loop = _domain_bounds_loop(bounds)
-        plane_conductors = _conductor_entities_on_solution_plane(
-            build_input,
-            route=route,
-            lower=lower,
-            upper=upper,
-            z_um=z_um,
-            base_loop=base_loop,
+        interface_region = _boolean_gdstk_region(
+            gdstk,
+            _solution_entity_xy_region(gdstk, lower),
+            _solution_entity_xy_region(gdstk, upper),
+            "and",
         )
-        solution_geometry_refs = _solution_interface_geometry_refs(
-            {
-                "plane": {"axis": "z", "value_um": z_um},
-                "outer_loop": base_loop,
-                "hole_loops": (),
-            },
-            plane_conductors,
-        )
-        for geometry_ref in solution_geometry_refs:
-            interface_id = (
-                f"{kind}__{owner_ids[0]}__{owner_ids[1]}__{surface_index:04d}"
+        if not interface_region:
+            continue
+        interface_region = tuple(
+            sorted(
+                interface_region,
+                key=lambda polygon: (
+                    round(_loop_centroid(_clean_loop(polygon.points))[0], 9),
+                    round(_loop_centroid(_clean_loop(polygon.points))[1], 9),
+                    round(abs(_polygon_area(polygon.points)), 9),
+                ),
             )
-            records.append(
-                SurfacePlanRecord(
-                    surface_id=f"SURF__{interface_id}",
-                    owner_semantic_id=owner_ids[0],
-                    surface_role="solution_interface",
-                    geometry_ref=geometry_ref,
-                    interface_id=interface_id,
-                    valid_routes=(route,),
-                    solver_use="solver_active",
-                    metadata={
-                        "interface_kinds": (kind,),
-                        "owner_semantic_ids": owner_ids,
-                        "boundary_volume_ids": (lower.semantic_id, upper.semantic_id),
-                    },
+        )
+        for patch in interface_region:
+            base_geometry_ref = _geometry_ref_from_gdstk_polygon(
+                {"plane": {"axis": "z", "value_um": z_um}},
+                patch,
+            )
+            plane_conductors = _conductor_entities_on_solution_plane(
+                build_input,
+                route=route,
+                lower=lower,
+                upper=upper,
+                z_um=z_um,
+                base_region=(patch,),
+            )
+            solution_geometry_refs = _solution_interface_geometry_refs(
+                base_geometry_ref,
+                plane_conductors,
+            )
+            for geometry_ref in solution_geometry_refs:
+                interface_id = (
+                    f"{kind}__{owner_ids[0]}__{owner_ids[1]}__{surface_index:04d}"
                 )
-            )
-            surface_index += 1
+                records.append(
+                    SurfacePlanRecord(
+                        surface_id=f"SURF__{interface_id}",
+                        owner_semantic_id=owner_ids[0],
+                        surface_role="solution_interface",
+                        geometry_ref=geometry_ref,
+                        interface_id=interface_id,
+                        valid_routes=(route,),
+                        solver_use="solver_active",
+                        metadata={
+                            "interface_kinds": (kind,),
+                            "owner_semantic_ids": owner_ids,
+                            "boundary_volume_ids": (
+                                lower.semantic_id,
+                                upper.semantic_id,
+                            ),
+                        },
+                    )
+                )
+                surface_index += 1
     return tuple(records)
 
 
@@ -4334,6 +4849,9 @@ def _solution_interface_geometry_refs(
     plane_conductors: Sequence[SemanticEntitySpec],
 ) -> tuple[dict[str, Any], ...]:
     """Create live solution-interface patches after removing conductors."""
+    if not plane_conductors:
+        return (dict(parent_geometry_ref),)
+
     import gdstk
 
     hole_loops = _simple_interior_hole_loops(parent_geometry_ref, plane_conductors)
@@ -4428,37 +4946,44 @@ def _solution_domain_sidewall_geometry_refs(
     z_max_um: float,
 ) -> tuple[dict[str, Any], ...]:
     refs: list[dict[str, Any]] = []
-    for edge_index, (start, end) in enumerate(_ring_edges(_clean_loop(outer_loop))):
-        edge_z_min_um = _solution_boundary_edge_z_min_um(
-            build_input,
-            route=route,
-            solution=solution,
-            start=start,
-            end=end,
-            default_z_min_um=z_min_um,
-        )
-        edge_z_max_um = _solution_boundary_edge_z_max_um(
-            build_input,
-            route=route,
-            solution=solution,
-            start=start,
-            end=end,
-            default_z_max_um=z_max_um,
-        )
-        if edge_z_max_um - edge_z_min_um <= _TOPOLOGY_EPS_UM:
-            continue
-        refs.append(
-            {
-                "quad_points": (
-                    (start[0], start[1], edge_z_min_um),
-                    (end[0], end[1], edge_z_min_um),
-                    (end[0], end[1], edge_z_max_um),
-                    (start[0], start[1], edge_z_max_um),
-                ),
-                "sidewall_ring_role": "outer",
-                "sidewall_edge_index": edge_index,
-            }
-        )
+    for ring_role, ring_loop in (
+        ("outer", _clean_loop(outer_loop)),
+        *(
+            (f"hole_{index:04d}", _clean_loop(hole_loop))
+            for index, hole_loop in enumerate(solution.geometry.get("hole_loops", ()))
+        ),
+    ):
+        for edge_index, (start, end) in enumerate(_ring_edges(ring_loop)):
+            edge_z_min_um = _solution_boundary_edge_z_min_um(
+                build_input,
+                route=route,
+                solution=solution,
+                start=start,
+                end=end,
+                default_z_min_um=z_min_um,
+            )
+            edge_z_max_um = _solution_boundary_edge_z_max_um(
+                build_input,
+                route=route,
+                solution=solution,
+                start=start,
+                end=end,
+                default_z_max_um=z_max_um,
+            )
+            if edge_z_max_um - edge_z_min_um <= _TOPOLOGY_EPS_UM:
+                continue
+            refs.append(
+                {
+                    "quad_points": (
+                        (start[0], start[1], edge_z_min_um),
+                        (end[0], end[1], edge_z_min_um),
+                        (end[0], end[1], edge_z_max_um),
+                        (start[0], start[1], edge_z_max_um),
+                    ),
+                    "sidewall_ring_role": ring_role,
+                    "sidewall_edge_index": edge_index,
+                }
+            )
     return tuple(refs)
 
 
@@ -4540,6 +5065,116 @@ def _point2d_key(point: tuple[float, float]) -> tuple[float, float]:
     return (round(float(point[0]), 9), round(float(point[1]), 9))
 
 
+def _canonical_face_signature_3d(
+    ring: tuple[tuple[float, float, float], ...],
+) -> tuple[tuple[float, float, float], ...] | None:
+    if len(ring) < 3:
+        return None
+    normalized = tuple(_coordinate_key(point) for point in ring)
+    candidates: list[tuple[tuple[float, float, float], ...]] = []
+    for candidate in (normalized, tuple(reversed(normalized))):
+        rotations = tuple(
+            candidate[index:] + candidate[:index] for index in range(len(candidate))
+        )
+        candidates.append(min(rotations))
+    return min(candidates)
+
+
+def _merge_solution_sidewall_interfaces(
+    build_input: GeometryBuildInput,
+    *,
+    surfaces: tuple[SurfacePlanRecord, ...],
+) -> tuple[SurfacePlanRecord, ...]:
+    """Merge coincident solution sidewalls into one shared interface surface."""
+    entities = {entity.semantic_id: entity for entity in build_input.entities}
+    solution_ids = {
+        entity.semantic_id
+        for entity in entities.values()
+        if _is_solution_entity(entity)
+    }
+    non_merge: list[SurfacePlanRecord] = []
+    sidewall_groups: dict[
+        tuple[tuple[float, float, float], ...],
+        list[SurfacePlanRecord],
+    ] = {}
+
+    for surface in surfaces:
+        if surface.construction_only:
+            non_merge.append(surface)
+            continue
+        if (
+            surface.surface_role != "domain_boundary"
+            or surface.metadata.get("boundary_role") != "sidewall"
+        ):
+            non_merge.append(surface)
+            continue
+        if "quad_points" not in surface.geometry_ref:
+            non_merge.append(surface)
+            continue
+        boundary_ids = _surface_boundary_volume_ids(
+            surface,
+            known_entity_ids=solution_ids,
+        )
+        if len(boundary_ids) != 1:
+            non_merge.append(surface)
+            continue
+        owner_id = boundary_ids[0]
+        owner = entities.get(owner_id)
+        if owner is None or not _is_solution_entity(owner):
+            non_merge.append(surface)
+            continue
+        specs = _surface_ring3d_specs(surface)
+        if len(specs) != 1:
+            non_merge.append(surface)
+            continue
+        signature = _canonical_face_signature_3d(specs[0][2])
+        if signature is None:
+            non_merge.append(surface)
+            continue
+        sidewall_groups.setdefault(signature, []).append(surface)
+
+    grouped_surfaces: list[SurfacePlanRecord] = []
+    for signature, group in sidewall_groups.items():
+        if len(group) == 1:
+            grouped_surfaces.append(group[0])
+            continue
+        all_ids = _unique_ids(
+            value
+            for surface in group
+            for value in _surface_boundary_volume_ids(
+                surface,
+                known_entity_ids=solution_ids,
+            )
+        )
+        if len(all_ids) != 2:
+            names = tuple(surface.surface_id for surface in group)
+            raise ValueError(
+                "duplicate solution sidewall cannot define a 2-owner interface: "
+                + f"{signature} => {names!r}"
+            )
+        lower = entities[all_ids[0]]
+        upper = entities[all_ids[1]]
+        kind = _solution_interface_kind(lower, upper)
+        owner_ids = _solution_interface_owner_ids(kind, lower, upper)
+        edge_suffix = group[0].surface_id.rsplit("__", maxsplit=1)[-1]
+        interface_id = f"{kind}__{owner_ids[0]}__{owner_ids[1]}__{edge_suffix}"
+        merged = replace(
+            group[0],
+            owner_semantic_id=owner_ids[0],
+            interface_id=interface_id,
+            metadata={
+                **group[0].metadata,
+                "owner_semantic_ids": owner_ids,
+                "boundary_volume_ids": owner_ids,
+                "interface_kinds": (kind,),
+                "interface_type": kind,
+            },
+        )
+        grouped_surfaces.append(merged)
+    grouped_surfaces.extend(non_merge)
+    return tuple(grouped_surfaces)
+
+
 def _plan_solution_domain_boundary_surfaces(
     build_input: GeometryBuildInput,
     *,
@@ -4549,12 +5184,19 @@ def _plan_solution_domain_boundary_surfaces(
     for entity in build_input.entities:
         if not _is_solution_entity(entity):
             continue
-        bounds = entity.geometry.get("domain_bounds_um")
-        if not isinstance(bounds, Mapping):
+        if "outer_loop" in entity.geometry:
+            loop = _clean_loop(entity.geometry["outer_loop"])
+            z_min_um = float(entity.geometry["z_min_um"])
+            z_max_um = float(entity.geometry["z_max_um"])
+        else:
+            bounds = entity.geometry.get("domain_bounds_um")
+            if not isinstance(bounds, Mapping):
+                continue
+            loop = _domain_bounds_loop(bounds)
+            z_min_um = float(entity.geometry["z_min_um"])
+            z_max_um = float(entity.geometry["z_max_um"])
+        if len(loop) < 3:
             continue
-        z_min_um = float(entity.geometry["z_min_um"])
-        z_max_um = float(entity.geometry["z_max_um"])
-        loop = _domain_bounds_loop(bounds)
         for boundary_role in ("bottom", "top"):
             geometry_ref = _solution_exterior_face_geometry_ref(
                 build_input,
@@ -5171,16 +5813,37 @@ def _conductor_entities_on_solution_plane(
     lower: SemanticEntitySpec,
     upper: SemanticEntitySpec,
     z_um: float,
-    base_loop: tuple[tuple[float, float], ...],
+    base_loop: tuple[tuple[float, float], ...] | None = None,
+    base_region: tuple[Any, ...] | None = None,
 ) -> tuple[SemanticEntitySpec, ...]:
+    import gdstk
+
     pair_ids = {lower.semantic_id, upper.semantic_id}
     records: list[SemanticEntitySpec] = []
+    if base_loop is not None and base_region is not None:
+        raise ValueError("pass at most one of base_loop or base_region")
+    if base_loop is None and base_region is None:
+        raise ValueError("base_loop or base_region is required")
     for entity in build_input.entities:
         if (
             _is_solution_entity(entity)
             or entity.route_representations.get(route) is None
             or "outer_loop" not in entity.geometry
-            or not _loop_inside_loop(entity.geometry["outer_loop"], base_loop)
+            or (
+                (
+                    base_loop is not None
+                    and not _loop_inside_loop(entity.geometry["outer_loop"], base_loop)
+                )
+                or (
+                    base_region is not None
+                    and not _boolean_gdstk_region(
+                        gdstk,
+                        _entity_occupied_region(gdstk, entity),
+                        base_region,
+                        "and",
+                    )
+                )
+            )
         ):
             continue
         representation = entity.route_representations.get(route)
@@ -5240,30 +5903,60 @@ def _solution_exterior_face_geometry_ref(
     entity: SemanticEntitySpec,
     face: str,
 ) -> dict[str, Any] | None:
+    import gdstk
+
     z_key = "z_max_um" if face == "top" else "z_min_um"
     z_um = float(entity.geometry[z_key])
-    bounds = _solution_bounds(entity)
-    holes: list[tuple[tuple[float, float], ...]] = []
+    base_region = _solution_entity_xy_region(gdstk, entity)
+    if not base_region:
+        return None
+    if len(base_region) != 1:
+        raise ValueError(
+            f"{entity.semantic_id} has disconnected face loops; expected one exterior face"
+        )
+    subtractor_region: tuple[Any, ...] = ()
     for other in _solution_entities(build_input):
         if other.semantic_id == entity.semantic_id:
             continue
-        other_bounds = _solution_bounds(other)
-        overlap = _intersect_bounds(bounds, other_bounds)
-        if overlap is None:
+        touches_face = (
+            face == "top" and _same_z(float(other.geometry["z_min_um"]), z_um)
+        ) or (face == "bottom" and _same_z(float(other.geometry["z_max_um"]), z_um))
+        if touches_face:
+            candidate = _solution_entity_xy_region(gdstk, other)
+        else:
             continue
-        if face == "top" and _same_z(float(other.geometry["z_min_um"]), z_um):
-            if _same_bounds(bounds, overlap):
-                return None
-            holes.append(_domain_bounds_loop(overlap))
-        if face == "bottom" and _same_z(float(other.geometry["z_max_um"]), z_um):
-            if _same_bounds(bounds, overlap):
-                return None
-            holes.append(_domain_bounds_loop(overlap))
-    return {
-        "plane": {"axis": "z", "value_um": z_um},
-        "outer_loop": _domain_bounds_loop(bounds),
-        "hole_loops": tuple(holes),
-    }
+        if not candidate:
+            continue
+        if subtractor_region:
+            subtractor_region = _boolean_gdstk_region(
+                gdstk,
+                subtractor_region,
+                candidate,
+                "or",
+            )
+        else:
+            subtractor_region = candidate
+    residual_region = _boolean_gdstk_region(
+        gdstk,
+        base_region,
+        subtractor_region,
+        "not",
+    )
+    if not residual_region:
+        return None
+    if len(residual_region) != 1:
+        raise ValueError(
+            f"{entity.semantic_id} {face} exterior has disconnected face loops"
+        )
+    geometry_ref = _geometry_ref_from_gdstk_polygon(
+        {
+            "plane": {"axis": "z", "value_um": z_um},
+        },
+        residual_region[0],
+    )
+    if not geometry_ref["outer_loop"]:
+        return None
+    return geometry_ref
 
 
 def _solution_entities(
@@ -5318,7 +6011,16 @@ def _bounds_contains_point(
 
 def _entity_z_range_um(entity: SemanticEntitySpec) -> tuple[float, float]:
     z_min_um = float(entity.geometry.get("z_min_um", entity.geometry.get("z_um", 0.0)))
-    return z_min_um, z_min_um + float(entity.geometry.get("thickness_um", 0.0))
+    z_max_um = entity.geometry.get("z_max_um")
+    if z_max_um is not None:
+        z_max_um = float(z_max_um)
+        if not isfinite(z_max_um):
+            raise ValueError(f"{entity.semantic_id} has non-finite z_max_um")
+        if z_max_um > z_min_um:
+            return z_min_um, z_max_um
+
+    thickness_um = float(entity.geometry.get("thickness_um", 0.0))
+    return z_min_um, z_min_um + thickness_um
 
 
 def _same_z(left: float, right: float) -> bool:

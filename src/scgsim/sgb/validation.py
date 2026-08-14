@@ -40,6 +40,17 @@ _BOOLEAN_AREA_EPS_UM2 = 1e-8
 _BOOLEAN_RELATIVE_AREA_EPS = 1e-12
 
 
+def _has_auto_vacuum_solution_entity(
+    build_input: GeometryBuildInput,
+) -> bool:
+    return any(
+        entity.role == "solution_region"
+        and entity.material_kind in {"vacuum", "dielectric"}
+        and bool(entity.metadata.get("is_auto_vacuum_region"))
+        for entity in build_input.entities
+    )
+
+
 def _resolve_contact_pad_attachment(
     pad: SemanticEntitySpec,
     entities: Sequence[SemanticEntitySpec],
@@ -169,12 +180,12 @@ def validate_geometry_input(build_input: GeometryBuildInput) -> GeometryBuildInp
                 )
         elif entity.material_kind != "conductor":
             errors.append(f"{entity.semantic_id} non-solution entity must be conductor")
-        if entity.material_kind == "conductor":
-            host_id = entity.host_void_semantic_id
-            if not isinstance(host_id, str) or not host_id:
-                errors.append(
-                    f"{entity.semantic_id} conductor needs explicit host_void_semantic_id"
-                )
+        if entity.material_kind == "conductor" and (
+            not isinstance(host_id := entity.host_void_semantic_id, str) or not host_id
+        ):
+            errors.append(
+                f"{entity.semantic_id} conductor needs explicit host_void_semantic_id"
+            )
         entities_by_id[entity.semantic_id] = entity
         for polygon_id in entity.polygon_ids:
             if polygon_id not in polygon_ids:

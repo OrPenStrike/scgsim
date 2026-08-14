@@ -826,12 +826,20 @@ def _solution_material_kinds(
             raise ValueError(
                 "SGB solution volume needs explicit material_ids/material_kinds, provenance.volume_ids, and owner_semantic_ids."
             )
-        if not (len(ids) == len(kinds) == len(volume_ids) == len(owner_ids)):
+        if not (
+            (len(ids) == len(kinds) == len(volume_ids) == len(owner_ids))
+            or (len(ids) == 1 and len(kinds) == 1 and len(volume_ids) == len(owner_ids))
+        ):
             raise ValueError(
                 "SGB solution volume material kind and stable-id cardinalities must agree."
             )
+        is_broadcast = len(ids) == 1
         for material_id, material_kind, volume_id, owner_id in zip(
-            ids, kinds, volume_ids, owner_ids, strict=True
+            ids if not is_broadcast else [ids[0]] * len(volume_ids),
+            kinds if not is_broadcast else [kinds[0]] * len(volume_ids),
+            volume_ids,
+            owner_ids,
+            strict=not is_broadcast,
         ):
             if not all(
                 isinstance(value, str) and value
@@ -871,7 +879,8 @@ def _validate_route_representation(
     *, name: str, record: Mapping[str, Any], route: str
 ) -> None:
     representation = _optional_string(record.get("representation"))
-    if str(record.get("interface_type", "")).upper() == "SA":
+    interface_type = str(record.get("interface_type", "")).upper()
+    if interface_type in {"SA", "AA", "SS"}:
         if representation != "solution_surface":
             raise ValueError(
                 f"SGB solution interface {name!r} must retain solution_surface representation."

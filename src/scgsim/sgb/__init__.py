@@ -41,6 +41,7 @@ from scgsim.sgb.models import (
     SurfaceRefRecord,
     TagPlanRecord,
     TagSourceKindLiteral,
+    VacuumRegionSpec,
     Vector3D,
     VolumePlanRecord,
 )
@@ -110,6 +111,7 @@ __all__ = [
     "SurfaceRefRecord",
     "TagPlanRecord",
     "TagSourceKindLiteral",
+    "VacuumRegionSpec",
     "Vector3D",
     "VolumePlanRecord",
     "build_gds_stack_geometry_input",
