@@ -6,20 +6,23 @@ title: "Roadmap and Current Status"
 
 | Surface | State |
 |---|---|
-| Documentation and public contracts | Phase-1 candidate |
-| Installable/importable package and version metadata | Phase-1 product scaffold target |
+| Documentation and public contracts | Phase-1 candidate; not integrated |
+| Installable/importable package and version metadata | Implemented and CI-validated in a separate runtime candidate; not integrated |
 | `scgsim.palace` | Planned; not implemented |
 | `scgsim.aedt` | Planned; not implemented |
 | Common run/handoff and profiles | Planned; not implemented |
 | Unified reports | Planned; not implemented |
 | Notebook interfaces | Planned; not implemented |
 
-The docs-first repository base is empty of product code. This site therefore
-does not provide installation or execution instructions yet.
+The exact `develop` base remains empty of product code. The separate runtime
+candidate provides only package/version metadata and build/CI packaging checks:
+Python `~=3.12.0`, `scgsim.__version__ == "0.1.0.dev0"`, and no runtime
+dependencies. This site therefore does not provide installation or execution
+instructions yet.
 
 ## Near term
 
-1. Land and validate the package/version scaffold.
+1. Integrate the documentation and package/version scaffold candidates.
 2. Define the common artifact, profile, receipt, and handoff models.
 3. Implement Palace Electrostatic and Eigenmode, emphasizing Surface EPR.
 4. Implement version-locked PyAEDT paths for HFSS Eigenmode, HFSS Driven

@@ -30,7 +30,12 @@ flowchart LR
 ## Phase-1 truth
 
 At this docs-first base, the architecture is a contract, not an implemented
-pipeline. The product candidate is limited to package and version scaffolding;
-the backend boxes above are planned.
+pipeline. A separate **NOT_INTEGRATED** runtime candidate implements only the
+importable package, version metadata, and build/CI packaging scaffold. The
+exact `develop` base still contains no package code.
+
+`scgsim.palace` and `scgsim.aedt` are absent rather than placeholder modules;
+importing either produces the normal `ModuleNotFoundError`. Every backend,
+run/handoff, report, notebook, solver, and execution box above remains planned.
 
 See [Folder tree and ownership](ownership.qmd) for repository placement.
