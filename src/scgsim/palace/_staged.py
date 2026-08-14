@@ -216,17 +216,27 @@ def apply_vacuum_region_to_stack(
     if not isinstance(vacuum_region, VacuumRegionSpec):
         raise TypeError("vacuum_region must be a VacuumRegionSpec")
 
-    materials = stack.get("materials")
-    if not isinstance(materials, Mapping):
-        raise TypeError("stack must define a materials mapping.")
-
     solution_regions_raw = stack.get("solution_regions")
     if not isinstance(solution_regions_raw, Mapping):
         raise TypeError("stack must define solution_regions mapping.")
+    for semantic_id, region in solution_regions_raw.items():
+        if not isinstance(region, Mapping):
+            raise TypeError(f"solution region {semantic_id!r} must be a mapping.")
+        is_airbox = region.get("is_airbox", False)
+        if not isinstance(is_airbox, bool):
+            raise TypeError(
+                f"solution region {semantic_id!r} is_airbox must be a bool."
+            )
+        if is_airbox:
+            raise ValueError(
+                "set_vacuum_region cannot be used with explicit airbox solution regions."
+            )
+
+    materials = stack.get("materials")
+    if not isinstance(materials, Mapping):
+        raise TypeError("stack must define a materials mapping.")
     solution_regions = {
-        str(key): dict(value)
-        for key, value in solution_regions_raw.items()
-        if isinstance(value, Mapping)
+        str(key): dict(value) for key, value in solution_regions_raw.items()
     }
 
     work = dict(stack)

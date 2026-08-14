@@ -25,8 +25,9 @@ def build_kosen2024_flip_chip_xmon_stack(
     d0_top_ground_mask_layer: tuple[int, int],
     indium_bump_layer: tuple[int, int],
     coupon_padding_um: float,
-    air_below_thickness_um: float,
-    air_above_thickness_um: float,
+    include_airbox: bool = True,
+    air_below_thickness_um: float | None = None,
+    air_above_thickness_um: float | None = None,
 ) -> dict[str, Any]:
     """Project public PDK facts into the one SCGSim Route-A/B stack contract.
 
@@ -34,13 +35,17 @@ def build_kosen2024_flip_chip_xmon_stack(
     Signal identities come only from the documented topology anchor and authored
     component ports; no layout-name, bbox, or residual-policy inference occurs.
     """
+    if not isinstance(include_airbox, bool):
+        raise TypeError("include_airbox must be a bool.")
     levels = getattr(layer_stack, "layers", None)
     if not isinstance(levels, Mapping):
         raise TypeError("layer_stack must expose public LayerStack.layers.")
-    missing = [name for name in _LEVELS if name not in levels]
+    required_levels = _LEVELS if include_airbox else _LEVELS[:3] + _LEVELS[4:]
+    missing = [name for name in required_levels if name not in levels]
     if missing:
         raise ValueError(f"public OrPen LayerStack lacks {missing!r}.")
-    d0_substrate, gap, d1_substrate, outer = (levels[name] for name in _LEVELS[:4])
+    d0_substrate, gap, d1_substrate = (levels[name] for name in _LEVELS[:3])
+    outer = levels["OUTER_VACUUM"] if include_airbox else None
     d0_top, d1_bottom, bump = (levels[name] for name in _LEVELS[4:])
     coupon_bounds_um = _coupon_domain_bounds(component, coupon_padding_um)
     d0_z_min = _zmin(d0_substrate)
@@ -51,12 +56,15 @@ def build_kosen2024_flip_chip_xmon_stack(
     d1_z_max = d1_z_min + _thickness(d1_substrate)
     if (abs(d0_z_max - gap_z_min) > 1e-9) or (abs(gap_z_max - d1_z_min) > 1e-9):
         raise ValueError("public OrPen D0/gap/D1 solution regions must be contiguous.")
-    air_below_thickness = _positive_number(
-        air_below_thickness_um, "air_below_thickness_um"
-    )
-    air_above_thickness = _positive_number(
-        air_above_thickness_um, "air_above_thickness_um"
-    )
+    air_below_thickness = None
+    air_above_thickness = None
+    if include_airbox:
+        air_below_thickness = _positive_number(
+            air_below_thickness_um, "air_below_thickness_um"
+        )
+        air_above_thickness = _positive_number(
+            air_above_thickness_um, "air_above_thickness_um"
+        )
     info = getattr(component, "info", {})
     try:
         layers = info["layers"]
@@ -156,8 +164,31 @@ def build_kosen2024_flip_chip_xmon_stack(
             "geometry": {**bumps["geometry"], "split_polygons_as_entities": True},
         }
     )
-    return {
-        "solution_regions": {
+    solution_regions = {
+        "D0_SUBSTRATE": _solution(
+            material_id=str(d0_substrate.material),
+            z_min_um=d0_z_min,
+            z_max_um=d0_z_max,
+            domain_bounds_um=coupon_bounds_um,
+        ),
+        "D0_TO_D1_GAP": _solution(
+            material_id=str(gap.material),
+            z_min_um=gap_z_min,
+            z_max_um=gap_z_max,
+            domain_bounds_um=coupon_bounds_um,
+        ),
+        "D1_SUBSTRATE": _solution(
+            material_id=str(d1_substrate.material),
+            z_min_um=d1_z_min,
+            z_max_um=d1_z_max,
+            domain_bounds_um=coupon_bounds_um,
+        ),
+    }
+    if include_airbox:
+        assert outer is not None
+        assert air_below_thickness is not None
+        assert air_above_thickness is not None
+        solution_regions = {
             "AIR_BELOW": _solution(
                 material_id=str(outer.material),
                 z_min_um=d0_z_min - air_below_thickness,
@@ -166,24 +197,7 @@ def build_kosen2024_flip_chip_xmon_stack(
                 is_airbox=True,
                 airbox_side="below",
             ),
-            "D0_SUBSTRATE": _solution(
-                material_id=str(d0_substrate.material),
-                z_min_um=d0_z_min,
-                z_max_um=d0_z_max,
-                domain_bounds_um=coupon_bounds_um,
-            ),
-            "D0_TO_D1_GAP": _solution(
-                material_id=str(gap.material),
-                z_min_um=gap_z_min,
-                z_max_um=gap_z_max,
-                domain_bounds_um=coupon_bounds_um,
-            ),
-            "D1_SUBSTRATE": _solution(
-                material_id=str(d1_substrate.material),
-                z_min_um=d1_z_min,
-                z_max_um=d1_z_max,
-                domain_bounds_um=coupon_bounds_um,
-            ),
+            **solution_regions,
             "AIR_ABOVE": _solution(
                 material_id=str(outer.material),
                 z_min_um=d1_z_max,
@@ -192,19 +206,27 @@ def build_kosen2024_flip_chip_xmon_stack(
                 is_airbox=True,
                 airbox_side="above",
             ),
-        },
+        }
+    metadata = {
+        "adapter": "scgsim.sgb.orpen.build_kosen2024_flip_chip_xmon_stack",
+        "component_contract": "kosen2024_flip_chip_xmon_qubit public zero-argument cell",
+        "excluded_layers": ("D1_BOTTOM_JJ_DRAW", "D0_D1_UNDER_BUMP"),
+        "signal_group": signal_group,
+        "coupon_domain_bounds_um": coupon_bounds_um,
+        "coupon_padding_um": float(coupon_padding_um),
+    }
+    if include_airbox:
+        metadata.update(
+            {
+                "air_below_thickness_um": air_below_thickness,
+                "air_above_thickness_um": air_above_thickness,
+            }
+        )
+    return {
+        "solution_regions": solution_regions,
         "materials": materials,
         "layers": [d0_ground, d1_ground, *signal_layers, bumps],
-        "metadata": {
-            "adapter": "scgsim.sgb.orpen.build_kosen2024_flip_chip_xmon_stack",
-            "component_contract": "kosen2024_flip_chip_xmon_qubit public zero-argument cell",
-            "excluded_layers": ("D1_BOTTOM_JJ_DRAW", "D0_D1_UNDER_BUMP"),
-            "signal_group": signal_group,
-            "coupon_domain_bounds_um": coupon_bounds_um,
-            "coupon_padding_um": float(coupon_padding_um),
-            "air_below_thickness_um": air_below_thickness,
-            "air_above_thickness_um": air_above_thickness,
-        },
+        "metadata": metadata,
     }
 
 
