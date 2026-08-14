@@ -4,6 +4,7 @@ project:
   render:
     - README.md
     - docs/*.qmd
+    - docs/specs/*.qmd
 
 website:
   title: "SCGSim"
@@ -64,6 +65,8 @@ website:
       contents:
         - text: "Backend support matrix"
           href: docs/backend-support.qmd
+        - text: "Palace Electrostatic + SGB"
+          href: docs/specs/palace-electrostatic-sgb.qmd
         - text: "Provenance and data boundaries"
           href: docs/provenance.qmd
         - text: "Folder tree and ownership"
