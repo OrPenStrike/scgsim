@@ -18,7 +18,7 @@ palace = [
     "gmsh",
 ]
 examples = [
-    "orpen-sc-pdk @ git+https://github.com/OrPenStrike/orpen-sc-pdk.git@a16e8a123ce3ebfbda30aba31024506c2dcfd0c8",
+    "orpen-sc-pdk @ git+https://github.com/OrPenStrike/orpen-sc-pdk.git@6bef7a185991c0c49d41f6faf36984b4c36e45ff",
 ]
 dev = [
     "jupytext",

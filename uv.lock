@@ -908,7 +908,7 @@ wheels = [
 [[package]]
 name = "orpen-sc-pdk"
 version = "0.1.0"
-source = { git = "https://github.com/OrPenStrike/orpen-sc-pdk.git?rev=a16e8a123ce3ebfbda30aba31024506c2dcfd0c8#a16e8a123ce3ebfbda30aba31024506c2dcfd0c8" }
+source = { git = "https://github.com/OrPenStrike/orpen-sc-pdk.git?rev=6bef7a185991c0c49d41f6faf36984b4c36e45ff#6bef7a185991c0c49d41f6faf36984b4c36e45ff" }
 dependencies = [
     { name = "doroutes" },
     { name = "gdsfactory" },
@@ -1398,7 +1398,7 @@ requires-dist = [
     { name = "gmsh", marker = "extra == 'palace'" },
     { name = "jupytext", marker = "extra == 'dev'" },
     { name = "nbformat", marker = "extra == 'dev'" },
-    { name = "orpen-sc-pdk", marker = "extra == 'examples'", git = "https://github.com/OrPenStrike/orpen-sc-pdk.git?rev=a16e8a123ce3ebfbda30aba31024506c2dcfd0c8" },
+    { name = "orpen-sc-pdk", marker = "extra == 'examples'", git = "https://github.com/OrPenStrike/orpen-sc-pdk.git?rev=6bef7a185991c0c49d41f6faf36984b4c36e45ff" },
 ]
 provides-extras = ["palace", "examples", "dev"]
 
