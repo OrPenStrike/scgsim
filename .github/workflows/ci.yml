@@ -12,38 +12,61 @@ jobs:
   build-and-import:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up Python
-        uses: actions/setup-python@v7
+      - name: Set up UV and Python
+        uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
         with:
+          version: "0.12.4"
           python-version: "3.12"
 
-      - name: Install build tooling
-        run: python -m pip install --upgrade pip build
+      - name: Sync editable environment
+        run: uv sync --locked
+
+      - name: Verify editable import from src
+        run: |
+          uv run --locked python - <<'PY'
+          import os
+          import pathlib
+
+          import scgsim
+
+          repo_root = pathlib.Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          source = pathlib.Path(scgsim.__file__).resolve()
+          src_root = (repo_root / "src").resolve()
+          if not source.is_relative_to(src_root):
+              raise SystemExit(f"unexpected scgsim location: {source}")
+          print(scgsim.__version__)
+          PY
 
       - name: Build distribution artifacts
-        run: python -m build --sdist --wheel
+        run: uv build --no-sources
 
       - name: Inspect wheel contents
         run: |
           python - <<'PY'
           import glob
           import zipfile
+          from pathlib import Path
 
           for path in glob.glob("dist/*.whl"):
-              print(path)
-              with zipfile.ZipFile(path) as zf:
+              wheel = Path(path).resolve()
+              print(wheel)
+              with zipfile.ZipFile(wheel) as zf:
                   for name in zf.namelist():
                       print(name)
-          PY
 
-      - name: Install built wheel
-        run: python -m pip install --force-reinstall dist/*.whl
-
-      - name: Verify import
+      - name: Verify wheel import in isolated environment
         run: |
-          python - <<'PY'
+          uv venv --clear --python 3.12 .venv-wheel
+          uv pip install --python .venv-wheel/bin/python dist/*.whl
+          .venv-wheel/bin/python - <<'PY'
           import scgsim
+          from importlib.metadata import version as metadata_version
+          import pathlib
+
           print(scgsim.__version__)
+          if scgsim.__version__ != metadata_version("scgsim"):
+              raise SystemExit("version mismatch between package and metadata")
+          print(pathlib.Path(scgsim.__file__).resolve())
           PY
