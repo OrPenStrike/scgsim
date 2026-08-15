@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import math
 import re
+import subprocess
 import time
 from importlib.metadata import PackageNotFoundError, version
 from itertools import pairwise
@@ -79,6 +80,8 @@ def _execute(metadata_path: Path) -> int:
     try:
         receipt["mode"] = spec.mode
         _verify_prepared_hashes(metadata, spec_path, spec.gds_path)
+        if spec.mode != "terminal":
+            raise RuntimeError("modal execution is not implemented for AEDT V1")
         if _pyaedt_version() != LOCKED_PYAEDT:
             raise RuntimeError("PyAEDT lock mismatch")
         from ansys.aedt.core import Desktop, Hfss
@@ -91,6 +94,7 @@ def _execute(metadata_path: Path) -> int:
         )
         if desktop.aedt_version_id != REQUIRED_AEDT_VERSION:
             raise RuntimeError(f"AEDT version mismatch: {desktop.aedt_version_id!r}")
+        receipt["runtime_source"] = _runtime_source_identity()
         result = _solve(Hfss, run_dir, spec)
         status = "completed"
     except Exception as exc:  # noqa: BLE001 -- receipt must record any solver failure.
@@ -125,6 +129,7 @@ def _execute(metadata_path: Path) -> int:
             receipt["materials"] = result["materials"]
             receipt["region"] = result["region"]
             receipt["result_readback"] = result["result_readback"]
+        receipt["diagnostics"] = _read_physics_warnings(run_dir)
         receipt["status"] = status
         receipt["finished_at_utc"] = _utc_now()
         receipt["execution_seconds"] = round(time.perf_counter() - execution_started, 6)
@@ -149,6 +154,9 @@ def _solve(Hfss: Any, run_dir: Path, spec: HfssDrivenSpec) -> dict[str, Any]:
     mesh = _assign_mesh(hfss, spec)
     ports = _assign_ports(hfss, spec)
     _setup(hfss, spec)
+    if not hfss.save_project() or not project_path.is_file():
+        raise RuntimeError("HFSS project was not saved before native port readback")
+    ports = _bind_terminal_reference_evidence(hfss, spec, ports)
     if not hfss.analyze_setup(name=spec.run_control.setup_name, blocking=True):
         raise RuntimeError(
             f"HFSS failed to analyze setup {spec.run_control.setup_name!r}"
@@ -203,11 +211,19 @@ def _import_and_bind(hfss: Any, spec: HfssDrivenSpec) -> list[dict[str, Any]]:
         if obj is None:
             raise RuntimeError(f"missing declared object {binding.object_name!r}")
         layer = layers[binding.layer]
-        observed_group = _native_object_property(obj, "Group")
-        if observed_group != layer.layer_name:
+        # AEDT's Geometry3D ``Group`` remains ``Model`` after GDS import. PyAEDT
+        # 1.3.0 exposes the explicit destination layer through the imported
+        # object-name prefix, so bind every declared object to that exact prefix.
+        matches = [
+            candidate
+            for candidate in spec.layer_imports
+            if obj.name.startswith(f"{candidate.layer_name}_")
+        ]
+        if matches != [layer]:
             raise RuntimeError(
-                f"import group mismatch for {binding.object_name!r}: "
-                f"expected {layer.layer_name!r}, got {observed_group!r}"
+                f"import destination-layer mismatch for {binding.object_name!r}: "
+                f"expected exactly {layer.layer_name!r}, got "
+                f"{[candidate.layer_name for candidate in matches]!r}"
             )
         material = materials[binding.material_id]
         record: dict[str, Any] = {
@@ -219,7 +235,7 @@ def _import_and_bind(hfss: Any, spec: HfssDrivenSpec) -> list[dict[str, Any]]:
             "kind": material.kind,
             "is_superconducting": material.is_superconducting,
             "requested_library_name": material.library_name,
-            "native_group": observed_group,
+            "native_destination_layer_prefix": layer.layer_name,
         }
         if material.is_superconducting:
             pec.append(binding.object_name)
@@ -242,9 +258,25 @@ def _import_and_bind(hfss: Any, spec: HfssDrivenSpec) -> list[dict[str, Any]]:
         boundary = hfss.assign_perfect_e(pec, name="SCGSimPEC")
         if boundary is None or "SCGSimPEC" not in _native_boundary_names(hfss):
             raise RuntimeError("PEC assignment readback failed")
+        assigned_face_ids = [
+            int(object_id)
+            for object_id in hfss.oboundary.GetBoundaryAssignment("SCGSimPEC")
+        ]
+        face_objects = {
+            int(face.id): object_name
+            for object_name in hfss.modeler.object_names
+            for face in hfss.modeler.get_object_from_name(object_name).faces
+        }
+        assigned_objects = [face_objects[face_id] for face_id in assigned_face_ids]
+        if assigned_objects != pec:
+            raise RuntimeError("PEC native assignment mismatch")
         for record in observed:
             if record["is_superconducting"]:
-                record["observed"] = {"native_pec_boundary": "SCGSimPEC"}
+                record["observed"] = {
+                    "native_pec_boundary": "SCGSimPEC",
+                    "native_pec_face_ids": assigned_face_ids,
+                    "native_pec_objects": assigned_objects,
+                }
     return observed
 
 
@@ -293,14 +325,25 @@ def _assign_mesh(hfss: Any, spec: HfssDrivenSpec) -> dict[str, Any]:
         )
         if operation is None or name not in _native_mesh_operation_names(hfss):
             raise RuntimeError(f"{role} surface mesh readback failed")
+        native = _native_mesh_readback(hfss, name, objects)
+        _require_native_mesh_properties(
+            native,
+            {
+                "Name": name,
+                "Type": "Surface Approximation Based",
+                "Region": "On Selection",
+                "Curved Mesh Approximation Type": "Use Slider",
+                "Curved Surface Mesh Resolution": SURFACE_APPROXIMATION_LEVEL,
+            },
+            f"{role} surface mesh",
+        )
         result["surface"][role] = {
             "requested": {
                 "name": name,
                 "objects": objects,
                 "level": SURFACE_APPROXIMATION_LEVEL,
             },
-            "native_operation_names": _native_mesh_operation_names(hfss),
-            "native_selection_level_readback": "pending live AEDT smoke",
+            "native": native,
         }
     if spec.length_mesh is not None:
         for role, objects, name in (
@@ -325,10 +368,24 @@ def _assign_mesh(hfss: Any, spec: HfssDrivenSpec) -> dict[str, Any]:
             }
             if operation is None or name not in _native_mesh_operation_names(hfss):
                 raise RuntimeError(f"uniform CPW {role} length mesh readback failed")
+            native = _native_mesh_readback(hfss, name, objects)
+            _require_native_mesh_properties(
+                native,
+                {
+                    "Name": name,
+                    "Type": "Length Based",
+                    "Region": "On Selection",
+                    "Enabled": True,
+                    "Restrict Length": True,
+                    "Max Length": f"{spec.length_mesh.maximum_length_um:g}um",
+                    "Restrict Max Elems": True,
+                    "Max Elems": 1_000_000,
+                },
+                f"uniform CPW {role} length mesh",
+            )
             result["length"][role] = {
                 "requested": {"name": name, "properties": requested},
-                "native_operation_names": _native_mesh_operation_names(hfss),
-                "native_selection_length_readback": "pending live AEDT smoke",
+                "native": native,
             }
     return result
 
@@ -344,6 +401,8 @@ def _assign_ports(hfss: Any, spec: HfssDrivenSpec) -> list[dict[str, Any]]:
     centers = {face_id: center for face_id, center in faces}
     records: list[dict[str, Any]] = []
     for port in spec.ports:
+        if not isinstance(port, TerminalPort):
+            raise TypeError("AEDT V1 port assignment requires terminal ports")
         face_id = _face_for_side(faces, port.side)
         if isinstance(port, TerminalPort):
             before = set(hfss.oboundary.GetExcitationsOfType("Terminal"))
@@ -357,18 +416,16 @@ def _assign_ports(hfss: Any, spec: HfssDrivenSpec) -> list[dict[str, Any]]:
             )
             after = set(hfss.oboundary.GetExcitationsOfType("Terminal"))
             names = sorted(after - before)
-            if (
-                boundary is None
-                or len(names) != 1
-                or port.name not in _native_boundary_names(hfss)
-            ):
+            if boundary is None or len(names) != 1:
                 raise RuntimeError(
                     f"terminal excitation readback failed for {port.name!r}: {names!r}"
                 )
+            boundary_name = _text(getattr(boundary, "name", port.name), "boundary.name")
+            native = _native_terminal_readback(hfss, boundary_name, names[0], port)
             records.append(
                 {
                     "index": port.index,
-                    "boundary": getattr(boundary, "name", port.name),
+                    "boundary": boundary_name,
                     "terminal_excitation": names[0],
                     "face_id": face_id,
                     "face_center_um": list(centers[face_id]),
@@ -378,37 +435,7 @@ def _assign_ports(hfss: Any, spec: HfssDrivenSpec) -> list[dict[str, Any]]:
                         "renormalize": False,
                         "deembed_um": port.deembed_um,
                     },
-                    "native_reference_deembed_readback": "pending live AEDT smoke",
-                }
-            )
-        else:
-            boundary = hfss.wave_port(
-                face_id,
-                name=port.name,
-                integration_line=[list(point) for point in port.integration_line_um],
-                modes=1,
-                characteristic_impedance="Zpv",
-                renormalize=False,
-                deembed=0,
-            )
-            if boundary is None or port.name not in _native_boundary_names(hfss):
-                raise RuntimeError(f"modal wave port failed for {port.name!r}")
-            records.append(
-                {
-                    "index": port.index,
-                    "boundary": getattr(boundary, "name", port.name),
-                    "face_id": face_id,
-                    "face_center_um": list(centers[face_id]),
-                    "integration_line_um": [
-                        list(point) for point in port.integration_line_um
-                    ],
-                    "requested": {
-                        "modes": 1,
-                        "characteristic_impedance": "Zpv",
-                        "renormalize": False,
-                        "deembed_um": 0,
-                    },
-                    "native_mode_readback": "pending live AEDT smoke",
+                    "native": native,
                 }
             )
     return records
@@ -483,63 +510,37 @@ def _setup(hfss: Any, spec: HfssDrivenSpec) -> None:
 def _export(
     hfss: Any, run_dir: Path, spec: HfssDrivenSpec, ports: list[dict[str, Any]]
 ) -> tuple[dict[str, str], dict[str, Any]]:
+    if spec.mode != "terminal":
+        raise RuntimeError("modal export is not implemented for AEDT V1")
     output_dir = run_dir / "results" / spec.mode
     output_dir.mkdir(parents=True, exist_ok=True)
     setup_sweep = f"{spec.run_control.setup_name} : {spec.run_control.sweep_name}"
-    names = [
-        record["terminal_excitation"] if spec.mode == "terminal" else record["boundary"]
-        for record in ports
-    ]
+    names = [record["terminal_excitation"] for record in ports]
     hashes: dict[str, str] = {}
     readback: dict[str, Any] = {}
-    if spec.mode == "terminal":
-        touchstone = output_dir / "terminal.s2p"
-        if (
-            not hfss.export_touchstone(
-                setup=spec.run_control.setup_name,
-                sweep=spec.run_control.sweep_name,
-                output_file=str(touchstone),
-            )
-            or not touchstone.is_file()
-        ):
-            raise RuntimeError("terminal Touchstone export failed")
-        readback["touchstone"] = _verify_touchstone(touchstone, spec, names)
-        expressions = [f"St({left},{right})" for left in names for right in names]
-        data = hfss.post.get_solution_data(
-            expressions=expressions,
-            setup_sweep_name=setup_sweep,
-            report_category="Terminal Solution Data",
+    touchstone = output_dir / "terminal.s2p"
+    if (
+        not hfss.export_touchstone(
+            setup=spec.run_control.setup_name,
+            sweep=spec.run_control.sweep_name,
+            output_file=str(touchstone),
         )
-        csv_path = output_dir / "terminal_st.csv"
-        readback["terminal_st"] = _write_complex_csv(
-            data, expressions, csv_path, suffix="", spec=spec
-        )
-        hashes[touchstone.relative_to(run_dir).as_posix()] = file_sha256(touchstone)
-        hashes[csv_path.relative_to(run_dir).as_posix()] = file_sha256(csv_path)
-    else:
-        expressions = [f"Zo({name})" for name in names]
-        data = hfss.post.get_solution_data(
-            expressions=expressions,
-            setup_sweep_name=setup_sweep,
-            report_category="Modal Solution Data",
-        )
-        csv_path = output_dir / "port_zo.csv"
-        readback["port_zo"] = _write_complex_csv(
-            data, expressions, csv_path, suffix="_ohm", spec=spec
-        )
-        provenance = output_dir / "port_zo_provenance.json"
-        write_json(
-            provenance,
-            {
-                "report_category": "Modal Solution Data",
-                "quantity": "Port Zo",
-                "expressions": expressions,
-                "units": "ohm",
-                "setup_sweep": setup_sweep,
-            },
-        )
-        hashes[csv_path.relative_to(run_dir).as_posix()] = file_sha256(csv_path)
-        hashes[provenance.relative_to(run_dir).as_posix()] = file_sha256(provenance)
+        or not touchstone.is_file()
+    ):
+        raise RuntimeError("terminal Touchstone export failed")
+    readback["touchstone"] = _verify_touchstone(touchstone, spec, names)
+    expressions = [f"St({left},{right})" for left in names for right in names]
+    data = hfss.post.get_solution_data(
+        expressions=expressions,
+        setup_sweep_name=setup_sweep,
+        report_category="Terminal Solution Data",
+    )
+    csv_path = output_dir / "terminal_st.csv"
+    readback["terminal_st"] = _write_complex_csv(
+        data, expressions, csv_path, suffix="", spec=spec
+    )
+    hashes[touchstone.relative_to(run_dir).as_posix()] = file_sha256(touchstone)
+    hashes[csv_path.relative_to(run_dir).as_posix()] = file_sha256(csv_path)
     return hashes, readback
 
 
@@ -756,10 +757,238 @@ def _native_boundary_names(hfss: Any) -> list[str]:
 
 
 def _native_mesh_operation_names(hfss: Any) -> list[str]:
-    names = hfss.mesh.meshoperation_names
+    names = hfss.get_oo_name(hfss.odesign, "Mesh")
     if not isinstance(names, list):
         raise TypeError("AEDT native mesh operation collection is unavailable")
     return names
+
+
+def _native_mesh_readback(
+    hfss: Any, expected_name: str, expected_objects: list[str]
+) -> dict[str, Any]:
+    """Read AEDT OOP mesh properties and MeshSetup assignments directly."""
+    operation_names = _native_mesh_operation_names(hfss)
+    if expected_name not in operation_names:
+        raise RuntimeError(f"mesh operation is missing natively: {expected_name}")
+    property_names = hfss.get_oo_properties(hfss.odesign, f"Mesh/{expected_name}")
+    if not property_names:
+        raise RuntimeError(
+            f"mesh operation native properties are unavailable: {expected_name}"
+        )
+    properties = {
+        property_name: hfss.get_oo_property_value(
+            hfss.odesign, f"Mesh/{expected_name}", property_name
+        )
+        for property_name in property_names
+    }
+    assigned_ids = [
+        int(object_id)
+        for object_id in hfss.mesh.omeshmodule.GetMeshOpAssignment(expected_name)
+    ]
+    objects = [hfss.oeditor.GetObjectNameByID(object_id) for object_id in assigned_ids]
+    if objects != expected_objects:
+        raise RuntimeError(
+            f"mesh operation native assignment mismatch: {expected_name}"
+        )
+    return {
+        "operation_names": operation_names,
+        "properties": properties,
+        "object_ids": assigned_ids,
+        "objects": objects,
+    }
+
+
+def _require_native_mesh_properties(
+    native: dict[str, Any], expected: dict[str, Any], context: str
+) -> None:
+    """Compare required settings while retaining AEDT's raw native properties."""
+    observed = native["properties"]
+    mismatches = {
+        key: {"expected": value, "observed": observed.get(key)}
+        for key, value in expected.items()
+        if key not in observed or not _native_value_matches(observed[key], value)
+    }
+    if mismatches:
+        raise RuntimeError(f"{context} native property mismatch: {mismatches!r}")
+
+
+def _native_value_matches(observed: Any, expected: Any) -> bool:
+    """Accept AEDT native scalar spelling without converting its recorded value."""
+    if isinstance(expected, bool):
+        return observed is expected or observed == str(expected).lower()
+    if isinstance(expected, int):
+        return observed == expected or observed == str(expected)
+    return observed == expected
+
+
+def _native_terminal_readback(
+    hfss: Any, boundary_name: str, terminal_name: str, port: TerminalPort
+) -> dict[str, Any]:
+    """Read port and terminal state from AEDT's Excitations object tree."""
+    excitation_names = hfss.get_oo_name(hfss.odesign, "Excitations")
+    if boundary_name not in excitation_names:
+        raise RuntimeError(f"AEDT terminal boundary is missing: {boundary_name!r}")
+    terminal_names = hfss.get_oo_name(hfss.odesign, f"Excitations\\{boundary_name}")
+    if terminal_names != [terminal_name]:
+        raise RuntimeError(
+            f"AEDT terminal child mismatch for {boundary_name!r}: {terminal_names!r}"
+        )
+    boundary_properties = _native_oo_properties(hfss, f"Excitations\\{boundary_name}")
+    terminal_properties = _native_oo_properties(
+        hfss, f"Excitations\\{boundary_name}\\{terminal_name}"
+    )
+    _require_native_properties(
+        boundary_properties,
+        {
+            "Name": boundary_name,
+            "Type": "Wave Port",
+            "Wave Port Type": "Terminal",
+            "Num Terminals": 1,
+            "Deembed": True,
+            "Deembed Dist": f"{port.deembed_um:g}um",
+            "Renorm All Terminals": False,
+        },
+        f"terminal boundary {boundary_name!r}",
+    )
+    _require_native_properties(
+        terminal_properties,
+        {"Name": terminal_name, "Port Name": boundary_name, "Type": "Terminal"},
+        f"terminal child {terminal_name!r}",
+    )
+    return {
+        "excitation_names": excitation_names,
+        "terminal_names": terminal_names,
+        "boundary_properties": boundary_properties,
+        "terminal_properties": terminal_properties,
+    }
+
+
+def _bind_terminal_reference_evidence(
+    hfss: Any, spec: HfssDrivenSpec, ports: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Bind global AEDT terminal reference IDs after saving the owned project."""
+    if len(ports) != len(spec.ports):
+        raise RuntimeError("terminal port evidence count is invalid")
+    reference_ids = _native_terminal_reference_ids(hfss)
+    reference_objects = [
+        hfss.oeditor.GetObjectNameByID(object_id) for object_id in reference_ids
+    ]
+    expected = list(spec.ports[0].reference_objects)
+    if reference_objects != expected:
+        raise RuntimeError("AEDT native terminal reference conductor mismatch")
+    for record, port in zip(ports, spec.ports, strict=True):
+        if (
+            not isinstance(port, TerminalPort)
+            or list(port.reference_objects) != expected
+        ):
+            raise RuntimeError("terminal reference contract is not globally consistent")
+        native = record.get("native")
+        if not isinstance(native, dict):
+            raise TypeError("terminal native evidence is unavailable")
+        native["reference_conductor_ids"] = reference_ids
+        native["reference_conductors"] = reference_objects
+    return ports
+
+
+def _native_terminal_reference_ids(hfss: Any) -> list[int]:
+    """Read terminal reference conductors from HFSS native design properties."""
+    try:
+        values = hfss.design_properties["BoundarySetup"]["ProductSpecificData"][
+            "TerminalReferenceConductors"
+        ]
+    except (KeyError, TypeError) as exc:
+        raise RuntimeError(
+            "AEDT native terminal reference conductors are unavailable"
+        ) from exc
+    if not isinstance(values, list) or not values:
+        raise RuntimeError("AEDT native terminal reference conductors are invalid")
+    try:
+        return [int(value) for value in values]
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("AEDT native terminal reference IDs are invalid") from exc
+
+
+def _native_oo_properties(hfss: Any, path: str) -> dict[str, Any]:
+    """Return properties directly from an AEDT object-oriented child object."""
+    child = hfss.get_oo_object(hfss.odesign, path)
+    if not child:
+        raise RuntimeError(f"AEDT native child object is unavailable: {path!r}")
+    names = child.GetPropNames()
+    if not names:
+        raise RuntimeError(f"AEDT native child has no properties: {path!r}")
+    return {name: child.GetPropValue(name) for name in names}
+
+
+def _require_native_properties(
+    observed: dict[str, Any], expected: dict[str, Any], context: str
+) -> None:
+    """Require semantic settings from their direct AEDT native representation."""
+    mismatches = {
+        key: {"expected": value, "observed": observed.get(key)}
+        for key, value in expected.items()
+        if key not in observed or not _native_value_matches(observed[key], value)
+    }
+    if mismatches:
+        raise RuntimeError(f"{context} native property mismatch: {mismatches!r}")
+
+
+def _read_physics_warnings(run_dir: Path) -> dict[str, Any]:
+    """Preserve HFSS terminal-mode diagnostics without treating them as gates."""
+    path = run_dir / "batch.log"
+    if not path.is_file():
+        return {"batch_log": "batch.log", "present": False, "physics_warnings": []}
+    warnings: dict[tuple[str, str], dict[str, Any]] = {}
+    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        conductor = re.search(
+            r"Port '([^']+)' has (\d+) signal conductors with (\d+) terminals",
+            raw_line,
+        )
+        slow_mode = re.search(
+            r"Port ([^ ]+) supports an additional propagating and/or slowly decaying mode",
+            raw_line,
+        )
+        if conductor:
+            port, signals, terminals = conductor.groups()
+            kind = "signal_conductors_per_terminal"
+            detail = {
+                "kind": kind,
+                "port": port,
+                "signal_conductors": int(signals),
+                "terminals": int(terminals),
+            }
+        elif slow_mode:
+            kind = "additional_propagating_or_slow_mode"
+            detail = {"kind": kind, "port": slow_mode.group(1)}
+        else:
+            continue
+        key = (kind, detail["port"])
+        record = warnings.setdefault(key, {**detail, "occurrences": 0})
+        record["occurrences"] += 1
+    return {
+        "batch_log": "batch.log",
+        "sha256": file_sha256(path),
+        "present": True,
+        "physics_warnings": [warnings[key] for key in sorted(warnings)],
+    }
+
+
+def _runtime_source_identity() -> dict[str, str]:
+    """Bind this receipt to the exact SCGSim source bytes that launched AEDT."""
+    source_root = Path(__file__).resolve().parents[3]
+    completed = subprocess.run(
+        ["git", "-C", str(source_root), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    revision = completed.stdout.strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise RuntimeError("SCGSim runtime source revision is invalid")
+    return {
+        "revision": revision,
+        "run_py_sha256": file_sha256(Path(__file__).resolve()),
+        "spec_py_sha256": file_sha256(Path(__file__).with_name("spec.py")),
+    }
 
 
 def _text(value: Any, field: str) -> str:
@@ -773,3 +1002,7 @@ def _utc_now() -> str:
 
 
 __all__ = ["main"]
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised by the handoff launcher
+    raise SystemExit(main())

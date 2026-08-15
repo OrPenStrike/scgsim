@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 HfssDrivenMode = Literal["terminal", "modal"]
 LayerRole = Literal["ground", "signal", "substrate"]
-PdkMaterialKind = Literal["vacuum", "dielectric", "conductor"]
+PdkMaterialKind = Literal["vacuum", "dielectric", "superconductor"]
 Side = Literal["+X", "-X", "+Y", "-Y", "+Z", "-Z"]
 
 SCHEMA_VERSION = "scgsim.aedt.hfss-driven.v1"
@@ -133,17 +133,32 @@ class PdkMaterial:
     material_id: str
     kind: PdkMaterialKind
     is_superconducting: bool
-    library_name: str
+    library_name: str | None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "material_id", _text(self.material_id, "material_id"))
-        if self.kind not in {"vacuum", "dielectric", "conductor"}:
-            raise ValueError("material kind must be vacuum, dielectric, or conductor")
+        if self.kind not in {"vacuum", "dielectric", "superconductor"}:
+            raise ValueError(
+                "material kind must be vacuum, dielectric, or superconductor"
+            )
         if not isinstance(self.is_superconducting, bool):
             raise TypeError("is_superconducting must be boolean")
-        object.__setattr__(
-            self, "library_name", _text(self.library_name, "library_name")
+        if self.is_superconducting != (self.kind == "superconductor"):
+            raise ValueError(
+                "PDK material kind and is_superconducting must agree exactly"
+            )
+        library_name = (
+            None
+            if self.library_name is None
+            else _text(self.library_name, "library_name")
         )
+        if self.is_superconducting and library_name is not None:
+            raise ValueError("superconducting PDK material must not name AEDT material")
+        if not self.is_superconducting and library_name is None:
+            raise ValueError(
+                "non-superconducting PDK material requires AEDT library name"
+            )
+        object.__setattr__(self, "library_name", library_name)
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -357,6 +372,7 @@ class HfssDrivenSpec:
             vacuum is None
             or vacuum.kind != "vacuum"
             or vacuum.is_superconducting
+            or vacuum.library_name is None
             or vacuum.library_name.lower() != "vacuum"
         ):
             raise ValueError(
@@ -369,9 +385,15 @@ class HfssDrivenSpec:
             not imports
             or len({item.layer for item in imports}) != len(imports)
             or len({item.layer_name for item in imports}) != len(imports)
+            or any(
+                other.layer_name.startswith(item.layer_name)
+                for item in imports
+                for other in imports
+                if item is not other
+            )
         ):
             raise ValueError(
-                "layer_imports must contain unique numeric and destination layer mappings"
+                "layer_imports must contain unique non-prefixing numeric and destination layer mappings"
             )
         object.__setattr__(self, "layer_imports", imports)
         bindings = tuple(self.object_bindings)
@@ -399,7 +421,7 @@ class HfssDrivenSpec:
             )
         if any(
             not material_by_id[item.material_id].is_superconducting
-            or material_by_id[item.material_id].kind != "conductor"
+            or material_by_id[item.material_id].kind != "superconductor"
             for item in bindings
             if item.role in {"signal", "ground"}
         ):
@@ -436,6 +458,14 @@ class HfssDrivenSpec:
             )
         ):
             raise ValueError("terminal references must name declared ground objects")
+        if (
+            self.mode == "terminal"
+            and all(isinstance(port, TerminalPort) for port in self.ports)
+            and self.ports[0].reference_objects != self.ports[1].reference_objects
+        ):
+            raise ValueError(
+                "terminal ports must share one ordered global reference conductor tuple"
+            )
         padding = _padding(self.region_padding_um)
         # PyAEDT create_region consumes this native order unchanged.
         side_index = {"+X": 0, "-X": 1, "+Y": 2, "-Y": 3, "+Z": 4, "-Z": 5}
