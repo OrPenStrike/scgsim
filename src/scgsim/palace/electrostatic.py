@@ -188,6 +188,22 @@ class ElectrostaticSim:
         self.exterior_boundary_policy = exterior_boundary_policy
         self._invalidate_config()
 
+    def set_mesh(self, *, refined_mesh_size: float, max_mesh_size: float) -> None:
+        """Set the mesh-only numerical controls for the next mesh build."""
+        numerical = configure_numerical_controls(
+            **{
+                **self.numerical,
+                "refined_mesh_size": refined_mesh_size,
+                "max_mesh_size": max_mesh_size,
+            }
+        )
+        if (
+            numerical["refined_mesh_size"] != self.numerical["refined_mesh_size"]
+            or numerical["max_mesh_size"] != self.numerical["max_mesh_size"]
+        ):
+            self.numerical = numerical
+            self._invalidate_mesh()
+
     def set_numerical(
         self,
         *,
@@ -197,8 +213,8 @@ class ElectrostaticSim:
         solver_type: str = "Default",
         preconditioner: str = "Default",
         device: str = "CPU",
-        refined_mesh_size: float = 5.0,
-        max_mesh_size: float = 300.0,
+        refined_mesh_size: float | None = None,
+        max_mesh_size: float | None = None,
         amr_max_passes: int = 0,
         amr_tolerance: float = 1e-2,
         amr_update_fraction: float | None = None,
@@ -207,6 +223,20 @@ class ElectrostaticSim:
         output_paraview: bool | None = None,
         output_grid_function: bool | None = None,
     ) -> None:
+        if (refined_mesh_size is None) != (max_mesh_size is None):
+            raise ValueError(
+                "refined_mesh_size and max_mesh_size must be provided together."
+            )
+        previous_mesh_sizes = {
+            "refined_mesh_size": self.numerical["refined_mesh_size"],
+            "max_mesh_size": self.numerical["max_mesh_size"],
+        }
+        mesh_sizes = previous_mesh_sizes
+        if refined_mesh_size is not None:
+            mesh_sizes = {
+                "refined_mesh_size": refined_mesh_size,
+                "max_mesh_size": max_mesh_size,
+            }
         self.numerical = configure_numerical_controls(
             order=order,
             tolerance=tolerance,
@@ -214,8 +244,7 @@ class ElectrostaticSim:
             solver_type=solver_type,
             preconditioner=preconditioner,
             device=device,
-            refined_mesh_size=refined_mesh_size,
-            max_mesh_size=max_mesh_size,
+            **mesh_sizes,
             amr_max_passes=amr_max_passes,
             amr_tolerance=amr_tolerance,
             amr_update_fraction=amr_update_fraction,
@@ -224,7 +253,14 @@ class ElectrostaticSim:
             output_paraview=output_paraview,
             output_grid_function=output_grid_function,
         )
-        self._invalidate_mesh()
+        if (
+            self.numerical["refined_mesh_size"]
+            != previous_mesh_sizes["refined_mesh_size"]
+            or self.numerical["max_mesh_size"] != previous_mesh_sizes["max_mesh_size"]
+        ):
+            self._invalidate_mesh()
+        else:
+            self._invalidate_config()
 
     def mesh(self) -> Path:
         self._invalidate_mesh()
