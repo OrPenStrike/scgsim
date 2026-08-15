@@ -36,3 +36,7 @@ Public Xmon example input (optional `examples` extra):
   adaptation identified by its source component as CC BY 4.0 with attribution.
   SCGSim consumes its public PDK technology and component records; it does not
   include a mask or private layout artifact.
+
+Portions of the HFSS handoff/run scope are adapted from public OrPen artifacts:
+  - OrPen notebook cpw_finite_ground_hfss_convergence.py (SHA: 8be8fc48c26f6bed06298cab673d49b9a6afbe7f)
+  - OrPen notebook mtl_transition_hfss_sparameters.py (SHA: 8be8fc48c26f6bed06298cab673d49b9a6afbe7f)
