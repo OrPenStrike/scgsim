@@ -251,7 +251,11 @@ def _render_script(
         *directives,
         "",
         "set -euo pipefail",
-        'cd "$(dirname "$0")"',
+        (
+            'cd "$(dirname "$0")"'
+            if profile == "ltlab-local"
+            else 'cd "${SLURM_SUBMIT_DIR:-$PWD}"'
+        ),
         "mkdir -p logs results/palace metadata",
         'PALACE_CONFIG="config.json"',
         'PALACE_MESH="palace.msh"',
@@ -267,6 +271,17 @@ def _render_script(
             [
                 f"PALACE_PETSC_OPTIONS={shlex.quote(' '.join(petsc))}",
                 'export PETSC_OPTIONS="${PETSC_OPTIONS:-} ${PALACE_PETSC_OPTIONS}"',
+            ]
+        )
+    if any(command.lstrip().startswith("module ") for command in setup):
+        lines.extend(
+            [
+                "if ! type module >/dev/null 2>&1; then",
+                '  [[ -r /etc/profile.d/modules.sh ]] || { echo "missing Environment Modules initialization" >&2; exit 2; }',
+                "  set +u",
+                "  source /etc/profile.d/modules.sh",
+                "  set -u",
+                "fi",
             ]
         )
     for setup_command in setup:
