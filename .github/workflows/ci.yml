@@ -30,6 +30,8 @@ jobs:
           import pathlib
 
           import scgsim
+          import scgsim.sgb
+          from scgsim.palace import EigenmodeSim, ElectrostaticSim
 
           repo_root = pathlib.Path(os.environ["GITHUB_WORKSPACE"]).resolve()
           source = pathlib.Path(scgsim.__file__).resolve()
@@ -37,6 +39,7 @@ jobs:
           if not source.is_relative_to(src_root):
               raise SystemExit(f"unexpected scgsim location: {source}")
           print(scgsim.__version__)
+          print(scgsim.sgb.__name__, ElectrostaticSim.__name__, EigenmodeSim.__name__)
           PY
 
       - name: Build distribution artifacts
@@ -62,11 +65,14 @@ jobs:
           uv pip install --python .venv-wheel/bin/python dist/*.whl
           .venv-wheel/bin/python - <<'PY'
           import scgsim
+          import scgsim.sgb
           from importlib.metadata import version as metadata_version
           import pathlib
+          from scgsim.palace import EigenmodeSim, ElectrostaticSim
 
           print(scgsim.__version__)
           if scgsim.__version__ != metadata_version("scgsim"):
               raise SystemExit("version mismatch between package and metadata")
+          print(scgsim.sgb.__name__, ElectrostaticSim.__name__, EigenmodeSim.__name__)
           print(pathlib.Path(scgsim.__file__).resolve())
           PY
