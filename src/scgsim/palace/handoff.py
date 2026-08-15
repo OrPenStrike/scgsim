@@ -298,6 +298,11 @@ def _validate_resources(
     style = result.get("command_style", "binary")
     if style not in {"binary", "wrapper"}:
         raise ValueError("resources.command_style must be 'binary' or 'wrapper'.")
+    if profile != "ltlab-local" and style == "wrapper":
+        raise ValueError(
+            "resources.command_style='wrapper' is supported only for ltlab-local; "
+            "Slurm profiles require 'binary'."
+        )
     return result
 
 
