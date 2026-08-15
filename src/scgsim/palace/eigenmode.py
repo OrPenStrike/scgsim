@@ -12,7 +12,11 @@ from typing import Any, Literal
 from scgsim.sgb import VacuumRegionSpec
 from scgsim.sgb.orpen import _prepare_indium_ground_bump_fill
 
-from ._config import LayoutPortBinding, build_eigenmode_config
+from ._config import (
+    LayoutPortBinding,
+    build_eigenmode_config,
+    configure_numerical_controls,
+)
 from ._epr import normalize_surface_epr_specs
 from ._mesh import MeshBuildResult, build_route_mesh
 from ._staged import (
@@ -23,9 +27,6 @@ from ._staged import (
     validate_positive_number,
 )
 from .electrostatic import (
-    _DEVICES,
-    _PRECONDITIONERS,
-    _SOLVER_TYPES,
     _atomic_json,
     _load_stack,
     _non_negative_number,
@@ -56,18 +57,7 @@ class EigenmodeSim:
     target_hz: float | None = None
     eigenmode_tolerance: float = 1e-6
     save_fields: int = 0
-    numerical: dict[str, Any] = field(
-        default_factory=lambda: {
-            "order": 1,
-            "tolerance": 1e-6,
-            "max_iterations": 400,
-            "solver_type": "Default",
-            "preconditioner": "Default",
-            "device": "CPU",
-            "refined_mesh_size": 5.0,
-            "max_mesh_size": 300.0,
-        }
-    )
+    numerical: dict[str, Any] = field(default_factory=configure_numerical_controls)
     _materials: dict[str, Mapping[str, Any]] | None = field(default=None, init=False)
     _resolved_ports: list[LayoutPortBinding] = field(default_factory=list, init=False)
     vacuum_region: VacuumRegionSpec | None = None
@@ -239,35 +229,31 @@ class EigenmodeSim:
         device: str = "CPU",
         refined_mesh_size: float = 5.0,
         max_mesh_size: float = 300.0,
+        amr_max_passes: int = 0,
+        amr_tolerance: float = 1e-2,
+        amr_update_fraction: float | None = None,
+        save_adapt_iterations: bool | None = None,
+        estimator_mg: bool | None = None,
+        output_paraview: bool | None = None,
+        output_grid_function: bool | None = None,
     ) -> None:
-        if not isinstance(order, int) or isinstance(order, bool) or not 1 <= order <= 4:
-            raise ValueError("order must be an integer from 1 through 4.")
-        if (
-            not isinstance(max_iterations, int)
-            or isinstance(max_iterations, bool)
-            or max_iterations <= 0
-        ):
-            raise ValueError("max_iterations must be a positive integer.")
-        if (
-            solver_type not in _SOLVER_TYPES
-            or preconditioner not in _PRECONDITIONERS
-            or device not in _DEVICES
-        ):
-            raise ValueError("unsupported solver_type, preconditioner, or device.")
-        refined = validate_positive_number(refined_mesh_size, "refined_mesh_size")
-        maximum = validate_positive_number(max_mesh_size, "max_mesh_size")
-        if maximum < refined:
-            raise ValueError("max_mesh_size must be >= refined_mesh_size.")
-        self.numerical = {
-            "order": order,
-            "tolerance": validate_positive_number(tolerance, "tolerance"),
-            "max_iterations": max_iterations,
-            "solver_type": solver_type,
-            "preconditioner": preconditioner,
-            "device": device,
-            "refined_mesh_size": refined,
-            "max_mesh_size": maximum,
-        }
+        self.numerical = configure_numerical_controls(
+            order=order,
+            tolerance=tolerance,
+            max_iterations=max_iterations,
+            solver_type=solver_type,
+            preconditioner=preconditioner,
+            device=device,
+            refined_mesh_size=refined_mesh_size,
+            max_mesh_size=max_mesh_size,
+            amr_max_passes=amr_max_passes,
+            amr_tolerance=amr_tolerance,
+            amr_update_fraction=amr_update_fraction,
+            save_adapt_iterations=save_adapt_iterations,
+            estimator_mg=estimator_mg,
+            output_paraview=output_paraview,
+            output_grid_function=output_grid_function,
+        )
         self._invalidate_mesh()
 
     def mesh(self) -> Path:
