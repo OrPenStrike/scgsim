@@ -670,6 +670,10 @@ def _split_polygon_entity(
         "outer_loop": split_polygon.exterior,
         "hole_loops": split_polygon.holes,
     }
+    # Selection lists are consumed by this adapter; duplicating them onto each
+    # split entity would turn generated-fill metadata quadratic.
+    geometry.pop("include_selector_points_um", None)
+    geometry.pop("exclude_selector_points_um", None)
     metadata = {
         **dict(entity.metadata),
         "semantic_group_id": entity.semantic_id,
@@ -1056,9 +1060,6 @@ def _derived_ground_polygons(
                 "gds_datatype": mask_key[1],
                 "source": "die_face_minus_ground_mask",
                 "include_layer": include_layer,
-                "include_selector_points_um": tuple(
-                    tuple(float(value) for value in point) for point in include_points
-                ),
             },
         ),
     )
@@ -1104,6 +1105,8 @@ def _entity_with_polygon_geometry(
     if not polygons:
         return entity
     geometry = dict(entity.geometry)
+    geometry.pop("include_selector_points_um", None)
+    geometry.pop("exclude_selector_points_um", None)
     if len(polygons) == 1:
         geometry.setdefault("outer_loop", polygons[0].exterior)
         geometry.setdefault("hole_loops", polygons[0].holes)
