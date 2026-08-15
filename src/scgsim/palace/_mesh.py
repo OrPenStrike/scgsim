@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import math
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError
@@ -238,10 +239,10 @@ def _mesh_from_route_xao(
 
         _embed_route_b_port_surfaces(groups)
         _setup_xao_refinement(groups, refined_mesh_size, max_mesh_size)
-        if groups["port_surfaces"]:
-            gmsh.option.setNumber("Mesh.Algorithm3D", 4)
+        gmsh.option.setNumber("Mesh.Algorithm3D", 1)
         gmsh.model.mesh.generate(3)
         _validate_tetrahedral_solution_groups(groups=groups, live=live)
+        _validate_port_tetrahedron_face_conformality(groups)
         _validate_port_pec_node_intersections(groups)
         gmsh.option.setNumber("Mesh.Binary", 0)
         gmsh.option.setNumber("Mesh.SaveAll", 0)
@@ -1042,6 +1043,80 @@ def _validate_port_pec_node_intersections(
                 raise ValueError(
                     f"SGB lumped-port sheet {key!r} owner {owner_id!r} does not share a mesh edge."
                 )
+
+
+def _validate_port_tetrahedron_face_conformality(
+    groups: Mapping[str, Mapping[str, Mapping[str, Any]]],
+) -> None:
+    """Require every internal port triangle to be a two-sided tetrahedron face."""
+    import gmsh
+
+    port_triangles: dict[str, list[tuple[int, int, int]]] = {}
+    for key, port in groups.get("port_surfaces", {}).items():
+        triangles: list[tuple[int, int, int]] = []
+        for surface_tag in port.get("tags", ()):
+            element_types, _, element_nodes = gmsh.model.mesh.getElements(
+                2, int(surface_tag)
+            )
+            for element_type, nodes in zip(element_types, element_nodes, strict=True):
+                name, dimension, _, node_count, _, primary_count = (
+                    gmsh.model.mesh.getElementProperties(element_type)
+                )
+                if (
+                    dimension != 2
+                    or "triangle" not in name.lower()
+                    or primary_count != 3
+                ):
+                    raise ValueError(
+                        f"SGB lumped-port sheet {key!r} has unsupported element {name!r}."
+                    )
+                triangles.extend(
+                    tuple(
+                        sorted(
+                            int(node) for node in nodes[index : index + primary_count]
+                        )
+                    )
+                    for index in range(0, len(nodes), node_count)
+                )
+        port_triangles[key] = triangles
+
+    tetrahedron_faces: Counter[tuple[int, int, int]] = Counter(
+        {triangle: 0 for triangles in port_triangles.values() for triangle in triangles}
+    )
+    volume_tags = {
+        int(tag)
+        for volume in groups.get("volumes", {}).values()
+        for tag in volume.get("tags", ())
+    }
+    for volume_tag in volume_tags:
+        element_types, _, _ = gmsh.model.mesh.getElements(3, volume_tag)
+        for element_type in element_types:
+            name, dimension, *_ = gmsh.model.mesh.getElementProperties(element_type)
+            if dimension != 3 or "tetrahedron" not in name.lower():
+                continue
+            face_nodes = gmsh.model.mesh.getElementFaceNodes(
+                int(element_type), 3, volume_tag, primary=True
+            )
+            if len(face_nodes) % 3:
+                raise ValueError("Gmsh returned an incomplete tetrahedron face list.")
+            for index in range(0, len(face_nodes), 3):
+                face = tuple(
+                    sorted(int(node) for node in face_nodes[index : index + 3])
+                )
+                if face in tetrahedron_faces:
+                    tetrahedron_faces[face] += 1
+
+    for key, triangles in port_triangles.items():
+        multiplicities = Counter(tetrahedron_faces[triangle] for triangle in triangles)
+        invalid = {
+            count: amount for count, amount in multiplicities.items() if count != 2
+        }
+        if not triangles or invalid:
+            raise ValueError(
+                f"SGB lumped-port sheet {key!r} is non-conformal to the tetrahedron mesh: "
+                f"{len(triangles)} triangle(s), invalid tetra-face multiplicities {invalid}; "
+                "every internal port triangle must be shared by exactly two tetrahedra."
+            )
 
 
 def _surface_nodes(tags: Sequence[Any]) -> set[int]:
