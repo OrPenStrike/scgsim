@@ -118,20 +118,19 @@ def build_electrostatic_config(
     ]
 
     linear = _linear_solver(numerical)
+    problem_block = _build_output_formats(numerical)
+    problem = {
+        "Type": "Electrostatic",
+        "Verbose": 3,
+        "Output": "results/palace",
+    }
+    problem.update(problem_block)
     config: dict[str, Any] = {
-        "Problem": {
-            "Type": "Electrostatic",
-            "Verbose": 3,
-            "Output": "results/palace",
-        },
+        "Problem": problem,
         "Model": {
             "Mesh": str(mesh_path.name),
             "L0": 1e-6,
-            "Refinement": {
-                "UniformLevels": 0,
-                "Tol": 1e-2,
-                "MaxIts": 0,
-            },
+            "Refinement": _build_refinement(numerical),
         },
         "Solver": {
             "Linear": linear,
@@ -235,12 +234,19 @@ def build_eigenmode_config(
     }
     if epr_rows:
         boundaries["Postprocessing"] = {"Dielectric": epr_rows}
+    problem_block = _build_output_formats(numerical)
+    problem = {
+        "Type": "Eigenmode",
+        "Verbose": 3,
+        "Output": "results/palace",
+    }
+    problem.update(problem_block)
     config = {
-        "Problem": {"Type": "Eigenmode", "Verbose": 3, "Output": "results/palace"},
+        "Problem": problem,
         "Model": {
             "Mesh": mesh_path.name,
             "L0": 1e-6,
-            "Refinement": {"UniformLevels": 0, "Tol": 1e-2, "MaxIts": 0},
+            "Refinement": _build_refinement(numerical),
         },
         "Solver": {
             "Linear": _linear_solver(numerical),
@@ -442,10 +448,6 @@ def _linear_solver(numerical: Mapping[str, Any]) -> dict[str, Any]:
             {
                 "MaxIts": 1,
                 "MGMaxLevels": 1,
-                "EstimatorMaxIts": 0,
-                "EstimatorTol": 1e-6,
-                "DivFreeTol": 1e-6,
-                "DivFreeMaxIts": 0,
                 "PCMatReal": False,
                 "ComplexCoarseSolve": True,
             }
@@ -454,8 +456,133 @@ def _linear_solver(numerical: Mapping[str, Any]) -> dict[str, Any]:
         numerical["solver_type"] == "Default"
         and numerical["preconditioner"] != "Default"
     ):
-        linear["Preconditioner"] = numerical["preconditioner"]
+        linear["Type"] = numerical["preconditioner"]
+
+    if numerical.get("estimator_mg") is not None:
+        linear["EstimatorMG"] = bool(numerical["estimator_mg"])
     return linear
+
+
+def _build_refinement(numerical: Mapping[str, Any]) -> dict[str, Any]:
+    refinement = {
+        "UniformLevels": 0,
+        "Tol": float(numerical["amr_tolerance"]),
+        "MaxIts": int(numerical["amr_max_passes"]),
+    }
+    if numerical.get("save_adapt_iterations") is not None:
+        refinement["SaveAdaptIterations"] = bool(numerical["save_adapt_iterations"])
+    if numerical.get("amr_update_fraction") is not None:
+        refinement["UpdateFraction"] = float(numerical["amr_update_fraction"])
+    return refinement
+
+
+def _build_output_formats(numerical: Mapping[str, Any]) -> dict[str, Any]:
+    output_formats = {
+        "Paraview": numerical.get("output_paraview"),
+        "GridFunction": numerical.get("output_grid_function"),
+    }
+    outputs = {
+        key: bool(value) for key, value in output_formats.items() if value is not None
+    }
+    if not outputs:
+        return {}
+    return {"OutputFormats": outputs}
+
+
+def configure_numerical_controls(
+    *,
+    order: int = 1,
+    tolerance: float = 1e-6,
+    max_iterations: int = 400,
+    solver_type: str = "Default",
+    preconditioner: str = "Default",
+    device: str = "CPU",
+    refined_mesh_size: float = 5.0,
+    max_mesh_size: float = 300.0,
+    amr_max_passes: int = 0,
+    amr_tolerance: float = 1e-2,
+    amr_update_fraction: float | None = None,
+    save_adapt_iterations: bool | None = None,
+    estimator_mg: bool | None = None,
+    output_paraview: bool | None = None,
+    output_grid_function: bool | None = None,
+) -> dict[str, Any]:
+    if not isinstance(order, int) or isinstance(order, bool) or not 1 <= order <= 4:
+        raise ValueError("order must be an integer from 1 through 4.")
+    if not _positive_finite(tolerance):
+        raise ValueError("tolerance must be finite and positive.")
+    if (
+        not isinstance(max_iterations, int)
+        or isinstance(max_iterations, bool)
+        or max_iterations <= 0
+    ):
+        raise ValueError("max_iterations must be a positive integer.")
+    if solver_type not in {"Default", "SuperLU", "STRUMPACK", "MUMPS"}:
+        raise ValueError("unsupported solver_type.")
+    if preconditioner not in {"Default", "AMS", "BoomerAMG"}:
+        raise ValueError("unsupported preconditioner.")
+    if device not in {"CPU", "GPU"}:
+        raise ValueError("unsupported device.")
+    if solver_type != "Default" and preconditioner != "Default":
+        raise ValueError("non-default preconditioner requires Default solver.")
+    if solver_type == "MUMPS":
+        max_iterations = 1
+
+    if not _positive_finite(refined_mesh_size):
+        raise ValueError("refined_mesh_size must be finite and > 0.")
+    if not _positive_finite(max_mesh_size):
+        raise ValueError("max_mesh_size must be finite and > 0.")
+    refined = float(refined_mesh_size)
+    maximum = float(max_mesh_size)
+    if maximum < refined:
+        raise ValueError("max_mesh_size must be >= refined_mesh_size.")
+
+    if not isinstance(amr_max_passes, int) or isinstance(amr_max_passes, bool):
+        raise TypeError("amr_max_passes must be an integer.")
+    if amr_max_passes < 0:
+        raise ValueError("amr_max_passes must be >= 0.")
+    if not _positive_finite(amr_tolerance):
+        raise ValueError("amr_tolerance must be finite and positive.")
+    if amr_update_fraction is not None:
+        if not isinstance(amr_update_fraction, Real) or isinstance(
+            amr_update_fraction, bool
+        ):
+            raise TypeError("amr_update_fraction must be a real number.")
+        amr_update = float(amr_update_fraction)
+        if not math.isfinite(amr_update) or not 0.0 < amr_update < 1.0:
+            raise ValueError(
+                "amr_update_fraction must be finite and strictly between 0 and 1."
+            )
+    if save_adapt_iterations is not None and not isinstance(
+        save_adapt_iterations, bool
+    ):
+        raise TypeError("save_adapt_iterations must be bool or None.")
+    if estimator_mg is not None and not isinstance(estimator_mg, bool):
+        raise TypeError("estimator_mg must be bool or None.")
+    if output_paraview is not None and not isinstance(output_paraview, bool):
+        raise TypeError("output_paraview must be bool or None.")
+    if output_grid_function is not None and not isinstance(output_grid_function, bool):
+        raise TypeError("output_grid_function must be bool or None.")
+
+    return {
+        "order": int(order),
+        "tolerance": float(tolerance),
+        "max_iterations": int(max_iterations),
+        "solver_type": str(solver_type),
+        "preconditioner": str(preconditioner),
+        "device": str(device),
+        "refined_mesh_size": refined,
+        "max_mesh_size": maximum,
+        "amr_max_passes": int(amr_max_passes),
+        "amr_tolerance": float(amr_tolerance),
+        "amr_update_fraction": (
+            float(amr_update_fraction) if amr_update_fraction is not None else None
+        ),
+        "save_adapt_iterations": save_adapt_iterations,
+        "estimator_mg": estimator_mg,
+        "output_paraview": output_paraview,
+        "output_grid_function": output_grid_function,
+    }
 
 
 def _domain_energy_rows(
