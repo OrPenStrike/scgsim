@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
 from scgsim.sgb import VacuumRegionSpec
+from scgsim.sgb.orpen import _prepare_indium_ground_bump_fill
 
 from ._config import TerminalBinding, build_electrostatic_config
 from ._epr import normalize_surface_epr_specs
@@ -55,6 +57,7 @@ class ElectrostaticSim:
     )
     _materials: dict[str, Mapping[str, Any]] | None = field(default=None, init=False)
     vacuum_region: VacuumRegionSpec | None = None
+    indium_ground_bumps: dict[str, Any] | None = None
     _mesh_result: MeshBuildResult | None = field(default=None, init=False)
     config_path: Path | None = field(default=None, init=False)
     handoff_plan: HandoffPlan | None = field(default=None, init=False)
@@ -131,6 +134,21 @@ class ElectrostaticSim:
                 "set_vacuum_region is mutually exclusive with set_airbox()."
             )
         self.vacuum_region = VacuumRegionSpec.from_padding(padding)
+        self._invalidate_mesh()
+
+    def set_indium_ground_bumps(
+        self, *, fill: bool, fill_pitch_um: float, fill_clearance_um: float
+    ) -> None:
+        """Request public-PDK authored-plus-ground-fill bumps for the next mesh."""
+        if not isinstance(fill, bool):
+            raise TypeError("fill must be a bool.")
+        self.indium_ground_bumps = {
+            "fill": fill,
+            "fill_pitch_um": validate_positive_number(fill_pitch_um, "fill_pitch_um"),
+            "fill_clearance_um": _non_negative_number(
+                fill_clearance_um, "fill_clearance_um"
+            ),
+        }
         self._invalidate_mesh()
 
     def add_terminal(self, name: str, *, net_id: str) -> None:
@@ -237,6 +255,16 @@ class ElectrostaticSim:
                 self.stack,
                 self.vacuum_region,
             )
+        indium_fill = None
+        mesh_component = self.component
+        if self.indium_ground_bumps is not None:
+            indium_fill = _prepare_indium_ground_bump_fill(
+                component=self.component,
+                stack=prepared_stack,
+                **self.indium_ground_bumps,
+            )
+            mesh_component = indium_fill["component"]
+            prepared_stack = indium_fill["stack"]
         prepared_materials = prepared_stack.get("materials")
         if isinstance(prepared_materials, Mapping):
             self._materials = {
@@ -245,12 +273,13 @@ class ElectrostaticSim:
                 if isinstance(material, Mapping)
             }
         self._mesh_result = build_route_mesh(
-            component=self.component,
+            component=mesh_component,
             stack=apply_airbox_to_stack(prepared_stack, self.airbox),
             route=self.route,
             output_dir=self.output_dir,
             refined_mesh_size=self.numerical["refined_mesh_size"],
             max_mesh_size=self.numerical["max_mesh_size"],
+            indium_ground_bump_fill=indium_fill,
         )
         return self._mesh_result.mesh_path
 
@@ -330,6 +359,15 @@ def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     temporary.replace(path)
+
+
+def _non_negative_number(value: Any, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{name} must be a finite non-negative number.")
+    result = float(value)
+    if not math.isfinite(result) or result < 0.0:
+        raise ValueError(f"{name} must be a finite non-negative number.")
+    return result
 
 
 def _load_stack(stack: Mapping[str, Any] | str | Path) -> Mapping[str, Any]:

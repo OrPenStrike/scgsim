@@ -33,6 +33,12 @@ GEOMETRY_CONTROLS = {
     "auto_vacuum_padding_um": (0.0, 0.0, float(OUTER_VACUUM_THICKNESS_UM)),
 }
 
+INDIUM_GROUND_CONTROLS = {
+    "fill": True,
+    "fill_pitch_um": 80.0,
+    "fill_clearance_um": 30.0,
+}
+
 # %% [markdown]
 # ## Meshing Controls
 
@@ -107,7 +113,7 @@ VALIDATION_CONTROLS = {
 # %%
 PROVENANCE = {
     "classification": "public",
-    "orpen_sc_pdk_revision": "6bef7a185991c0c49d41f6faf36984b4c36e45ff",
+    "orpen_sc_pdk_revision": "8be8fc48c26f6bed06298cab673d49b9a6afbe7f",
     "gsim_meshing_methodology": "8f5dc6c05255d003a9c6d8959537bcf8068379d3",
     "palace_runtime": "0.16.1",
     "palace_schema": "0.16.0",
@@ -180,6 +186,7 @@ sim.set_geometry(component)
 sim.set_stack(stack)
 sim.set_output_dir(run_dir)
 sim.set_vacuum_region(padding=GEOMETRY_CONTROLS["auto_vacuum_padding_um"])
+sim.set_indium_ground_bumps(**INDIUM_GROUND_CONTROLS)
 sim.set_surface_epr(representation=GEOMETRY_CONTROLS["route"], specs=EPR_SPECS)
 sim.add_port(
     GEOMETRY_CONTROLS["port_name"],
@@ -215,6 +222,11 @@ sim.set_numerical(
 mesh_path = sim.mesh()
 assert f"$MeshFormat\n{VALIDATION_CONTROLS['msh_version']} 0 8" in mesh_path.read_text()
 manifest = json.loads((run_dir / "metadata" / "mesh_manifest.json").read_text())
+indium_receipt = json.loads(
+    (run_dir / "metadata" / "indium_ground_bumps.json").read_text()
+)
+assert indium_receipt["controls"] == INDIUM_GROUND_CONTROLS
+assert indium_receipt["counts"]["generated"] > 0
 auto_stack = json.loads((run_dir / "geometry" / "design.stack.json").read_text())
 auto_regions = auto_stack["solution_regions"]
 assert tuple(auto_regions) == (

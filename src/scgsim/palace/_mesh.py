@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import math
+import subprocess
+import sys
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, Literal
 
 GSIM_SHA = "8f5dc6c05255d003a9c6d8959537bcf8068379d3"
@@ -74,6 +78,7 @@ def build_route_mesh(
     refined_mesh_size: float = 5.0,
     max_mesh_size: float = 300.0,
     port_sheet_source_layers: Sequence[Mapping[str, Any]] = (),
+    indium_ground_bump_fill: Mapping[str, Any] | None = None,
 ) -> MeshBuildResult:
     """Lower Route-A/Route-B SGB geometry, mesh it, and emit artifacts."""
 
@@ -89,7 +94,6 @@ def build_route_mesh(
         raise ValueError(
             "mesh sizes must be positive and max_mesh_size >= refined_mesh_size"
         )
-
     stack = _with_port_sheet_metadata(stack, port_sheet_source_layers)
     run_dir = Path(output_dir).expanduser().resolve()
     if run_dir.exists() and any(run_dir.iterdir()):
@@ -117,7 +121,6 @@ def build_route_mesh(
     _write_component_gds(component=component, path=gds_path)
     top_cell = _component_gds_top_cell_name(component=component, gds_path=gds_path)
     stack_path.write_text(json.dumps(dict(stack), indent=2) + "\n", encoding="utf-8")
-
     from scgsim.sgb import SemanticGeometryBuilder, build_gds_stack_geometry_input
 
     build_input = build_gds_stack_geometry_input(
@@ -129,12 +132,30 @@ def build_route_mesh(
             "source": "scgsim.palace._mesh.build_route_mesh",
         },
     )
-    SemanticGeometryBuilder().build(
-        build_input,
-        route=route,
-        run_folder=run_dir,
-    )
+    if indium_ground_bump_fill is not None:
+        from scgsim.sgb.models import GeometryBuildInput
 
+        injected_entities = tuple(indium_ground_bump_fill.get("injected_entities", ()))
+        injected_polygons = tuple(indium_ground_bump_fill.get("injected_polygons", ()))
+        build_input = GeometryBuildInput(
+            polygons=(*build_input.polygons, *injected_polygons),
+            entities=(*build_input.entities, *injected_entities),
+            solution_regions=build_input.solution_regions,
+            metadata=build_input.metadata,
+            port_sheet_regions=build_input.port_sheet_regions,
+        )
+        receipt = indium_ground_bump_fill.get("receipt")
+        if not isinstance(receipt, Mapping):
+            raise TypeError("indium ground bump fill requires a structured receipt.")
+        _write_indium_ground_bump_receipt(
+            run_dir=run_dir,
+            gds_path=gds_path,
+            receipt=receipt,
+        )
+
+    # SGB/OCC construction remains in the calling process. Only Gmsh lowering
+    # receives a fresh native-process boundary after an XAO has been written.
+    SemanticGeometryBuilder().build(build_input, route=route, run_folder=run_dir)
     if not xao_path.is_file():
         raise FileNotFoundError(f"SGB Route-{route} XAO not generated: {xao_path}")
     if not sidecar_path.is_file():
@@ -195,6 +216,18 @@ def build_route_mesh(
     )
 
 
+def _write_indium_ground_bump_receipt(
+    *, run_dir: Path, gds_path: Path, receipt: Mapping[str, Any]
+) -> None:
+    """Persist public fill provenance before the generic handoff archive is made."""
+    payload = copy.deepcopy(dict(receipt))
+    payload["design_gds"] = {
+        "path": gds_path.relative_to(run_dir).as_posix(),
+        "sha256": hashlib.sha256(gds_path.read_bytes()).hexdigest(),
+    }
+    _write_json(run_dir / "metadata" / "indium_ground_bumps.json", payload)
+
+
 def _mesh_from_route_xao(
     *,
     xao_path: Path,
@@ -205,7 +238,119 @@ def _mesh_from_route_xao(
     refined_mesh_size: float,
     max_mesh_size: float,
 ) -> tuple[Path, dict[str, dict[str, Any]]]:
-    """Open SGB XAO and map live physical groups with strict structured checks."""
+    """Mesh an SGB XAO in one fresh Gmsh process.
+
+    SGB has already written the exact XAO and structured sidecar in the caller.
+    The fresh boundary contains only Gmsh's native XAO lowering. It changes
+    process lifetime only: the XAO, structured records, exact physical mapping,
+    refinement, Algorithm3D and validations remain the same mesh path for both
+    routes.
+    """
+    request = {
+        "xao_path": xao_path.relative_to(mesh_path.parent).as_posix(),
+        "route": route,
+        "records": list(records),
+        "stack": dict(stack),
+        "mesh_path": mesh_path.relative_to(mesh_path.parent).as_posix(),
+        "refined_mesh_size": refined_mesh_size,
+        "max_mesh_size": max_mesh_size,
+    }
+    result = _run_gmsh_worker(request=request, run_dir=mesh_path.parent)
+    groups = result.get("groups")
+    if not isinstance(groups, dict):
+        raise TypeError("fresh Gmsh mesh worker result lacks structured groups.")
+    if not mesh_path.is_file():
+        raise FileNotFoundError("fresh Gmsh mesh worker did not write the MSH file.")
+    return mesh_path, groups
+
+
+def _run_gmsh_worker(*, request: Mapping[str, Any], run_dir: Path) -> Mapping[str, Any]:
+    """Run unchanged gsim-derived XAO lowering in a fresh process."""
+    with TemporaryDirectory(prefix="scgsim-gmsh-worker-", dir=run_dir) as temporary:
+        temporary_path = Path(temporary)
+        temporary_path.chmod(0o700)
+        request_path = temporary_path / "request.json"
+        result_path = temporary_path / "result.json"
+        request_path.write_text(json.dumps(dict(request)), encoding="utf-8")
+        _run_private_worker(
+            arguments=(
+                sys.executable,
+                "-m",
+                "scgsim.palace._gmsh_worker",
+                str(request_path),
+                str(result_path),
+            ),
+            run_dir=run_dir,
+            worker_name="gmsh_mesh_worker",
+        )
+        if not result_path.is_file():
+            raise FileNotFoundError("fresh Gmsh mesh worker did not write a result.")
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        if not isinstance(result, Mapping):
+            raise TypeError("fresh Gmsh mesh worker result must be a mapping.")
+        return result
+
+
+def _run_private_worker(
+    *, arguments: Sequence[str], run_dir: Path, worker_name: str
+) -> None:
+    """Execute one private IPC worker and retain only its diagnostic logs."""
+    logs = run_dir / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    stdout_path = logs / f"{worker_name}.stdout.log"
+    stderr_path = logs / f"{worker_name}.stderr.log"
+    worker_environment = _private_worker_environment()
+    (logs / "private_worker_environment_keys.json").write_text(
+        json.dumps(sorted(worker_environment), indent=2) + "\n", encoding="utf-8"
+    )
+    with (
+        stdout_path.open("w", encoding="utf-8") as stdout,
+        stderr_path.open("w", encoding="utf-8") as stderr,
+    ):
+        completed = subprocess.run(
+            list(arguments),
+            check=False,
+            env=worker_environment,
+            shell=False,
+            start_new_session=True,
+            cwd=run_dir,
+            stdin=subprocess.DEVNULL,
+            stdout=stdout,
+            stderr=stderr,
+            text=True,
+        )
+    if completed.returncode == 0:
+        return
+    if completed.returncode < 0:
+        detail = f"terminated by signal {-completed.returncode}"
+    else:
+        detail = f"exited with status {completed.returncode}"
+    raise RuntimeError(
+        f"private {worker_name} {detail}; diagnostics are in "
+        f"logs/{worker_name}.stdout.log and logs/{worker_name}.stderr.log"
+    )
+
+
+def _private_worker_environment() -> dict[str, str]:
+    """Return a deterministic native-library environment for private workers."""
+    return {
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    }
+
+
+def _mesh_xao_in_current_process(
+    *,
+    xao_path: Path,
+    route: str,
+    records: Sequence[Any],
+    stack: Mapping[str, Any],
+    mesh_path: Path,
+    refined_mesh_size: float,
+    max_mesh_size: float,
+) -> dict[str, dict[str, Any]]:
+    """Current-process implementation used only by the private fresh worker."""
 
     route = route.upper()
     _sgb_records_route_context(records, route)
@@ -248,7 +393,7 @@ def _mesh_from_route_xao(
         gmsh.option.setNumber("Mesh.SaveAll", 0)
         gmsh.option.setNumber("Mesh.MshFileVersion", 2.2)
         gmsh.write(str(mesh_path))
-        return mesh_path, groups
+        return groups
     finally:
         gmsh.clear()
         gmsh.finalize()

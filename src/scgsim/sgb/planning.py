@@ -235,7 +235,7 @@ def _prepare_auto_vacuum_solution_regions(
             continue
 
         active_subtractor_region: tuple[Any, ...] = ()
-        active_subtractors: list[str] = []
+        active_subtractors: list[SemanticEntitySpec] = []
         for entity in obstacle_entities:
             obstacle_z_min_um, obstacle_z_max_um = _entity_z_range_um(entity)
             if (
@@ -251,7 +251,7 @@ def _prepare_auto_vacuum_solution_regions(
             )
             if not subtractor_regions:
                 continue
-            active_subtractors.append(entity.semantic_id)
+            active_subtractors.append(entity)
             if active_subtractor_region:
                 active_subtractor_region = _boolean_gdstk_region(
                     gdstk,
@@ -278,6 +278,36 @@ def _prepare_auto_vacuum_solution_regions(
             vacuum_region_refs,
             key=lambda region: _loop_signature(region["outer_loop"]),
         ):
+            component_region = _gdstk_surface_region(geometry_ref)
+            component_subtractor_ids = tuple(
+                sorted(
+                    entity.semantic_id
+                    for entity in active_subtractors
+                    if _auto_vacuum_component_contacts_subtractor(
+                        gdstk,
+                        component_geometry_ref=geometry_ref,
+                        subtractor=entity,
+                    )
+                )
+            )
+            boundary_entity_ids = {"bottom": [], "top": []}
+            for entity in obstacle_entities:
+                entity_z_min_um, entity_z_max_um = _entity_z_range_um(entity)
+                boundary_key: str | None = None
+                if _same_z(entity_z_max_um, z_start):
+                    boundary_key = "bottom"
+                elif _same_z(entity_z_min_um, z_end):
+                    boundary_key = "top"
+                if boundary_key is None:
+                    continue
+                entity_region = _solution_entity_xy_region(gdstk, entity)
+                if _boolean_gdstk_region(
+                    gdstk,
+                    component_region,
+                    entity_region,
+                    "and",
+                ):
+                    boundary_entity_ids[boundary_key].append(entity.semantic_id)
             component_index += 1
             component_id = (
                 auto_region.semantic_id
@@ -313,11 +343,16 @@ def _prepare_auto_vacuum_solution_regions(
                         **auto_metadata,
                         "is_auto_vacuum_region": True,
                         "auto_vacuum_group_id": auto_region.semantic_id,
+                        "auto_vacuum_envelope_outer_loop": envelope_loop,
                         "auto_vacuum_component_index": component_index,
                         "auto_vacuum_z_range_um": (float(z_start), float(z_end)),
-                        "auto_vacuum_subtracting_solution_ids": tuple(
-                            sorted(set(active_subtractors))
+                        "auto_vacuum_subtracting_entity_ids": tuple(
+                            component_subtractor_ids
                         ),
+                        "auto_vacuum_boundary_entity_ids": {
+                            boundary_key: tuple(sorted(set(entity_ids)))
+                            for boundary_key, entity_ids in boundary_entity_ids.items()
+                        },
                     },
                     polygon_ids=(),
                     labels=(),
@@ -369,7 +404,7 @@ def _auto_vacuum_entity_xy_bounds(
         required = ("x_min_um", "x_max_um", "y_min_um", "y_max_um")
         missing = [name for name in required if name not in domain_bounds]
         if missing:
-            raise ValueError(
+            raise TypeError(
                 f"{entity.semantic_id} has missing {tuple(missing)} in domain_bounds_um for auto vacuum envelope."
             )
         values = [domain_bounds.get(name) for name in required]
@@ -691,6 +726,14 @@ def build_route_construction_plan(
             surface_partitions=surface_partitions,
             construction_bodies=construction_bodies,
             mm_contacts=mm_contacts,
+        ),
+    )
+    surfaces = _timed(
+        timings,
+        "reconcile_solution_domain_boundaries",
+        lambda: _reconcile_solution_domain_boundaries(
+            build_input,
+            surfaces=surfaces,
         ),
     )
     if route in {"A", "B"} and build_input.port_sheet_regions:
@@ -2509,14 +2552,6 @@ def plan_route_surfaces(
         representation = entity.route_representations.get(route)
         if representation in {"cutout_boundary_shell", "material_volume"}:
             for shell_part in ("top", "bottom"):
-                adjacent_id = _conductor_face_adjacent_solution_id(
-                    build_input,
-                    entity,
-                    shell_part,
-                )
-                interface_kind = _conductor_solution_interface_kind(
-                    _entity_by_id(build_input, adjacent_id)
-                )
                 base_surface_id = _conductor_boundary_surface_id(
                     route,
                     entity,
@@ -2545,6 +2580,16 @@ def plan_route_surfaces(
                             else ()
                         ),
                     ),
+                )
+                if not face_geometry_refs:
+                    continue
+                adjacent_id = _conductor_face_adjacent_solution_id(
+                    build_input,
+                    entity,
+                    shell_part,
+                )
+                interface_kind = _conductor_solution_interface_kind(
+                    _entity_by_id(build_input, adjacent_id)
                 )
                 for face_index, face_geometry_ref in enumerate(face_geometry_refs):
                     surface_id = (
@@ -2604,22 +2649,27 @@ def plan_route_surfaces(
                             },
                         )
                     )
-            sidewall_adjacent_id = _conductor_sidewall_adjacent_solution_id(
-                build_input,
-                entity,
+            sidewall_adjacent_id = (
+                _conductor_sidewall_adjacent_solution_id(build_input, entity)
+                if route == "C"
+                else None
             )
-            sidewall_geometry_refs = _conductor_sidewall_geometry_refs(
-                build_input,
-                route=route,
-                entity=entity,
-                representation=representation,
-                adjacent_solution_id=sidewall_adjacent_id,
-                interfaces=interfaces,
-                excluded_footprints=(
-                    normalized_sheet_loops.get(entity.semantic_id, ())
-                    if route == "B" and entity.part_role == "face_metal"
-                    else ()
-                ),
+            sidewall_geometry_refs = (
+                ()
+                if route == "C" and sidewall_adjacent_id is None
+                else _conductor_sidewall_geometry_refs(
+                    build_input,
+                    route=route,
+                    entity=entity,
+                    representation=representation,
+                    adjacent_solution_id=sidewall_adjacent_id,
+                    interfaces=interfaces,
+                    excluded_footprints=(
+                        normalized_sheet_loops.get(entity.semantic_id, ())
+                        if route == "B" and entity.part_role == "face_metal"
+                        else ()
+                    ),
+                )
             )
             for edge_index, geometry_ref in enumerate(sidewall_geometry_refs):
                 shell_part = f"sidewall_{edge_index:04d}"
@@ -2633,14 +2683,21 @@ def plan_route_surfaces(
                 sidewall_adjacent_owner_id = str(
                     geometry_ref.get(
                         "adjacent_conductor_semantic_id",
-                        sidewall_adjacent_id,
+                        geometry_ref.get("adjacent_solution_id", sidewall_adjacent_id),
                     )
                 )
+                if (
+                    not sidewall_adjacent_owner_id
+                    or sidewall_adjacent_owner_id == "None"
+                ):
+                    raise ValueError(
+                        f"{entity.semantic_id} sidewall lacks exact adjacent solution provenance."
+                    )
                 sidewall_interface_kind = (
                     "MM"
                     if "adjacent_conductor_semantic_id" in geometry_ref
                     else _conductor_solution_interface_kind(
-                        _entity_by_id(build_input, sidewall_adjacent_id)
+                        _entity_by_id(build_input, sidewall_adjacent_owner_id)
                     )
                 )
                 sidewall_interface_id = (
@@ -4923,6 +4980,49 @@ def _loops_share_edge_overlap(
     )
 
 
+def _auto_vacuum_component_contacts_subtractor(
+    gdstk: Any,
+    *,
+    component_geometry_ref: Mapping[str, Any],
+    subtractor: SemanticEntitySpec,
+) -> bool:
+    """Whether a subtractor owns an exact boundary on one vacuum component.
+
+    A z-slab can have multiple disconnected complement components.  The ledger
+    must therefore record only a subtractor whose canonical planar boundary
+    shares a nonzero segment with this component, rather than every obstacle
+    active in the slab.  This remains geometry/topology bookkeeping; semantic
+    identity comes from the pre-existing structured entity record.
+    """
+    subtractor_region = _solution_entity_xy_region(gdstk, subtractor)
+    if not subtractor_region:
+        return False
+    base_geometry_ref: dict[str, Any]
+    if "outer_loop" in subtractor.geometry:
+        base_geometry_ref = {"outer_loop": subtractor.geometry["outer_loop"]}
+    else:
+        base_geometry_ref = {
+            "outer_loop": _domain_bounds_loop(_solution_bounds(subtractor))
+        }
+    subtractor_refs = _geometry_refs_from_gdstk_region(
+        base_geometry_ref,
+        subtractor_region,
+    )
+    component_loops = (
+        _clean_loop(component_geometry_ref["outer_loop"]),
+        *(_clean_loop(loop) for loop in component_geometry_ref.get("hole_loops", ())),
+    )
+    return any(
+        _loops_share_edge_overlap(component_loop, subtractor_loop)
+        for component_loop in component_loops
+        for subtractor_ref in subtractor_refs
+        for subtractor_loop in (
+            _clean_loop(subtractor_ref["outer_loop"]),
+            *(_clean_loop(loop) for loop in subtractor_ref.get("hole_loops", ())),
+        )
+    )
+
+
 def _entity_occupied_region(gdstk: Any, entity: SemanticEntitySpec) -> tuple[Any, ...]:
     if "outer_loop" not in entity.geometry:
         return ()
@@ -5175,6 +5275,134 @@ def _merge_solution_sidewall_interfaces(
     return tuple(grouped_surfaces)
 
 
+def _reconcile_solution_domain_boundaries(
+    build_input: GeometryBuildInput,
+    *,
+    surfaces: tuple[SurfacePlanRecord, ...],
+) -> tuple[SurfacePlanRecord, ...]:
+    """Reuse live structured interfaces in place of duplicate domain faces.
+
+    A domain boundary is only replaced by a surface that explicitly names the
+    same solution volume in its structured boundary ownership. Horizontal
+    regions are reconciled by exact planar Boolean residuals; sidewalls are
+    removed only for one-for-one canonical face equality. Partial vertical
+    overlap remains an error for the existing topology validators to expose.
+    """
+    import gdstk
+
+    solution_ids = {
+        entity.semantic_id
+        for entity in build_input.entities
+        if _is_solution_entity(entity)
+    }
+    retained: list[SurfacePlanRecord] = []
+    non_domain_surfaces = tuple(
+        surface
+        for surface in surfaces
+        if not surface.construction_only
+        and surface.solver_use == "solver_active"
+        and surface.surface_role != "domain_boundary"
+    )
+    for surface in surfaces:
+        if surface.construction_only or surface.surface_role != "domain_boundary":
+            retained.append(surface)
+            continue
+        boundary_ids = _surface_boundary_volume_ids(
+            surface,
+            known_entity_ids=solution_ids,
+        )
+        if len(boundary_ids) != 1:
+            retained.append(surface)
+            continue
+        owner_id = boundary_ids[0]
+        candidates = tuple(
+            candidate
+            for candidate in non_domain_surfaces
+            if owner_id
+            in _surface_boundary_volume_ids(
+                candidate,
+                known_entity_ids=solution_ids,
+            )
+        )
+        if not candidates:
+            retained.append(surface)
+            continue
+        if "quad_points" in surface.geometry_ref:
+            domain_specs = _surface_ring3d_specs(surface)
+            domain_signature = (
+                _canonical_face_signature_3d(domain_specs[0][2])
+                if len(domain_specs) == 1
+                else None
+            )
+            if domain_signature is not None and any(
+                len(candidate_specs := _surface_ring3d_specs(candidate)) == 1
+                and _canonical_face_signature_3d(candidate_specs[0][2])
+                == domain_signature
+                for candidate in candidates
+            ):
+                continue
+            retained.append(surface)
+            continue
+        if "outer_loop" not in surface.geometry_ref:
+            retained.append(surface)
+            continue
+        plane_z_um = _geometry_ref_surface_z_um(surface.geometry_ref)
+        planar_candidates = tuple(
+            candidate
+            for candidate in candidates
+            if "quad_points" not in candidate.geometry_ref
+            and "outer_loop" in candidate.geometry_ref
+            and _same_z(
+                _geometry_ref_surface_z_um(candidate.geometry_ref),
+                plane_z_um,
+            )
+        )
+        if not planar_candidates:
+            retained.append(surface)
+            continue
+        replacement_region: tuple[Any, ...] = ()
+        for candidate in sorted(planar_candidates, key=lambda item: item.surface_id):
+            candidate_region = _gdstk_surface_region(candidate.geometry_ref)
+            replacement_region = (
+                candidate_region
+                if not replacement_region
+                else _boolean_gdstk_region(
+                    gdstk,
+                    replacement_region,
+                    candidate_region,
+                    "or",
+                )
+            )
+        residual_region = _boolean_gdstk_region(
+            gdstk,
+            _gdstk_surface_region(surface.geometry_ref),
+            replacement_region,
+            "not",
+        )
+        residual_refs = tuple(
+            sorted(
+                _geometry_refs_from_gdstk_region(surface.geometry_ref, residual_region),
+                key=lambda geometry_ref: _loop_signature(geometry_ref["outer_loop"]),
+            )
+        )
+        if not residual_refs:
+            continue
+        for index, geometry_ref in enumerate(residual_refs):
+            surface_id = (
+                surface.surface_id
+                if len(residual_refs) == 1
+                else f"{surface.surface_id}__R{index:04d}"
+            )
+            retained.append(
+                replace(
+                    surface,
+                    surface_id=surface_id,
+                    geometry_ref=geometry_ref,
+                )
+            )
+    return tuple(retained)
+
+
 def _plan_solution_domain_boundary_surfaces(
     build_input: GeometryBuildInput,
     *,
@@ -5198,29 +5426,32 @@ def _plan_solution_domain_boundary_surfaces(
         if len(loop) < 3:
             continue
         for boundary_role in ("bottom", "top"):
-            geometry_ref = _solution_exterior_face_geometry_ref(
+            geometry_refs = _solution_exterior_face_geometry_refs(
                 build_input,
                 entity,
                 boundary_role,
             )
-            if geometry_ref is None:
-                continue
-            records.append(
-                SurfacePlanRecord(
-                    surface_id=(
-                        f"SURF__BOUNDARY__{entity.semantic_id}__{boundary_role.upper()}"
-                    ),
-                    owner_semantic_id=entity.semantic_id,
-                    surface_role="domain_boundary",
-                    geometry_ref=geometry_ref,
-                    valid_routes=(route,),
-                    metadata={
-                        "owner_semantic_ids": (entity.semantic_id,),
-                        "boundary_volume_ids": (entity.semantic_id,),
-                        "boundary_role": boundary_role,
-                    },
+            for component_index, geometry_ref in enumerate(geometry_refs):
+                component_suffix = (
+                    "" if len(geometry_refs) == 1 else f"__{component_index:04d}"
                 )
-            )
+                records.append(
+                    SurfacePlanRecord(
+                        surface_id=(
+                            f"SURF__BOUNDARY__{entity.semantic_id}__"
+                            f"{boundary_role.upper()}{component_suffix}"
+                        ),
+                        owner_semantic_id=entity.semantic_id,
+                        surface_role="domain_boundary",
+                        geometry_ref=geometry_ref,
+                        valid_routes=(route,),
+                        metadata={
+                            "owner_semantic_ids": (entity.semantic_id,),
+                            "boundary_volume_ids": (entity.semantic_id,),
+                            "boundary_role": boundary_role,
+                        },
+                    )
+                )
         for edge_index, geometry_ref in enumerate(
             _solution_domain_sidewall_geometry_refs(
                 build_input,
@@ -5293,6 +5524,23 @@ def _cutout_shell_surface_ids(
                 f"{base_surface_id}__P{index:04d}"
                 for index, _ in enumerate(face_geometry_refs)
             )
+    sidewall_adjacent_id = (
+        _conductor_sidewall_adjacent_solution_id(build_input, entity)
+        if route == "C"
+        else None
+    )
+    sidewall_refs = (
+        ()
+        if route == "C" and sidewall_adjacent_id is None
+        else _conductor_sidewall_geometry_refs(
+            build_input,
+            route=route,
+            entity=entity,
+            representation="cutout_boundary_shell",
+            adjacent_solution_id=sidewall_adjacent_id,
+            interfaces=interfaces,
+        )
+    )
     sidewall_ids = tuple(
         _conductor_boundary_surface_id(
             route,
@@ -5300,19 +5548,7 @@ def _cutout_shell_surface_ids(
             "cutout_boundary_shell",
             f"sidewall_{edge_index:04d}",
         )
-        for edge_index, _ in enumerate(
-            _conductor_sidewall_geometry_refs(
-                build_input,
-                route=route,
-                entity=entity,
-                representation="cutout_boundary_shell",
-                adjacent_solution_id=_conductor_sidewall_adjacent_solution_id(
-                    build_input,
-                    entity,
-                ),
-                interfaces=interfaces,
-            )
-        )
+        for edge_index, _ in enumerate(sidewall_refs)
     )
     return (*top_bottom_ids, *sidewall_ids)
 
@@ -5681,47 +5917,69 @@ def _conductor_face_adjacent_solution_id(
 ) -> str:
     z_min_um, z_max_um = _entity_z_range_um(entity)
     face_z_um = z_min_um if face == "bottom" else z_max_um
-    points = _entity_polygon_centroids(build_input, entity)
-    exact = _solution_id_for_points(build_input, points, z_um=face_z_um, mode=face)
+    auto_parent, auto_component = _auto_vacuum_host_component_id(
+        build_input,
+        entity=entity,
+        relation=face,
+        z_um=face_z_um,
+    )
+    if auto_component is not None:
+        return auto_component
+    if auto_parent:
+        non_auto_solution = _solution_id_for_entity_coverage(
+            build_input,
+            entity,
+            z_um=face_z_um,
+            mode=face,
+            include_auto_vacuum=False,
+        )
+        if non_auto_solution is not None:
+            return non_auto_solution
+        raise ValueError(
+            f"{entity.semantic_id} {face} has no local auto-vacuum component."
+        )
+    exact = _solution_id_for_entity_coverage(
+        build_input,
+        entity,
+        z_um=face_z_um,
+        mode=face,
+    )
     if exact is not None:
         return exact
-    containing = _solution_id_for_points(
-        build_input, points, z_um=face_z_um, mode="containing"
+    containing = _solution_id_for_entity_coverage(
+        build_input,
+        entity,
+        z_um=face_z_um,
+        mode="containing",
     )
     if containing is not None:
         return containing
     raise ValueError(f"{entity.semantic_id} {face} face has no adjacent solution")
 
 
-def _entity_polygon_centroids(
-    build_input: GeometryBuildInput, entity: SemanticEntitySpec
-) -> tuple[tuple[float, float], ...]:
-    """Return actual adapter polygon samples, never a layer-name or bbox proxy."""
-    if "outer_loop" in entity.geometry:
-        return (_loop_centroid(entity.geometry["outer_loop"]),)
-    polygons = {polygon.polygon_id: polygon for polygon in build_input.polygons}
-    try:
-        loops = tuple(
-            polygons[polygon_id].exterior for polygon_id in entity.polygon_ids
-        )
-    except KeyError as exc:
-        raise ValueError(
-            f"{entity.semantic_id} references an unknown layout polygon"
-        ) from exc
-    if not loops:
-        raise ValueError(f"{entity.semantic_id} has no layout polygons")
-    return tuple(_loop_centroid(loop) for loop in loops)
-
-
 def _conductor_sidewall_adjacent_solution_id(
     build_input: GeometryBuildInput,
     entity: SemanticEntitySpec,
-) -> str:
+) -> str | None:
     z_min_um, z_max_um = _entity_z_range_um(entity)
     mid_z_um = (z_min_um + z_max_um) / 2.0
-    solution_id = _solution_id_for_points(
+    auto_parent, auto_component = _auto_vacuum_host_component_id(
         build_input,
-        _entity_polygon_centroids(build_input, entity),
+        entity=entity,
+        relation="sidewall",
+        z_um=mid_z_um,
+    )
+    if auto_component is not None:
+        return auto_component
+    if auto_parent:
+        if _auto_vacuum_sidewall_is_exterior_only(build_input, entity):
+            return None
+        raise ValueError(
+            f"{entity.semantic_id} sidewall has no local auto-vacuum component."
+        )
+    solution_id = _solution_id_for_entity_coverage(
+        build_input,
+        entity,
         z_um=mid_z_um,
         mode="containing",
     )
@@ -5730,42 +5988,281 @@ def _conductor_sidewall_adjacent_solution_id(
     raise ValueError(f"{entity.semantic_id} sidewall has no adjacent solution")
 
 
-def _solution_id_for_points(
+def _auto_vacuum_host_component_id(
     build_input: GeometryBuildInput,
-    points: Sequence[tuple[float, float]],
+    *,
+    entity: SemanticEntitySpec,
+    relation: str,
+    z_um: float,
+) -> tuple[bool, str | None]:
+    """Resolve an explicitly authored auto-vacuum parent to one child only.
+
+    This uses only the parent group recorded on an auto-vacuum component, the
+    exact subtractor entity ledger for that component, and the declared z
+    relation. It intentionally does not sample geometry, physical labels, or
+    bounding boxes, and fails rather than choosing across multiple components.
+    """
+    host_id = entity.host_void_semantic_id
+    if not isinstance(host_id, str) or not host_id:
+        raise ValueError(f"{entity.semantic_id} requires host_void_semantic_id")
+    components = []
+    has_parent = False
+    for solution in _solution_entities(build_input):
+        metadata = solution.metadata
+        if metadata.get("auto_vacuum_group_id") != host_id:
+            continue
+        has_parent = True
+        if relation == "sidewall":
+            entity_ids = metadata.get("auto_vacuum_subtracting_entity_ids")
+            if isinstance(entity_ids, str | bytes) or not isinstance(
+                entity_ids, Sequence
+            ):
+                raise TypeError(
+                    f"auto-vacuum component {solution.semantic_id!r} lacks an entity subtractor ledger"
+                )
+        elif relation in {"bottom", "top"}:
+            boundary_entity_ids = metadata.get("auto_vacuum_boundary_entity_ids")
+            if not isinstance(boundary_entity_ids, Mapping):
+                raise TypeError(
+                    f"auto-vacuum component {solution.semantic_id!r} lacks a boundary entity ledger"
+                )
+            boundary_key = "top" if relation == "bottom" else "bottom"
+            entity_ids = boundary_entity_ids.get(boundary_key)
+            if isinstance(entity_ids, str | bytes) or not isinstance(
+                entity_ids, Sequence
+            ):
+                raise TypeError(
+                    f"auto-vacuum component {solution.semantic_id!r} has invalid {boundary_key!r} boundary ledger"
+                )
+        else:
+            raise ValueError(f"unsupported auto-vacuum face relation {relation!r}")
+        if entity.semantic_id not in entity_ids:
+            continue
+        z_min = float(solution.geometry["z_min_um"])
+        z_max = float(solution.geometry["z_max_um"])
+        if relation == "sidewall":
+            matches = z_min < z_um < z_max
+        elif relation == "bottom":
+            matches = _same_z(z_max, z_um)
+        else:
+            matches = _same_z(z_min, z_um)
+        if matches:
+            components.append(solution.semantic_id)
+    if not has_parent:
+        return False, None
+    if len(components) > 1:
+        raise ValueError(
+            f"{entity.semantic_id} {relation} requires exactly one structured "
+            f"auto-vacuum component for parent {host_id!r}; got {components!r}."
+        )
+    return True, components[0] if components else None
+
+
+def _auto_vacuum_sidewall_ref_solution_id(
+    build_input: GeometryBuildInput,
+    *,
+    entity: SemanticEntitySpec,
+    geometry_ref: Mapping[str, Any],
+) -> tuple[bool, str | None]:
+    """Resolve one retained sidewall segment to one explicit vacuum child.
+
+    Auto-vacuum parents may deliberately contain disconnected components.  A
+    finite conductor can then have opposite sidewalls adjacent to different
+    components.  This resolver uses the per-component subtractor ledger and
+    complete canonical boundary-segment coverage for *this* sidewall, never a
+    centroid, bounding box, physical label, or parent-level choice.
+    """
+    host_id = entity.host_void_semantic_id
+    if not isinstance(host_id, str) or not host_id:
+        raise ValueError(f"{entity.semantic_id} requires host_void_semantic_id")
+    points = geometry_ref.get("quad_points", ())
+    if len(points) != 4:
+        raise ValueError(f"{entity.semantic_id} sidewall requires four quad points")
+    start = (float(points[0][0]), float(points[0][1]))
+    end = (float(points[1][0]), float(points[1][1]))
+    if _segment_overlap_interval(start, end, start, end) is None:
+        raise ValueError(f"{entity.semantic_id} sidewall has degenerate XY segment")
+    z_values = tuple(float(point[2]) for point in points)
+    z_min_um, z_max_um = min(z_values), max(z_values)
+    if not z_max_um > z_min_um:
+        raise ValueError(f"{entity.semantic_id} sidewall has non-positive z extent")
+    matches: list[str] = []
+    has_parent = False
+    for solution in _solution_entities(build_input):
+        metadata = solution.metadata
+        if metadata.get("auto_vacuum_group_id") != host_id:
+            continue
+        has_parent = True
+        entity_ids = metadata.get("auto_vacuum_subtracting_entity_ids")
+        if isinstance(entity_ids, str | bytes) or not isinstance(entity_ids, Sequence):
+            raise TypeError(
+                f"auto-vacuum component {solution.semantic_id!r} lacks an entity subtractor ledger"
+            )
+        if entity.semantic_id not in entity_ids:
+            continue
+        solution_z_min_um = float(solution.geometry["z_min_um"])
+        solution_z_max_um = float(solution.geometry["z_max_um"])
+        if not (
+            _same_z(solution_z_min_um, z_min_um)
+            and _same_z(solution_z_max_um, z_max_um)
+        ):
+            continue
+        if _sidewall_segment_is_component_boundary(start, end, solution):
+            matches.append(solution.semantic_id)
+    if not has_parent:
+        return False, None
+    if len(matches) != 1:
+        raise ValueError(
+            f"{entity.semantic_id} sidewall segment {start!r}->{end!r} requires "
+            f"exactly one auto-vacuum child for parent {host_id!r}; got {matches!r}."
+        )
+    return True, matches[0]
+
+
+def _sidewall_segment_is_component_boundary(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    solution: SemanticEntitySpec,
+) -> bool:
+    """Require a component's canonical outer/hole edges to cover one segment."""
+    outer_loop = solution.geometry.get("outer_loop")
+    if outer_loop is None:
+        raise ValueError(
+            f"auto-vacuum component {solution.semantic_id!r} lacks outer_loop."
+        )
+    intervals = tuple(
+        interval
+        for loop in (outer_loop, *solution.geometry.get("hole_loops", ()))
+        for edge_start, edge_end in _ring_edges(_clean_loop(loop))
+        if (interval := _segment_overlap_interval(start, end, edge_start, edge_end))
+        is not None
+    )
+    return not _interval_complement(intervals)
+
+
+def _auto_vacuum_sidewall_is_exterior_only(
+    build_input: GeometryBuildInput,
+    entity: SemanticEntitySpec,
+) -> bool:
+    """Whether every unmatched finite sidewall is an exact parent-envelope edge."""
+    z_min, z_max = _entity_z_range_um(entity)
+    if z_max <= z_min:
+        raise ValueError(f"{entity.semantic_id} has non-positive sidewall extent.")
+    base_ref = _route_entity_geometry_ref(
+        build_input,
+        "B",
+        entity,
+        representation="cutout_boundary_shell",
+    )
+    sidewalls = _sidewall_geometry_refs(base_ref)
+    if not sidewalls:
+        raise ValueError(f"{entity.semantic_id} has no sidewall edge references.")
+    for sidewall in sidewalls:
+        if not _sidewall_is_auto_vacuum_envelope_edge(
+            build_input,
+            entity=entity,
+            geometry_ref=sidewall,
+        ):
+            return False
+    return True
+
+
+def _sidewall_is_auto_vacuum_envelope_edge(
+    build_input: GeometryBuildInput,
+    *,
+    entity: SemanticEntitySpec,
+    geometry_ref: Mapping[str, Any],
+) -> bool:
+    """Return whether one exact sidewall base edge is on an auto envelope."""
+    host_id = entity.host_void_semantic_id
+    envelopes = {
+        tuple(tuple(float(value) for value in point) for point in loop)
+        for solution in _solution_entities(build_input)
+        if solution.metadata.get("auto_vacuum_group_id") == host_id
+        for loop in (solution.metadata.get("auto_vacuum_envelope_outer_loop"),)
+        if isinstance(loop, Sequence) and not isinstance(loop, str | bytes)
+    }
+    if not envelopes:
+        return False
+    if len(envelopes) != 1:
+        raise ValueError(
+            f"{entity.semantic_id} auto-vacuum parent {host_id!r} lacks one envelope loop."
+        )
+    quad = geometry_ref.get("quad_points")
+    if not isinstance(quad, Sequence) or len(quad) != 4:
+        raise ValueError(f"{entity.semantic_id} sidewall lacks exact quad geometry.")
+    start = (float(quad[0][0]), float(quad[0][1]))
+    end = (float(quad[1][0]), float(quad[1][1]))
+    envelope = next(iter(envelopes))
+    return _undirected_xy_edge(start, end) in {
+        _undirected_xy_edge(envelope_start, envelope_end)
+        for envelope_start, envelope_end in _ring_edges(envelope)
+    }
+
+
+def _undirected_xy_edge(
+    start: Sequence[float], end: Sequence[float]
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    first = _coordinate_2d_key((float(start[0]), float(start[1])))
+    second = _coordinate_2d_key((float(end[0]), float(end[1])))
+    return tuple(sorted((first, second)))
+
+
+def _solution_id_for_entity_coverage(
+    build_input: GeometryBuildInput,
+    entity: SemanticEntitySpec,
     *,
     z_um: float,
     mode: str,
+    include_auto_vacuum: bool = True,
 ) -> str | None:
-    """Resolve one typed solution for every actual polygon sample."""
-    resolved: list[str] = []
-    for point in points:
-        candidates = []
-        for solution in _solution_entities(build_input):
-            if not _bounds_contains_point(_solution_bounds(solution), point):
-                continue
-            if mode == "bottom":
-                matches = _same_z(float(solution.geometry["z_max_um"]), z_um)
-            elif mode == "top":
-                matches = _same_z(float(solution.geometry["z_min_um"]), z_um)
-            elif mode == "containing":
-                matches = (
-                    float(solution.geometry["z_min_um"])
-                    < z_um
-                    < float(solution.geometry["z_max_um"])
-                )
-            else:
-                raise ValueError(f"unsupported solution adjacency mode {mode!r}")
-            if matches:
-                candidates.append(solution.semantic_id)
-        if not candidates:
-            return None
-        if len(candidates) != 1:
-            raise ValueError("geometry sample touches multiple solution volumes")
-        resolved.append(candidates[0])
-    if len(set(resolved)) != 1:
-        raise ValueError("one semantic entity spans multiple solution volumes")
-    return resolved[0]
+    """Resolve one exact solution cover for a structured conductor footprint.
+
+    This is topology coverage, not a centroid or bounds proxy: every occupied
+    polygon point must be inside one candidate solution region at the declared
+    z relation. Disjoint covers therefore fail instead of assigning one part
+    of a conductor to an arbitrary solution volume.
+    """
+    import gdstk
+
+    occupied_region = _entity_occupied_region(gdstk, entity)
+    if not occupied_region:
+        raise ValueError(f"{entity.semantic_id} has no occupied geometry region.")
+    candidates: list[str] = []
+    for solution in _solution_entities(build_input):
+        if not include_auto_vacuum and bool(
+            solution.metadata.get("is_auto_vacuum_region")
+        ):
+            continue
+        if mode == "bottom":
+            matches = _same_z(float(solution.geometry["z_max_um"]), z_um)
+        elif mode == "top":
+            matches = _same_z(float(solution.geometry["z_min_um"]), z_um)
+        elif mode == "containing":
+            matches = (
+                float(solution.geometry["z_min_um"])
+                < z_um
+                < float(solution.geometry["z_max_um"])
+            )
+        else:
+            raise ValueError(f"unsupported solution adjacency mode {mode!r}")
+        if not matches:
+            continue
+        uncovered_region = _boolean_gdstk_region(
+            gdstk,
+            occupied_region,
+            _solution_entity_xy_region(gdstk, solution),
+            "not",
+        )
+        if not uncovered_region:
+            candidates.append(solution.semantic_id)
+    if not candidates:
+        return None
+    if len(candidates) != 1:
+        raise ValueError(
+            f"{entity.semantic_id} {mode} footprint has ambiguous exact solution coverage: {candidates!r}"
+        )
+    return candidates[0]
 
 
 def _conductor_solution_interface_kind(solution: SemanticEntitySpec) -> str:
@@ -5898,22 +6395,18 @@ def _solution_interface_owner_ids(
     return (lower.semantic_id, upper.semantic_id)
 
 
-def _solution_exterior_face_geometry_ref(
+def _solution_exterior_face_geometry_refs(
     build_input: GeometryBuildInput,
     entity: SemanticEntitySpec,
     face: str,
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any], ...]:
     import gdstk
 
     z_key = "z_max_um" if face == "top" else "z_min_um"
     z_um = float(entity.geometry[z_key])
     base_region = _solution_entity_xy_region(gdstk, entity)
     if not base_region:
-        return None
-    if len(base_region) != 1:
-        raise ValueError(
-            f"{entity.semantic_id} has disconnected face loops; expected one exterior face"
-        )
+        return ()
     subtractor_region: tuple[Any, ...] = ()
     for other in _solution_entities(build_input):
         if other.semantic_id == entity.semantic_id:
@@ -5943,20 +6436,21 @@ def _solution_exterior_face_geometry_ref(
         "not",
     )
     if not residual_region:
-        return None
-    if len(residual_region) != 1:
-        raise ValueError(
-            f"{entity.semantic_id} {face} exterior has disconnected face loops"
-        )
-    geometry_ref = _geometry_ref_from_gdstk_polygon(
-        {
-            "plane": {"axis": "z", "value_um": z_um},
-        },
-        residual_region[0],
+        return ()
+    geometry_refs = _geometry_refs_from_gdstk_region(
+        {"plane": {"axis": "z", "value_um": z_um}},
+        residual_region,
     )
-    if not geometry_ref["outer_loop"]:
-        return None
-    return geometry_ref
+    return tuple(
+        sorted(
+            (
+                geometry_ref
+                for geometry_ref in geometry_refs
+                if geometry_ref["outer_loop"]
+            ),
+            key=lambda geometry_ref: _loop_signature(geometry_ref["outer_loop"]),
+        )
+    )
 
 
 def _solution_entities(
@@ -6130,7 +6624,7 @@ def _conductor_sidewall_geometry_refs(
     route: RouteLiteral,
     entity: SemanticEntitySpec,
     representation: str,
-    adjacent_solution_id: str,
+    adjacent_solution_id: str | None,
     interfaces: tuple[InterfacePlanRecord, ...] = (),
     excluded_footprints: Sequence[tuple[tuple[float, float], ...]] = (),
 ) -> tuple[dict[str, Any], ...]:
@@ -6153,23 +6647,68 @@ def _conductor_sidewall_geometry_refs(
         entity=entity,
     )
     if route == "C":
+        if adjacent_solution_id is None:
+            raise ValueError(
+                f"{entity.semantic_id} Route C sidewall requires a solution."
+            )
         return _route_c_conductor_sidewall_geometry_refs(
             entity=entity,
             adjacent_solution=_entity_by_id(build_input, adjacent_solution_id),
             refs=refs,
             edge_index=edge_index,
         )
-    adjacent_solution = _entity_by_id(build_input, adjacent_solution_id)
     exposed_refs: list[dict[str, Any]] = []
-    for geometry_ref in refs:
-        if _sidewall_on_solution_outer_boundary(geometry_ref, adjacent_solution):
+    for raw_geometry_ref in refs:
+        if _sidewall_is_auto_vacuum_envelope_edge(
+            build_input,
+            entity=entity,
+            geometry_ref=raw_geometry_ref,
+        ):
             continue
-        exposed_refs.extend(
-            _trim_sidewall_ref_against_route_conductors(
-                geometry_ref=geometry_ref,
-                edge_index=edge_index,
+        # Exact same-z conductor contacts remove their shared MM segment
+        # before solution adjacency is selected.  One raw sidewall can span
+        # contact and vacuum portions; only each retained topology segment is
+        # eligible for a unique auto-vacuum child.
+        for geometry_ref in _trim_sidewall_ref_against_route_conductors(
+            geometry_ref=raw_geometry_ref,
+            edge_index=edge_index,
+        ):
+            auto_parent, ref_adjacent_solution_id = (
+                _auto_vacuum_sidewall_ref_solution_id(
+                    build_input,
+                    entity=entity,
+                    geometry_ref=geometry_ref,
+                )
             )
-        )
+            if auto_parent:
+                if ref_adjacent_solution_id is None:
+                    raise ValueError(
+                        f"{entity.semantic_id} sidewall has no exact auto-vacuum child."
+                    )
+            else:
+                if adjacent_solution_id is None:
+                    adjacent_solution_id = _conductor_sidewall_adjacent_solution_id(
+                        build_input,
+                        entity,
+                    )
+                if adjacent_solution_id is None:
+                    continue
+                ref_adjacent_solution_id = adjacent_solution_id
+            adjacent_solution = _entity_by_id(build_input, ref_adjacent_solution_id)
+            # The explicit parent-envelope check above is the only exterior rule
+            # for auto-vacuum children. A disconnected child's rectangular bounds
+            # can coincide with a conductor hole edge, which is not an exterior
+            # boundary and must retain its exact child adjacency.
+            if not auto_parent and _sidewall_on_solution_outer_boundary(
+                geometry_ref, adjacent_solution
+            ):
+                continue
+            exposed_refs.append(
+                {
+                    **geometry_ref,
+                    "adjacent_solution_id": ref_adjacent_solution_id,
+                }
+            )
     return tuple(exposed_refs)
 
 
