@@ -32,7 +32,7 @@ class ResolvedRun:
 def resolve_results(run_dir: str | Path) -> ResolvedRun:
     """Return results only when a complete exact receipt proves every artifact."""
     root = Path(run_dir).resolve()
-    receipt_path = _contained(root, "metadata/hfss_run_receipt.json")
+    receipt_path = _contained(root, "metadata/aedt_run_receipt.json")
     if not receipt_path.is_file():
         raise FileNotFoundError(f"run receipt is missing: {receipt_path}")
     receipt = read_json(receipt_path)
@@ -55,11 +55,11 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
     source = receipt.get("source")
     if (
         not isinstance(source, dict)
-        or source.get("spec") != "hfss_driven_spec.json"
+        or source.get("spec") != "aedt_spec.json"
         or source.get("gds") != "geometry/design.gds"
     ):
         raise RuntimeError("receipt source paths are not canonical")
-    spec_path = _verified(root, "hfss_driven_spec.json", source, "spec_sha256")
+    spec_path = _verified(root, "aedt_spec.json", source, "spec_sha256")
     _verified(root, "geometry/design.gds", source, "gds_sha256")
     spec = parse_hfss_spec(read_json(spec_path), base_dir=root)
     mode = receipt.get("mode")

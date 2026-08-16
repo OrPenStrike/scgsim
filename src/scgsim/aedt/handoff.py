@@ -51,12 +51,12 @@ def prepare_handoff(*, spec: HfssSpec, output_dir: str | Path) -> HandoffPlan:
     shutil.copy2(source_gds, copied_gds)
 
     portable_spec = replace(spec, gds_path=Path("geometry/design.gds"))
-    script_path = run_dir / "run_hfss.sh"
-    spec_path = run_dir / "hfss_driven_spec.json"
-    metadata_path = metadata_dir / "hfss_handoff_metadata.json"
-    receipt_path = metadata_dir / "hfss_run_receipt.json"
-    manifest_path = metadata_dir / "hfss_handoff_manifest.json"
-    archive_path = run_dir / "hfss_handoff.tar.gz"
+    script_path = run_dir / "run_aedt.sh"
+    spec_path = run_dir / "aedt_spec.json"
+    metadata_path = metadata_dir / "aedt_handoff_metadata.json"
+    receipt_path = metadata_dir / "aedt_run_receipt.json"
+    manifest_path = metadata_dir / "aedt_handoff_manifest.json"
+    archive_path = run_dir / "aedt_handoff.tar.gz"
     prepared_at = _utc_now()
     started = time.perf_counter()
 
@@ -78,7 +78,7 @@ def prepare_handoff(*, spec: HfssSpec, output_dir: str | Path) -> HandoffPlan:
             "files": {
                 "spec": spec_path.name,
                 "gds": "geometry/design.gds",
-                "receipt": "metadata/hfss_run_receipt.json",
+                "receipt": "metadata/aedt_run_receipt.json",
             },
             "gds_sha256": file_sha256(copied_gds),
             "gds_preflight": {
@@ -239,7 +239,7 @@ def _write_script(path: Path) -> None:
     path.write_text(
         "#!/usr/bin/env bash\nset -euo pipefail\n"
         'run_dir="$(cd "$(dirname "$0")" && pwd)"\n'
-        'python -m scgsim.aedt.run --handoff "$run_dir/metadata/hfss_handoff_metadata.json" --execute "$@"\n',
+        'python -m scgsim.aedt.run --handoff "$run_dir/metadata/aedt_handoff_metadata.json" --execute "$@"\n',
         encoding="utf-8",
     )
     path.chmod(0o755)

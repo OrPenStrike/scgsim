@@ -29,9 +29,7 @@ from .util import file_sha256, read_json, write_csv, write_json
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Run one prepared SCGSim HFSS CPW handoff"
-    )
+    parser = argparse.ArgumentParser(description="Run one prepared SCGSim AEDT handoff")
     parser.add_argument("--handoff", required=True)
     parser.add_argument(
         "--execute",
@@ -44,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
         raise FileNotFoundError(f"handoff metadata is missing: {metadata_path}")
     if not args.execute:
         raise RuntimeError(
-            "prepared handoff is not executed; use run_hfss.sh or pass --execute explicitly"
+            "prepared handoff is not executed; use run_aedt.sh or pass --execute explicitly"
         )
     return _execute(metadata_path)
 
@@ -825,7 +823,7 @@ def _verify_touchstone(
 def _canonical_metadata_files(
     metadata: dict[str, Any], metadata_path: Path, run_dir: Path
 ) -> dict[str, str]:
-    expected_path = run_dir / "metadata" / "hfss_handoff_metadata.json"
+    expected_path = run_dir / "metadata" / "aedt_handoff_metadata.json"
     if metadata_path != expected_path:
         raise RuntimeError("handoff metadata path is not canonical")
     if (
@@ -835,9 +833,9 @@ def _canonical_metadata_files(
         raise RuntimeError("handoff metadata schema or status is invalid")
     files = _object(metadata.get("files"), "files")
     expected = {
-        "spec": "hfss_driven_spec.json",
+        "spec": "aedt_spec.json",
         "gds": "geometry/design.gds",
-        "receipt": "metadata/hfss_run_receipt.json",
+        "receipt": "metadata/aedt_run_receipt.json",
     }
     if files != expected:
         raise RuntimeError("handoff metadata file map is not canonical")
@@ -850,11 +848,11 @@ def _verify_prepared_hashes(
     if file_sha256(gds_path) != _text(metadata.get("gds_sha256"), "gds_sha256"):
         raise RuntimeError("copied GDS hash mismatch")
     receipt = _object(
-        read_json(spec_path.parent / "metadata" / "hfss_run_receipt.json"), "receipt"
+        read_json(spec_path.parent / "metadata" / "aedt_run_receipt.json"), "receipt"
     )
     source = _object(receipt.get("source"), "receipt.source")
     if (
-        source.get("spec") != "hfss_driven_spec.json"
+        source.get("spec") != "aedt_spec.json"
         or source.get("gds") != "geometry/design.gds"
     ):
         raise RuntimeError("receipt source paths are not canonical")
