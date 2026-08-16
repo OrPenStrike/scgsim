@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import math
 import os
 import re
 import subprocess
 import time
-from importlib.metadata import PackageNotFoundError, version
+from importlib.metadata import PackageNotFoundError, distribution, version
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -1769,14 +1770,28 @@ def _read_physics_warnings(run_dir: Path) -> dict[str, Any]:
 
 def _runtime_source_identity() -> dict[str, str]:
     """Bind this receipt to the exact SCGSim source bytes that launched AEDT."""
-    source_root = Path(__file__).resolve().parents[3]
-    completed = subprocess.run(
-        ["git", "-C", str(source_root), "rev-parse", "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    revision = completed.stdout.strip()
+    direct_url = distribution("scgsim").read_text("direct_url.json")
+    revision = ""
+    if direct_url is not None:
+        revision = str(json.loads(direct_url).get("vcs_info", {}).get("commit_id", ""))
+    if not revision:
+        source_root = next(
+            (
+                parent
+                for parent in Path(__file__).resolve().parents
+                if (parent / ".git").exists() and (parent / "pyproject.toml").is_file()
+            ),
+            None,
+        )
+        if source_root is None:
+            raise RuntimeError("SCGSim runtime source revision is unavailable")
+        completed = subprocess.run(
+            ["git", "-C", str(source_root), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        revision = completed.stdout.strip()
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise RuntimeError("SCGSim runtime source revision is invalid")
     return {
