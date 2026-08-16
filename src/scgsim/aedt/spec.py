@@ -14,6 +14,7 @@ PdkMaterialKind = Literal["vacuum", "dielectric", "superconductor"]
 Side = Literal["+X", "-X", "+Y", "-Y", "+Z", "-Z"]
 
 SCHEMA_VERSION = "scgsim.aedt.hfss-driven.v1"
+EIGENMODE_SCHEMA_VERSION = "scgsim.aedt.hfss-eigenmode.v1"
 OFFICIAL_PYAEDT_SOURCE_URL = "https://github.com/ansys/pyaedt/tree/v1.3.0"
 LOCKED_PYAEDT = "1.3.0"
 REQUIRED_AEDT_VERSION = "2024.2"
@@ -315,6 +316,98 @@ def _padding(
     return result  # type: ignore[return-value]
 
 
+def _normalize_gds_spec(spec: Any) -> tuple[set[str], set[str]]:
+    """Normalize the shared PDK/GDS model contract for HFSS families."""
+    if (
+        str(spec.aedt_version) != REQUIRED_AEDT_VERSION
+        or str(spec.pyaedt_version) != LOCKED_PYAEDT
+    ):
+        raise ValueError("V1 requires AEDT 2024.2 and PyAEDT 1.3.0")
+    gds = Path(spec.gds_path)
+    if not str(gds) or gds.name in {"", "."}:
+        raise ValueError("gds_path must name a GDS file")
+    object.__setattr__(spec, "gds_path", gds)
+    project = Path(_text(spec.project_name, "project_name"))
+    if project.parent != Path(".") or project.name in {".", ".."}:
+        raise ValueError("project_name must be a single project filename")
+    if not project.stem:
+        raise ValueError("project_name must normalize to a non-empty stem")
+    object.__setattr__(spec, "project_name", project.stem)
+    object.__setattr__(spec, "design_name", _text(spec.design_name, "design_name"))
+    if not isinstance(spec.materials, Mapping):
+        raise TypeError("materials must be a PDK material_id mapping")
+    materials = dict(spec.materials)
+    if (
+        not materials
+        or any(not isinstance(item, PdkMaterial) for item in materials.values())
+        or set(materials) != {item.material_id for item in materials.values()}
+    ):
+        raise ValueError("materials must map each PDK material_id to its record")
+    vacuum_id = _text(spec.vacuum_material_id, "vacuum_material_id")
+    vacuum = materials.get(vacuum_id)
+    if (
+        vacuum is None
+        or vacuum.kind != "vacuum"
+        or vacuum.is_superconducting
+        or vacuum.library_name is None
+        or vacuum.library_name.lower() != "vacuum"
+    ):
+        raise ValueError(
+            "vacuum_material_id must reference non-superconducting PDK vacuum library_name 'vacuum'"
+        )
+    object.__setattr__(spec, "materials", materials)
+    object.__setattr__(spec, "vacuum_material_id", vacuum_id)
+    imports = tuple(spec.layer_imports)
+    if (
+        not imports
+        or len({item.layer for item in imports}) != len(imports)
+        or len({item.layer_name for item in imports}) != len(imports)
+        or any(
+            other.layer_name.startswith(item.layer_name)
+            for item in imports
+            for other in imports
+            if item is not other
+        )
+    ):
+        raise ValueError(
+            "layer_imports must contain unique non-prefixing numeric and destination layer mappings"
+        )
+    object.__setattr__(spec, "layer_imports", imports)
+    bindings = tuple(spec.object_bindings)
+    if (
+        not bindings
+        or len({item.object_name for item in bindings}) != len(bindings)
+        or {item.layer for item in bindings} != {item.layer for item in imports}
+        or any(item.material_id not in materials for item in bindings)
+    ):
+        raise ValueError(
+            "object_bindings must be unique and refer to declared import layers"
+        )
+    object.__setattr__(spec, "object_bindings", bindings)
+    grounds = {item.object_name for item in bindings if item.role == "ground"}
+    signals = {item.object_name for item in bindings if item.role == "signal"}
+    substrates = [item for item in bindings if item.role == "substrate"]
+    if not grounds or not signals or not substrates:
+        raise ValueError(
+            "HFSS model requires explicit signal, ground, and substrate bindings"
+        )
+    if any(
+        not materials[item.material_id].is_superconducting
+        for item in bindings
+        if item.role in {"signal", "ground"}
+    ):
+        raise ValueError("signal and ground bindings require PDK superconductors")
+    if any(
+        materials[item.material_id].is_superconducting
+        or materials[item.material_id].kind != "dielectric"
+        for item in substrates
+    ):
+        raise ValueError(
+            "substrate bindings require non-superconducting PDK dielectrics"
+        )
+    return grounds, signals
+
+
 @dataclass(frozen=True)
 class HfssDrivenSpec:
     """The complete two-port, one-mode, one-setup public CPW handoff spec."""
@@ -337,105 +430,7 @@ class HfssDrivenSpec:
     def __post_init__(self) -> None:
         if self.mode not in {"terminal", "modal"}:
             raise ValueError("mode must be terminal or modal")
-        if (
-            str(self.aedt_version) != REQUIRED_AEDT_VERSION
-            or str(self.pyaedt_version) != LOCKED_PYAEDT
-        ):
-            raise ValueError("V1 requires AEDT 2024.2 and PyAEDT 1.3.0")
-        gds = Path(self.gds_path)
-        if not str(gds) or gds.name in {"", "."}:
-            raise ValueError("gds_path must name a GDS file")
-        object.__setattr__(self, "gds_path", gds)
-        project = Path(_text(self.project_name, "project_name"))
-        if project.parent != Path(".") or project.name in {".", ".."}:
-            raise ValueError("project_name must be a single project filename")
-        project_name = project.stem
-        if not project_name:
-            raise ValueError("project_name must normalize to a non-empty stem")
-        object.__setattr__(self, "project_name", project_name)
-        object.__setattr__(self, "design_name", _text(self.design_name, "design_name"))
-        if not isinstance(self.materials, Mapping):
-            raise TypeError("materials must be a PDK material_id mapping")
-        material_by_id = dict(self.materials)
-        if (
-            not material_by_id
-            or any(
-                not isinstance(item, PdkMaterial) for item in material_by_id.values()
-            )
-            or set(material_by_id)
-            != {item.material_id for item in material_by_id.values()}
-        ):
-            raise ValueError("materials must map each PDK material_id to its record")
-        vacuum_id = _text(self.vacuum_material_id, "vacuum_material_id")
-        vacuum = material_by_id.get(vacuum_id)
-        if (
-            vacuum is None
-            or vacuum.kind != "vacuum"
-            or vacuum.is_superconducting
-            or vacuum.library_name is None
-            or vacuum.library_name.lower() != "vacuum"
-        ):
-            raise ValueError(
-                "vacuum_material_id must reference non-superconducting PDK vacuum library_name 'vacuum'"
-            )
-        object.__setattr__(self, "materials", material_by_id)
-        object.__setattr__(self, "vacuum_material_id", vacuum_id)
-        imports = tuple(self.layer_imports)
-        if (
-            not imports
-            or len({item.layer for item in imports}) != len(imports)
-            or len({item.layer_name for item in imports}) != len(imports)
-            or any(
-                other.layer_name.startswith(item.layer_name)
-                for item in imports
-                for other in imports
-                if item is not other
-            )
-        ):
-            raise ValueError(
-                "layer_imports must contain unique non-prefixing numeric and destination layer mappings"
-            )
-        object.__setattr__(self, "layer_imports", imports)
-        bindings = tuple(self.object_bindings)
-        names = {item.object_name for item in bindings}
-        if (
-            not bindings
-            or len(names) != len(bindings)
-            or {item.layer for item in bindings} != {item.layer for item in imports}
-            or any(item.material_id not in material_by_id for item in bindings)
-            or any(
-                item.layer not in {entry.layer for entry in imports}
-                for item in bindings
-            )
-        ):
-            raise ValueError(
-                "object_bindings must be unique and refer to declared import layers"
-            )
-        object.__setattr__(self, "object_bindings", bindings)
-        grounds = {item.object_name for item in bindings if item.role == "ground"}
-        signals = {item.object_name for item in bindings if item.role == "signal"}
-        substrates = [item for item in bindings if item.role == "substrate"]
-        if not grounds or not signals or not substrates:
-            raise ValueError(
-                "two-port CPW requires explicit signal, ground, and substrate bindings"
-            )
-        if any(
-            not material_by_id[item.material_id].is_superconducting
-            or material_by_id[item.material_id].kind != "superconductor"
-            for item in bindings
-            if item.role in {"signal", "ground"}
-        ):
-            raise ValueError(
-                "signal and ground bindings require superconducting PDK conductors"
-            )
-        if any(
-            material_by_id[item.material_id].is_superconducting
-            or material_by_id[item.material_id].kind != "dielectric"
-            for item in substrates
-        ):
-            raise ValueError(
-                "substrate bindings require non-superconducting PDK dielectrics"
-            )
+        grounds, signals = _normalize_gds_spec(self)
         if len(self.ports) != 2 or tuple(port.index for port in self.ports) != (1, 2):
             raise ValueError("V1 requires exactly ordered ports 1 and 2")
         if len({port.name for port in self.ports}) != 2 or {
@@ -566,3 +561,157 @@ class HfssDrivenSpec:
                 payload.get("pyaedt", {}).get("locked_version"), "pyaedt.locked_version"
             ),
         )
+
+
+@dataclass(frozen=True)
+class EigenmodeRunControl:
+    """One explicit HFSS Eigenmode adaptive setup."""
+
+    setup_name: str
+    minimum_frequency_ghz: float
+    num_modes: int
+    maximum_passes: int
+    maximum_delta_frequency_percent: float
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "setup_name", _text(self.setup_name, "setup_name"))
+        minimum = _number(self.minimum_frequency_ghz, "minimum_frequency_ghz")
+        delta = _number(
+            self.maximum_delta_frequency_percent,
+            "maximum_delta_frequency_percent",
+        )
+        if minimum <= 0 or delta <= 0:
+            raise ValueError("Eigenmode frequency and convergence percent must be > 0")
+        if not isinstance(self.num_modes, int) or self.num_modes <= 0:
+            raise ValueError("num_modes must be a positive integer")
+        if not isinstance(self.maximum_passes, int) or self.maximum_passes <= 0:
+            raise ValueError("maximum_passes must be a positive integer")
+        object.__setattr__(self, "minimum_frequency_ghz", minimum)
+        object.__setattr__(self, "maximum_delta_frequency_percent", delta)
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "setup_name": self.setup_name,
+            "minimum_frequency_ghz": self.minimum_frequency_ghz,
+            "num_modes": self.num_modes,
+            "maximum_passes": self.maximum_passes,
+            "maximum_delta_frequency_percent": self.maximum_delta_frequency_percent,
+        }
+
+
+@dataclass(frozen=True)
+class HfssEigenmodeSpec:
+    """One port-free HFSS Eigenmode model with explicit native setup controls."""
+
+    gds_path: Path | str
+    project_name: str
+    design_name: str
+    materials: Mapping[str, PdkMaterial]
+    vacuum_material_id: str
+    layer_imports: tuple[LayerImport, ...]
+    object_bindings: tuple[ObjectBinding, ...]
+    run_control: EigenmodeRunControl
+    region_padding_um: tuple[float, float, float, float, float, float]
+    length_mesh: LengthMeshSpec | None = None
+    aedt_version: str = REQUIRED_AEDT_VERSION
+    pyaedt_version: str = LOCKED_PYAEDT
+
+    @property
+    def mode(self) -> Literal["eigenmode"]:
+        return "eigenmode"
+
+    def __post_init__(self) -> None:
+        grounds, signals = _normalize_gds_spec(self)
+        object.__setattr__(self, "region_padding_um", _padding(self.region_padding_um))
+        if self.length_mesh is not None and (
+            not set(self.length_mesh.ground_objects).issubset(grounds)
+            or not set(self.length_mesh.signal_objects).issubset(signals)
+        ):
+            raise ValueError(
+                "length mesh targets must be declared ground/signal objects"
+            )
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": EIGENMODE_SCHEMA_VERSION,
+            "mode": self.mode,
+            "aedt": {"requested_version": self.aedt_version},
+            "pyaedt": {
+                "locked_version": self.pyaedt_version,
+                "official_source": OFFICIAL_PYAEDT_SOURCE_URL,
+            },
+            "project": {"name": self.project_name, "design": self.design_name},
+            "materials": {
+                material_id: item.to_payload()
+                for material_id, item in self.materials.items()
+            },
+            "vacuum_material_id": self.vacuum_material_id,
+            "gds": {"path": self.gds_path.as_posix()},
+            "layer_imports": [item.to_payload() for item in self.layer_imports],
+            "object_bindings": [item.to_payload() for item in self.object_bindings],
+            "run_control": self.run_control.to_payload(),
+            "region_padding_um": list(self.region_padding_um),
+            "length_mesh": self.length_mesh.to_payload() if self.length_mesh else None,
+        }
+
+    @classmethod
+    def from_payload(
+        cls, payload: dict[str, Any], *, base_dir: Path | None = None
+    ) -> HfssEigenmodeSpec:
+        if payload.get("schema_version") != EIGENMODE_SCHEMA_VERSION:
+            raise ValueError("unsupported HFSS Eigenmode schema")
+        gds = Path(_text(payload.get("gds", {}).get("path"), "gds.path"))
+        if base_dir is not None and not gds.is_absolute():
+            gds = base_dir / gds
+        raw_materials = payload.get("materials")
+        if not isinstance(raw_materials, dict):
+            raise TypeError("materials must be a JSON object")
+        materials = {
+            material_id: PdkMaterial(**item)
+            for material_id, item in raw_materials.items()
+        }
+        run = payload.get("run_control")
+        if not isinstance(run, dict):
+            raise TypeError("run_control must be a JSON object")
+        length = payload.get("length_mesh")
+        return cls(
+            gds_path=gds,
+            project_name=_text(payload.get("project", {}).get("name"), "project.name"),
+            design_name=_text(
+                payload.get("project", {}).get("design"), "project.design"
+            ),
+            materials=materials,
+            vacuum_material_id=_text(
+                payload.get("vacuum_material_id"), "vacuum_material_id"
+            ),
+            layer_imports=tuple(
+                LayerImport(**item) for item in payload.get("layer_imports", ())
+            ),
+            object_bindings=tuple(
+                ObjectBinding(**item) for item in payload.get("object_bindings", ())
+            ),
+            run_control=EigenmodeRunControl(**run),
+            region_padding_um=tuple(payload.get("region_padding_um", ())),  # type: ignore[arg-type]
+            length_mesh=LengthMeshSpec(**length) if length is not None else None,
+            aedt_version=_text(
+                payload.get("aedt", {}).get("requested_version"),
+                "aedt.requested_version",
+            ),
+            pyaedt_version=_text(
+                payload.get("pyaedt", {}).get("locked_version"), "pyaedt.locked_version"
+            ),
+        )
+
+
+HfssSpec = HfssDrivenSpec | HfssEigenmodeSpec
+
+
+def parse_hfss_spec(
+    payload: dict[str, Any], *, base_dir: Path | None = None
+) -> HfssSpec:
+    """Dispatch one explicit HFSS schema without inferring solver family."""
+    if payload.get("schema_version") == SCHEMA_VERSION:
+        return HfssDrivenSpec.from_payload(payload, base_dir=base_dir)
+    if payload.get("schema_version") == EIGENMODE_SCHEMA_VERSION:
+        return HfssEigenmodeSpec.from_payload(payload, base_dir=base_dir)
+    raise ValueError("unsupported HFSS schema")

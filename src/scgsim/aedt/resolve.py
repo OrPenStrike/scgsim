@@ -7,7 +7,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from .spec import HfssDrivenSpec, ModalPort
+from .spec import (
+    HfssDrivenSpec,
+    HfssEigenmodeSpec,
+    HfssSpec,
+    ModalPort,
+    parse_hfss_spec,
+)
 from .util import file_sha256, read_json
 
 
@@ -15,7 +21,7 @@ from .util import file_sha256, read_json
 class ResolvedRun:
     """Canonical result paths verified against the completed run receipt."""
 
-    mode: Literal["terminal", "modal"]
+    mode: Literal["terminal", "modal", "eigenmode"]
     project_path: Path
     primary_csv: Path
     touchstone_path: Path | None
@@ -55,10 +61,10 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
         raise RuntimeError("receipt source paths are not canonical")
     spec_path = _verified(root, "hfss_driven_spec.json", source, "spec_sha256")
     _verified(root, "geometry/design.gds", source, "gds_sha256")
-    spec = HfssDrivenSpec.from_payload(read_json(spec_path), base_dir=root)
+    spec = parse_hfss_spec(read_json(spec_path), base_dir=root)
     mode = receipt.get("mode")
-    if mode not in {"terminal", "modal"} or spec.mode != mode:
-        raise RuntimeError("AEDT driven receipt mode is invalid")
+    if mode not in {"terminal", "modal", "eigenmode"} or spec.mode != mode:
+        raise RuntimeError("AEDT HFSS receipt mode is invalid")
     _validate_readback(root, receipt, spec)
     outputs = receipt.get("outputs")
     if not isinstance(outputs, dict):
@@ -69,6 +75,22 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
     project = _verified(root, project_relative, outputs, project_relative)
     if save["project_sha256"] != outputs.get(project_relative):
         raise RuntimeError("saved project hash does not match output manifest")
+    if mode == "eigenmode":
+        expected = {
+            project_relative,
+            "results/eigenmode/eigenmodes.csv",
+            "results/eigenmode/eigenmodes.eig",
+        }
+        if set(outputs) != expected:
+            raise RuntimeError("Eigenmode output manifest is not canonical")
+        return ResolvedRun(
+            "eigenmode",
+            project,
+            _verified(root, "results/eigenmode/eigenmodes.csv", outputs),
+            None,
+            _verified(root, "results/eigenmode/eigenmodes.eig", outputs),
+            receipt_path,
+        )
     result_stem = "terminal_st" if mode == "terminal" else "modal_s"
     expected = {
         project_relative,
@@ -97,9 +119,7 @@ def _contained(root: Path, relative: str) -> Path:
     return resolved
 
 
-def _validate_readback(
-    root: Path, receipt: dict[str, Any], spec: HfssDrivenSpec
-) -> None:
+def _validate_readback(root: Path, receipt: dict[str, Any], spec: HfssSpec) -> None:
     connected = receipt.get("connected")
     if not isinstance(connected, dict) or connected != {
         "aedt_version": spec.aedt_version,
@@ -107,6 +127,10 @@ def _validate_readback(
     }:
         raise RuntimeError("completed receipt has invalid connected version identity")
     readback = receipt.get("result_readback")
+    if isinstance(spec, HfssEigenmodeSpec):
+        _validate_eigenmode_readback(receipt, spec)
+        _validate_diagnostics(root, receipt.get("diagnostics"))
+        return
     key = "terminal_st" if spec.mode == "terminal" else "modal_s"
     if not isinstance(readback, dict) or not isinstance(readback.get(key), dict):
         raise TypeError("completed receipt has no canonical result readback")
@@ -153,6 +177,41 @@ def _validate_readback(
     else:
         _validate_modal_native_evidence(ports, spec)
     _validate_diagnostics(root, receipt.get("diagnostics"))
+
+
+def _validate_eigenmode_readback(
+    receipt: dict[str, Any], spec: HfssEigenmodeSpec
+) -> None:
+    if receipt.get("ports") != []:
+        raise RuntimeError("HFSS Eigenmode receipt must not contain ports")
+    readback = receipt.get("result_readback")
+    values = readback.get("eigenmodes") if isinstance(readback, dict) else None
+    if not isinstance(values, dict):
+        raise TypeError("completed receipt has no Eigenmode result readback")
+    modes = spec.run_control.num_modes
+    frequencies = values.get("frequencies_ghz")
+    q_factors = values.get("q_factors")
+    if (
+        values.get("modes") != modes
+        or values.get("frequency_unit") != "GHz"
+        or values.get("mode_indices") != list(range(1, modes + 1))
+        or not isinstance(frequencies, list)
+        or len(frequencies) != modes
+        or not all(
+            isinstance(value, (int, float)) and math.isfinite(value) and value > 0
+            for value in frequencies
+        )
+        or not isinstance(q_factors, list)
+        or len(q_factors) != modes
+        or not all(
+            isinstance(value, (int, float)) and math.isfinite(value) and value >= 0
+            for value in q_factors
+        )
+        or values.get("native_export") != "eigenmodes.eig"
+        or not isinstance(values.get("native_export_bytes"), int)
+        or values["native_export_bytes"] <= 0
+    ):
+        raise RuntimeError("completed receipt Eigenmode result readback is invalid")
 
 
 def _validate_modal_native_evidence(ports: Any, spec: HfssDrivenSpec) -> None:

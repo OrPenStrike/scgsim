@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import re
 import subprocess
 import time
@@ -18,8 +19,11 @@ from .spec import (
     REQUIRED_AEDT_VERSION,
     SURFACE_APPROXIMATION_LEVEL,
     HfssDrivenSpec,
+    HfssEigenmodeSpec,
+    HfssSpec,
     ModalPort,
     TerminalPort,
+    parse_hfss_spec,
 )
 from .util import file_sha256, read_json, write_csv, write_json
 
@@ -47,6 +51,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _execute(metadata_path: Path) -> int:
     run_dir = metadata_path.parent.parent
+    os.chdir(run_dir)
     metadata = _object(read_json(metadata_path), "handoff metadata")
     files = _canonical_metadata_files(metadata, metadata_path, run_dir)
     receipt_path = run_dir / files["receipt"]
@@ -56,9 +61,7 @@ def _execute(metadata_path: Path) -> int:
     if receipt.get("status") != "not_run":
         raise RuntimeError("one-shot handoff is not in not_run state")
     spec_path = run_dir / files["spec"]
-    spec = HfssDrivenSpec.from_payload(
-        _object(read_json(spec_path), "spec"), base_dir=run_dir
-    )
+    spec = parse_hfss_spec(_object(read_json(spec_path), "spec"), base_dir=run_dir)
     if spec.gds_path.resolve() != (run_dir / "geometry" / "design.gds").resolve():
         raise RuntimeError("prepared spec must use geometry/design.gds")
     _require_pristine_run(run_dir, spec)
@@ -136,12 +139,16 @@ def _execute(metadata_path: Path) -> int:
     return 0 if status == "completed" else 1
 
 
-def _solve(Hfss: Any, run_dir: Path, spec: HfssDrivenSpec) -> dict[str, Any]:
+def _solve(Hfss: Any, run_dir: Path, spec: HfssSpec) -> dict[str, Any]:
     project_path = run_dir / f"{spec.project_name}.aedt"
     hfss = Hfss(
         project=str(project_path),
         design=spec.design_name,
-        solution_type="DrivenTerminal" if spec.mode == "terminal" else "DrivenModal",
+        solution_type={
+            "terminal": "DrivenTerminal",
+            "modal": "DrivenModal",
+            "eigenmode": "Eigenmode",
+        }[spec.mode],
         new_desktop=False,
         close_on_exit=False,
     )
@@ -184,7 +191,7 @@ def _solve(Hfss: Any, run_dir: Path, spec: HfssDrivenSpec) -> dict[str, Any]:
     }
 
 
-def _import_and_bind(hfss: Any, spec: HfssDrivenSpec) -> list[dict[str, Any]]:
+def _import_and_bind(hfss: Any, spec: HfssSpec) -> list[dict[str, Any]]:
     mapping = {
         item.layer: [
             (item.z_min_um, item.z_max_um - item.z_min_um),
@@ -279,7 +286,7 @@ def _import_and_bind(hfss: Any, spec: HfssDrivenSpec) -> list[dict[str, Any]]:
     return observed
 
 
-def _create_region(hfss: Any, spec: HfssDrivenSpec) -> dict[str, Any]:
+def _create_region(hfss: Any, spec: HfssSpec) -> dict[str, Any]:
     if hfss.modeler.get_object_from_name("Region") is not None:
         raise RuntimeError("new V1 design unexpectedly already has Region")
     region = hfss.modeler.create_region(
@@ -307,7 +314,7 @@ def _create_region(hfss: Any, spec: HfssDrivenSpec) -> dict[str, Any]:
     }
 
 
-def _assign_mesh(hfss: Any, spec: HfssDrivenSpec) -> dict[str, Any]:
+def _assign_mesh(hfss: Any, spec: HfssSpec) -> dict[str, Any]:
     grounds = [
         item.object_name for item in spec.object_bindings if item.role == "ground"
     ]
@@ -389,7 +396,11 @@ def _assign_mesh(hfss: Any, spec: HfssDrivenSpec) -> dict[str, Any]:
     return result
 
 
-def _assign_ports(hfss: Any, spec: HfssDrivenSpec) -> list[dict[str, Any]]:
+def _assign_ports(hfss: Any, spec: HfssSpec) -> list[dict[str, Any]]:
+    if isinstance(spec, HfssEigenmodeSpec):
+        if hfss.get_oo_name(hfss.odesign, "Excitations"):
+            raise RuntimeError("HFSS Eigenmode design must not contain excitations")
+        return []
     region = hfss.modeler.get_object_from_name("Region")
     if region is None:
         raise RuntimeError("Region is missing")
@@ -502,10 +513,37 @@ def _face_for_side(
     return matches[0]
 
 
-def _setup(hfss: Any, spec: HfssDrivenSpec) -> None:
+def _setup(hfss: Any, spec: HfssSpec) -> None:
     if hfss.setup_names:
         raise RuntimeError("new V1 design must not inherit a setup")
     setup = hfss.create_setup(spec.run_control.setup_name)
+    if isinstance(spec, HfssEigenmodeSpec):
+        setup.props["MinimumFrequency"] = (
+            f"{spec.run_control.minimum_frequency_ghz:g}GHz"
+        )
+        setup.props["NumModes"] = spec.run_control.num_modes
+        setup.props["MaxDeltaFreq"] = spec.run_control.maximum_delta_frequency_percent
+        setup.props["MaximumPasses"] = spec.run_control.maximum_passes
+        if not setup.update():
+            raise RuntimeError("HFSS Eigenmode setup update failed")
+        observed = {
+            key: setup.props.get(key)
+            for key in (
+                "MinimumFrequency",
+                "NumModes",
+                "MaxDeltaFreq",
+                "MaximumPasses",
+            )
+        }
+        expected = {
+            "MinimumFrequency": f"{spec.run_control.minimum_frequency_ghz:g}GHz",
+            "NumModes": spec.run_control.num_modes,
+            "MaxDeltaFreq": spec.run_control.maximum_delta_frequency_percent,
+            "MaximumPasses": spec.run_control.maximum_passes,
+        }
+        if observed != expected:
+            raise RuntimeError(f"HFSS Eigenmode setup readback mismatch: {observed!r}")
+        return
     setup.props["SolveType"] = (
         "DrivenTerminal" if spec.mode == "terminal" else "DrivenModal"
     )
@@ -545,10 +583,12 @@ def _setup(hfss: Any, spec: HfssDrivenSpec) -> None:
 
 
 def _export(
-    hfss: Any, run_dir: Path, spec: HfssDrivenSpec, ports: list[dict[str, Any]]
+    hfss: Any, run_dir: Path, spec: HfssSpec, ports: list[dict[str, Any]]
 ) -> tuple[dict[str, str], dict[str, Any]]:
     output_dir = run_dir / "results" / spec.mode
     output_dir.mkdir(parents=True, exist_ok=True)
+    if isinstance(spec, HfssEigenmodeSpec):
+        return _export_eigenmode(hfss, run_dir, output_dir, spec)
     setup_sweep = f"{spec.run_control.setup_name} : {spec.run_control.sweep_name}"
     terminal = spec.mode == "terminal"
     names = [
@@ -584,6 +624,74 @@ def _export(
     hashes[touchstone.relative_to(run_dir).as_posix()] = file_sha256(touchstone)
     hashes[csv_path.relative_to(run_dir).as_posix()] = file_sha256(csv_path)
     return hashes, readback
+
+
+def _export_eigenmode(
+    hfss: Any,
+    run_dir: Path,
+    output_dir: Path,
+    spec: HfssEigenmodeSpec,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    setup = f"{spec.run_control.setup_name} : LastAdaptive"
+    raw = output_dir / "eigenmodes.eig"
+    hfss.osolution.ExportEigenmodes(setup, "", str(raw))
+    if not raw.is_file() or raw.stat().st_size == 0:
+        raise RuntimeError("HFSS Eigenmode native export is missing or empty")
+    rows = _parse_eigenmode_export(raw, spec)
+    path = output_dir / "eigenmodes.csv"
+    write_csv(path, rows, fieldnames=["mode", "frequency_ghz", "q_factor"])
+    raw_relative = raw.relative_to(run_dir).as_posix()
+    path_relative = path.relative_to(run_dir).as_posix()
+    return {
+        raw_relative: file_sha256(raw),
+        path_relative: file_sha256(path),
+    }, {
+        "eigenmodes": {
+            "modes": len(rows),
+            "frequency_unit": "GHz",
+            "mode_indices": [row["mode"] for row in rows],
+            "frequencies_ghz": [row["frequency_ghz"] for row in rows],
+            "q_factors": [row["q_factor"] for row in rows],
+            "native_export": raw.name,
+            "native_export_bytes": raw.stat().st_size,
+        }
+    }
+
+
+def _parse_eigenmode_export(
+    path: Path, spec: HfssEigenmodeSpec
+) -> list[dict[str, Any]]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if (
+        not lines
+        or lines[0] != "# Ansys eigenmode data file.  Version 2.0"
+        or f"# Design:     {spec.design_name}" not in lines
+        or f"# Solution:   {spec.run_control.setup_name} : LastAdaptive" not in lines
+        or not any(
+            "Mode" in line and "Frequency (GHz)" in line and "Q" in line
+            for line in lines
+        )
+    ):
+        raise RuntimeError("HFSS Eigenmode native export header is invalid")
+    rows: list[dict[str, Any]] = []
+    for line in lines:
+        tokens = line.split()
+        if len(tokens) != 3 or not tokens[0].isdigit():
+            continue
+        mode = int(tokens[0])
+        frequency = float(tokens[1])
+        q_factor = float(tokens[2])
+        if (
+            not math.isfinite(frequency)
+            or frequency <= 0
+            or not math.isfinite(q_factor)
+            or q_factor < 0
+        ):
+            raise RuntimeError("HFSS Eigenmode native result is invalid")
+        rows.append({"mode": mode, "frequency_ghz": frequency, "q_factor": q_factor})
+    if [row["mode"] for row in rows] != list(range(1, spec.run_control.num_modes + 1)):
+        raise RuntimeError("HFSS Eigenmode native mode count/order is invalid")
+    return rows
 
 
 def _write_complex_csv(
@@ -929,8 +1037,12 @@ def _native_modal_oo_readback(hfss: Any, boundary_name: str) -> dict[str, Any]:
 
 
 def _bind_port_evidence(
-    hfss: Any, spec: HfssDrivenSpec, ports: list[dict[str, Any]]
+    hfss: Any, spec: HfssSpec, ports: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
+    if isinstance(spec, HfssEigenmodeSpec):
+        if ports:
+            raise RuntimeError("HFSS Eigenmode must not bind port evidence")
+        return ports
     if spec.mode == "terminal":
         return _bind_terminal_reference_evidence(hfss, spec, ports)
     return _bind_modal_evidence(hfss, spec, ports)

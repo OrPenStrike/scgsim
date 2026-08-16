@@ -11,7 +11,7 @@ exists but is not an accepted or stable V1 capability.
 | Palace Eigenmode | `scgsim.palace` | CONVERGING; Route A/B LTlab Slurm + resolve/report exercised | Stabilize after Human acceptance |
 | Palace Driven | `scgsim.palace` | Planned; not implemented | Later |
 | Palace Magnetostatic | `scgsim.palace` | Planned; not implemented | Later |
-| HFSS Eigenmode | `scgsim.aedt` | CONVERGING; implementation and live evidence pending | Current |
+| HFSS Eigenmode | `scgsim.aedt` | CONVERGING; AEDT 2024.2 run + strict resolve exercised | Current |
 | HFSS Driven Modal | `scgsim.aedt` | CONVERGING; AEDT 2024.2 run + strict resolve exercised | Current |
 | HFSS Driven Terminal | `scgsim.aedt` | CONVERGING; AEDT 2024.2 run + strict resolve exercised | Current |
 | Q3D | `scgsim.aedt` | CONVERGING; implementation and live evidence pending | Current |
