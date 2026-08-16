@@ -3,18 +3,16 @@ title: "Palace Electrostatic + SGB"
 ---
 
 ::: {.callout-note title="CONVERGING candidate contract"}
-This page defines the intended first Palace runtime slice. The backend object,
-methods, handoff, solver execution, results, and reports are not implemented.
-Nothing here is a success or numerical-result claim.
+The backend, Route A/B lowering, handoff, LTlab Slurm execution, strict result
+resolution, and report summaries have live candidate evidence. They remain
+CONVERGING and are not V1 stable.
 :::
 
 ## Candidate surface
 
-The first public backend object is planned as
-`scgsim.palace.ElectrostaticSim`. Its notebook use should remain readable and
-gsim-familiar: staged calls expose geometry, terminals, solver configuration,
-mesh, config, handoff, and later result processing instead of hiding the
-workflow in one orchestration cell.
+The public backend object is `scgsim.palace.ElectrostaticSim`. Staged calls
+expose geometry, terminals, solver configuration, mesh, config, handoff, and
+result processing instead of hiding the workflow in one orchestration cell.
 
 The intended visible sequence is:
 
@@ -28,8 +26,8 @@ construct component
 -> resolve / results / report
 ```
 
-Only the stages through config belong to this first candidate slice. There is
-no documented `run()` success path.
+Handoff preparation does not submit Palace. Generated local or Slurm scripts
+execute explicitly and write a receipt that the resolver verifies.
 
 | Stage | Candidate method | Intended responsibility |
 |---|---|---|
@@ -38,12 +36,11 @@ no documented `run()` success path.
 | Airbox | `set_airbox` | Declare the simulation-domain envelope before geometry production. |
 | Terminal binding | `add_terminal` | Select a terminal by exact SGB net identity. |
 | Problem controls | `set_electrostatic` | Declare Electrostatic-specific config controls. |
-| Output identity | `set_output_dir` | Bind the future mesh/config output location. |
+| Output identity | `set_output_dir` | Bind the mesh/config/handoff output location. |
 | Mesh | `mesh` | Request the SGB-backed Palace mesh path. |
 | Config | `write_config` | Write the Palace Electrostatic configuration for the reviewed mesh identities. |
 
-Method names are candidate public contracts, not reachable APIs at the current
-revision.
+These methods are reachable candidate APIs.
 
 ## SGB and Palace ownership
 
@@ -62,9 +59,8 @@ handoff, resolve, and report behavior built on SGB identities.
 
 The candidate has no native-geometry fallback, physical-name semantic parsing,
 replacement topology reconstruction, or external gdsfactory/cloud execution
-fallback. It adds no lumped-port sheets. For this first slice, terminal
-selection is exact SGB net identity; legacy layer, center, or port-name
-selectors are outside the candidate contract.
+fallback. Terminal selection is exact SGB net identity; legacy center/name
+inference remains outside the contract.
 
 ## Candidate Electrostatic defaults
 
@@ -76,15 +72,9 @@ These values are **CONVERGING**, not accepted scientific defaults or Gates:
 | `unassigned_conductor_policy` | `"ground"` |
 | `exterior_boundary_policy` | `"none"` |
 
-No Palace execution, numerical result, common-handoff implementation, result
-resolver, or report implementation is claimed.
-
-## Public source authorities
-
-| Authority | Exact revision | Role |
-|---|---|---|
-| gsim downstream source | `main@8f5dc6c05255d003a9c6d8959537bcf8068379d3`, tree `505a53741953666da17d81b7036eba3ac296cd1a` | Public behavioral reference only; its APIs are not automatically SCGSim APIs. |
-| Semantic Geometry Builder | `e74a343154c6b19b6ba32d6fb297e700cfe08ff2` | Geometry and topology authority. |
+External gsim and historical SGB revisions are derivation evidence only. The
+runtime authority is the in-tree `scgsim.sgb` Core and the current
+`scgsim.palace` implementation.
 
 See [Geometry and SGB Route A/B](../geometry-sgb.qmd),
 [Execution Profiles and Local/Manual-HPC Handoff](../execution-profiles.qmd),

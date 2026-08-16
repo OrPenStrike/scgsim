@@ -2,7 +2,7 @@
 title: "Execution Profiles and Local/Manual-HPC Handoff"
 ---
 
-SCGSim plans one common run-and-handoff contract. It does not define separate
+SCGSim uses one run-and-handoff contract. It does not define separate semantic
 runners for different machines.
 
 ## Fixed machine profiles
@@ -24,4 +24,5 @@ prepare inputs -> validate -> package handoff -> execute or transfer manually
 ```
 
 External gdsfactory/cloud execution is unsupported and must never be used as a
-fallback. No execution or handoff API is implemented in Phase 1.
+fallback. Palace handoff scripts and AEDT execution remain explicit;
+preparation never silently submits a scheduler job or opens AEDT.

@@ -18,8 +18,8 @@ the public component-simulation examples and imports `scgsim.palace`,
 Browse the [OrPen SC PDK notebooks](https://github.com/OrPenStrike/orpen-sc-pdk/tree/develop/notebooks).
 
 The canonical section names and stage ordering remain in
-[Notebook UX Contracts](notebook-ux.qmd). Backend availability and planned
-order remain in the [Backend Support Matrix](backend-support.qmd).
+[Notebook UX Contracts](notebook-ux.qmd). Backend availability and remaining
+scope are in the [Backend Support Matrix](backend-support.qmd).
 
 ## Evidence boundary
 

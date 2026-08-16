@@ -10,15 +10,14 @@ simulation workflows. It prioritizes reproducible research behavior and stable
 consumer contracts. It is **not official gsim**, does not erase or replace
 upstream work, and does not promise Human review of Agent-driven code changes.
 
-The integrated Phase-1 scaffold is deliberately small: an
-installable/importable `scgsim` package, Python `~=3.12.0`, version
-`0.1.0.dev0`, and build/CI packaging checks. It has no runtime dependencies.
+The current `CONVERGING` package provides the in-tree `scgsim.sgb` Core,
+Palace Electrostatic/Eigenmode geometry-to-report workflows, and version-locked
+AEDT handoff/run/resolve workflows for HFSS Driven Terminal/Modal, HFSS
+Eigenmode, Q3D, and Q2D. These are implemented candidates, not V1-stable
+contracts.
 
-No Palace or AEDT backend, solver, report, execution, handoff, or notebook API
-is implemented.
-
-Planned public namespaces are `scgsim.palace` and `scgsim.aedt`. They are names
-for future contracts, not reachable Phase-1 APIs.
+OrPen SC PDK owns the public component-simulation notebooks. SCGSim owns no
+duplicate notebook source and has no runtime dependency on OrPen.
 
 ## Read the site
 
@@ -31,6 +30,5 @@ for future contracts, not reachable Phase-1 APIs.
 
 ## Current nonclaims
 
-There is no live Palace solve, numerical Surface-EPR result, backend support,
-cloud fallback, release, deployment, or published private evidence in this
-repository state.
+Palace Driven and Magnetostatic remain unimplemented. There is no cloud
+fallback, release, deployment, or publication authority for private evidence.

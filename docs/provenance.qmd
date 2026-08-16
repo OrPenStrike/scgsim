@@ -4,7 +4,7 @@ title: "Provenance and Data Boundaries"
 
 ## Public provenance contract
 
-A future run or report should bind, as applicable:
+A run or report binds, as applicable:
 
 - SCGSim and backend revision;
 - SGB source and geometry/topology identity;
