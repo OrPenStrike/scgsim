@@ -21,9 +21,6 @@ palace = [
     "gdstk",
     "gmsh",
 ]
-examples = [
-    "orpen-sc-pdk @ git+https://github.com/OrPenStrike/orpen-sc-pdk.git@8be8fc48c26f6bed06298cab673d49b9a6afbe7f",
-]
 dev = [
     "jupytext",
     "nbformat",
@@ -37,9 +34,3 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.ruff.lint.per-file-ignores]
-"notebooks/palace_route_a_electrostatic.py" = ["E402"]
-"notebooks/palace_route_b_electrostatic.py" = ["E402"]
-"notebooks/palace_route_a_eigenmode.py" = ["E402"]
-"notebooks/palace_route_b_eigenmode.py" = ["E402"]

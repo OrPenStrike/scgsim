@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from scgsim.sgb import VacuumRegionSpec
-from scgsim.sgb.orpen import _prepare_indium_ground_bump_fill
+from scgsim.sgb.ground_bumps import _prepare_indium_ground_bump_fill
 
 from ._config import (
     TerminalBinding,

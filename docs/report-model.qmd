@@ -2,13 +2,13 @@
 title: "Unified Report Model"
 ---
 
-SCGSim plans a Plotly-default report envelope that gives different solvers one
-consistent reading experience without pretending their physical quantities are
+SCGSim provides strict solver-specific resolvers and a consistent notebook
+reading surface without pretending different physical quantities are
 identical.
 
 ## Common envelope
 
-Every future report may organize:
+Current Palace reports organize:
 
 1. physical quantities;
 2. convergence and solver diagnostics;
@@ -22,4 +22,7 @@ eigenfrequencies, driven network responses, field-energy participation, Q3D
 matrices, and Q2D per-unit-length results must retain their own units,
 extraction authority, and failure meaning.
 
-Plotly is the planned default presentation layer, not a Phase-1 implemented API.
+Palace returns native tabular summaries by default and can render Plotly tables
+when Plotly is explicitly installed and requested. AEDT resolved runs expose
+receipt-bound native physics rows and execution benchmarks. Presentation never
+weakens receipt, artifact-hash, or solver-identity validation.

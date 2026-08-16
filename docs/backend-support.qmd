@@ -5,7 +5,7 @@ title: "Backend Support Matrix"
 This matrix records current runtime evidence. `CONVERGING` means the candidate
 exists but is not an accepted or stable V1 capability.
 
-| Backend surface | Public namespace | Phase-1 state | Planned order |
+| Backend surface | Public namespace | State | Planned order |
 |---|---|---|---|
 | Palace Electrostatic | `scgsim.palace` | CONVERGING; Route A/B LTlab Slurm + resolve/report exercised | Stabilize after Human acceptance |
 | Palace Eigenmode | `scgsim.palace` | CONVERGING; Route A/B LTlab Slurm + resolve/report exercised | Stabilize after Human acceptance |

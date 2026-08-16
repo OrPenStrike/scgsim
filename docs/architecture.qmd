@@ -2,39 +2,44 @@
 title: "Architecture and Data Flow"
 ---
 
-SCGSim keeps semantic geometry, solver preparation, execution, result loading,
-and presentation distinguishable. A solver backend may implement its own
-physics, but it must not redefine geometry identity, run identity, or common
-provenance.
+SCGSim keeps PDK facts, component intent, semantic geometry, solver preparation,
+execution, result loading, and presentation distinguishable. A solver backend
+may implement its own physics, but it must not redefine geometry identity, run
+identity, or common provenance.
 
 ```{mermaid}
 flowchart LR
-  G["SGB semantic geometry and topology"] --> B["Solver-specific backend preparation"]
-  B --> C["Common run-and-handoff contract"]
-  C --> P["Selected machine profile"]
-  P --> A["Immutable artifacts and receipts"]
-  A --> R["Solver-specific physical results"]
-  R --> U["Unified Plotly report envelope"]
+  PDK["PDK material, layer, fabrication, and 3D-integration semantics"] --> COMPILER["SCGSim semantic compiler"]
+  COMPONENT["Component net, port, and topology semantics"] --> COMPILER
+  COMPILER --> SGB["SGB geometry, topology, and physical groups"]
+  SGB --> BACKEND["Solver-specific backend preparation"]
+  BACKEND --> HANDOFF["Common run-and-handoff contract"]
+  HANDOFF --> PROFILE["Selected machine profile"]
+  PROFILE --> ARTIFACTS["Immutable artifacts and receipts"]
+  ARTIFACTS --> RESULTS["Solver-specific physical results"]
+  RESULTS --> REPORT["Unified Plotly report envelope"]
 ```
 
 ## Contract boundaries
 
 | Boundary | Authority |
 |---|---|
+| Material, layer, fabrication, Z/thickness, and 3D host facts | PDK |
+| Component nets, ports, functional regions, and topology selectors | Component designer |
 | Geometry names, topology, Route A/B surfaces | SGB |
-| Palace and AEDT implementation | Planned `scgsim.palace` and `scgsim.aedt` owners |
+| Palace and AEDT implementation | `scgsim.palace` and `scgsim.aedt` |
 | Run identity, handoff, profiles, receipts | One common SCGSim contract |
 | Physical result meaning | Solver-specific, never flattened into a false common quantity |
-| Report navigation, provenance, cost presentation | Planned unified report envelope |
+| Report navigation, provenance, cost presentation | SCGSim report/resolver surfaces |
+| Public component-simulation notebook source | OrPen SC PDK |
 
-## Phase-1 truth
+## Current truth
 
-The integrated Phase-1 implementation is limited to the importable package,
-version metadata, and build/CI packaging scaffold. The architecture above is a
-contract, not an implemented pipeline.
+The Human accepted the PDK/Component/SCGSim semantic-authority split and public
+notebook ownership on 2026-08-16. SCGSim owns no public notebook source; OrPen
+SC PDK owns the public component examples and calls the shared runtime directly.
 
-`scgsim.palace` and `scgsim.aedt` are absent rather than placeholder modules;
-importing either produces the normal `ModuleNotFoundError`. Every backend,
-run/handoff, report, notebook, solver, and execution box above remains planned.
+The Palace Electrostatic/Eigenmode and version-locked AEDT runtime families are
+implemented but remain `CONVERGING`, not V1 stable.
 
 See [Folder tree and ownership](ownership.qmd) for repository placement.
