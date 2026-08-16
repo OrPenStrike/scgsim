@@ -466,6 +466,7 @@ def _linear_solver(numerical: Mapping[str, Any]) -> dict[str, Any]:
 def _build_refinement(numerical: Mapping[str, Any]) -> dict[str, Any]:
     refinement = {
         "UniformLevels": 0,
+        "Nonconformal": False,
         "Tol": float(numerical["amr_tolerance"]),
         "MaxIts": int(numerical["amr_max_passes"]),
     }
