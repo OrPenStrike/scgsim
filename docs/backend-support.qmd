@@ -15,7 +15,7 @@ exists but is not an accepted or stable V1 capability.
 | HFSS Driven Modal | `scgsim.aedt` | CONVERGING; AEDT 2024.2 run + strict resolve exercised | Current |
 | HFSS Driven Terminal | `scgsim.aedt` | CONVERGING; AEDT 2024.2 run + strict resolve exercised | Current |
 | Q3D | `scgsim.aedt` | CONVERGING; AEDT 2024.2 run + strict resolve exercised | Current |
-| Q2D | `scgsim.aedt` | CONVERGING; implementation and live evidence pending | Current |
+| Q2D | `scgsim.aedt` | CONVERGING; AEDT 2024.2 run + strict resolve exercised | Current |
 | Meep | None | Excluded | Not planned |
 
 Backend support requires real implementation, validation, and evidence. A

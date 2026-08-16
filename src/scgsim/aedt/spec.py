@@ -16,6 +16,7 @@ Side = Literal["+X", "-X", "+Y", "-Y", "+Z", "-Z"]
 SCHEMA_VERSION = "scgsim.aedt.hfss-driven.v1"
 EIGENMODE_SCHEMA_VERSION = "scgsim.aedt.hfss-eigenmode.v1"
 Q3D_SCHEMA_VERSION = "scgsim.aedt.q3d.v1"
+Q2D_SCHEMA_VERSION = "scgsim.aedt.q2d.v1"
 OFFICIAL_PYAEDT_SOURCE_URL = "https://github.com/ansys/pyaedt/tree/v1.3.0"
 LOCKED_PYAEDT = "1.3.0"
 REQUIRED_AEDT_VERSION = "2024.2"
@@ -317,17 +318,23 @@ def _padding(
     return result  # type: ignore[return-value]
 
 
-def _normalize_gds_spec(spec: Any) -> tuple[set[str], set[str]]:
-    """Normalize the shared PDK/GDS model contract for HFSS families."""
+def _padding_2d(
+    values: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
+    if len(values) != 4:
+        raise ValueError("Q2D region_padding_um requires +X,-X,+Y,-Y values")
+    result = tuple(_number(value, "region_padding_um") for value in values)
+    if any(value < 0 for value in result):
+        raise ValueError("region_padding_um values must be >= 0")
+    return result  # type: ignore[return-value]
+
+
+def _normalize_common_spec(spec: Any) -> dict[str, PdkMaterial]:
     if (
         str(spec.aedt_version) != REQUIRED_AEDT_VERSION
         or str(spec.pyaedt_version) != LOCKED_PYAEDT
     ):
         raise ValueError("V1 requires AEDT 2024.2 and PyAEDT 1.3.0")
-    gds = Path(spec.gds_path)
-    if not str(gds) or gds.name in {"", "."}:
-        raise ValueError("gds_path must name a GDS file")
-    object.__setattr__(spec, "gds_path", gds)
     project = Path(_text(spec.project_name, "project_name"))
     if project.parent != Path(".") or project.name in {".", ".."}:
         raise ValueError("project_name must be a single project filename")
@@ -358,6 +365,16 @@ def _normalize_gds_spec(spec: Any) -> tuple[set[str], set[str]]:
         )
     object.__setattr__(spec, "materials", materials)
     object.__setattr__(spec, "vacuum_material_id", vacuum_id)
+    return materials
+
+
+def _normalize_gds_spec(spec: Any) -> tuple[set[str], set[str]]:
+    """Normalize the shared PDK/GDS model contract for 3D AEDT families."""
+    materials = _normalize_common_spec(spec)
+    gds = Path(spec.gds_path)
+    if not str(gds) or gds.name in {"", "."}:
+        raise ValueError("gds_path must name a GDS file")
+    object.__setattr__(spec, "gds_path", gds)
     imports = tuple(spec.layer_imports)
     if (
         not imports
@@ -708,8 +725,8 @@ HfssSpec = HfssDrivenSpec | HfssEigenmodeSpec
 
 
 @dataclass(frozen=True)
-class Q3dRunControl:
-    """One Q3D setup solving capacitance and AC R/L at one frequency."""
+class MatrixRunControl:
+    """One Q3D/Q2D matrix setup at one frequency."""
 
     setup_name: str
     frequency_ghz: float
@@ -719,9 +736,9 @@ class Q3dRunControl:
         object.__setattr__(self, "setup_name", _text(self.setup_name, "setup_name"))
         frequency = _number(self.frequency_ghz, "frequency_ghz")
         if frequency <= 0:
-            raise ValueError("Q3D frequency_ghz must be > 0")
+            raise ValueError("matrix frequency_ghz must be > 0")
         if not isinstance(self.maximum_passes, int) or self.maximum_passes <= 0:
-            raise ValueError("Q3D maximum_passes must be a positive integer")
+            raise ValueError("matrix maximum_passes must be a positive integer")
         object.__setattr__(self, "frequency_ghz", frequency)
 
     def to_payload(self) -> dict[str, Any]:
@@ -813,7 +830,7 @@ class Q3dSpec:
     layer_imports: tuple[LayerImport, ...]
     object_bindings: tuple[ObjectBinding, ...]
     nets: tuple[Q3dNetSpec, ...]
-    run_control: Q3dRunControl
+    run_control: MatrixRunControl
     region_padding_um: tuple[float, float, float, float, float, float]
     aedt_version: str = REQUIRED_AEDT_VERSION
     pyaedt_version: str = LOCKED_PYAEDT
@@ -911,7 +928,7 @@ class Q3dSpec:
                 ObjectBinding(**item) for item in payload.get("object_bindings", ())
             ),
             nets=tuple(Q3dNetSpec(**item) for item in payload.get("nets", ())),
-            run_control=Q3dRunControl(**run),
+            run_control=MatrixRunControl(**run),
             region_padding_um=tuple(payload.get("region_padding_um", ())),  # type: ignore[arg-type]
             aedt_version=_text(
                 payload.get("aedt", {}).get("requested_version"),
@@ -923,7 +940,200 @@ class Q3dSpec:
         )
 
 
-AedtSpec = HfssSpec | Q3dSpec
+@dataclass(frozen=True)
+class Q2dRectangleSpec:
+    """One explicit native Q2D cross-section rectangle."""
+
+    name: str
+    origin_um: tuple[float, float]
+    size_um: tuple[float, float]
+    material_id: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "name", _text(self.name, "rectangle.name"))
+        if len(self.origin_um) != 2 or len(self.size_um) != 2:
+            raise ValueError("Q2D rectangle origin_um and size_um require x,y pairs")
+        origin = tuple(
+            _number(value, "rectangle.origin_um") for value in self.origin_um
+        )
+        size = tuple(_number(value, "rectangle.size_um") for value in self.size_um)
+        if any(value <= 0 for value in size):
+            raise ValueError("Q2D rectangle size_um values must be > 0")
+        object.__setattr__(self, "origin_um", origin)
+        object.__setattr__(self, "size_um", size)
+        object.__setattr__(self, "material_id", _text(self.material_id, "material_id"))
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "origin_um": list(self.origin_um),
+            "size_um": list(self.size_um),
+            "material_id": self.material_id,
+        }
+
+
+@dataclass(frozen=True)
+class Q2dConductorSpec:
+    """One exact Q2D signal or the single reference-ground group."""
+
+    name: str
+    conductor_type: Literal["SignalLine", "ReferenceGround"]
+    object_names: tuple[str, ...]
+    thickness_um: float
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "name", _text(self.name, "conductor.name"))
+        if self.conductor_type not in {"SignalLine", "ReferenceGround"}:
+            raise ValueError("Q2D conductor_type must be SignalLine or ReferenceGround")
+        objects = tuple(
+            _text(value, "conductor.object_name") for value in self.object_names
+        )
+        if not objects or len(set(objects)) != len(objects):
+            raise ValueError("Q2D conductor object_names must be nonempty and unique")
+        thickness = _number(self.thickness_um, "conductor.thickness_um")
+        if thickness <= 0:
+            raise ValueError("Q2D conductor thickness_um must be > 0")
+        object.__setattr__(self, "object_names", objects)
+        object.__setattr__(self, "thickness_um", thickness)
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "conductor_type": self.conductor_type,
+            "object_names": list(self.object_names),
+            "thickness_um": self.thickness_um,
+        }
+
+
+@dataclass(frozen=True)
+class Q2dSpec:
+    """One explicit native Q2D cross-section matrix extraction."""
+
+    project_name: str
+    design_name: str
+    materials: Mapping[str, PdkMaterial]
+    vacuum_material_id: str
+    rectangles: tuple[Q2dRectangleSpec, ...]
+    conductors: tuple[Q2dConductorSpec, ...]
+    run_control: MatrixRunControl
+    region_padding_um: tuple[float, float, float, float]
+    aedt_version: str = REQUIRED_AEDT_VERSION
+    pyaedt_version: str = LOCKED_PYAEDT
+
+    @property
+    def mode(self) -> Literal["q2d"]:
+        return "q2d"
+
+    def __post_init__(self) -> None:
+        materials = _normalize_common_spec(self)
+        rectangles = tuple(self.rectangles)
+        if (
+            not rectangles
+            or len({item.name for item in rectangles}) != len(rectangles)
+            or any(item.material_id not in materials for item in rectangles)
+        ):
+            raise ValueError(
+                "Q2D rectangles must be unique and use declared PDK materials"
+            )
+        if any(materials[item.material_id].kind == "vacuum" for item in rectangles):
+            raise ValueError("Q2D vacuum is owned by the Region, not a rectangle")
+        conductors = tuple(self.conductors)
+        if (
+            not conductors
+            or len({item.name for item in conductors}) != len(conductors)
+            or sum(item.conductor_type == "ReferenceGround" for item in conductors) != 1
+            or not any(item.conductor_type == "SignalLine" for item in conductors)
+        ):
+            raise ValueError(
+                "Q2D requires SignalLine conductors and one ReferenceGround"
+            )
+        owners = {
+            object_name: conductor
+            for conductor in conductors
+            for object_name in conductor.object_names
+        }
+        if len(owners) != sum(len(item.object_names) for item in conductors):
+            raise ValueError(
+                "Q2D conductor rectangles must belong to exactly one group"
+            )
+        superconductors = {
+            item.name
+            for item in rectangles
+            if materials[item.material_id].is_superconducting
+        }
+        if set(owners) != superconductors:
+            raise ValueError(
+                "Q2D conductor groups must cover every superconducting rectangle exactly"
+            )
+        object.__setattr__(self, "rectangles", rectangles)
+        object.__setattr__(self, "conductors", conductors)
+        object.__setattr__(
+            self, "region_padding_um", _padding_2d(self.region_padding_um)
+        )
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": Q2D_SCHEMA_VERSION,
+            "mode": self.mode,
+            "aedt": {"requested_version": self.aedt_version},
+            "pyaedt": {
+                "locked_version": self.pyaedt_version,
+                "official_source": OFFICIAL_PYAEDT_SOURCE_URL,
+            },
+            "project": {"name": self.project_name, "design": self.design_name},
+            "materials": {
+                material_id: item.to_payload()
+                for material_id, item in self.materials.items()
+            },
+            "vacuum_material_id": self.vacuum_material_id,
+            "rectangles": [item.to_payload() for item in self.rectangles],
+            "conductors": [item.to_payload() for item in self.conductors],
+            "run_control": self.run_control.to_payload(),
+            "region_padding_um": list(self.region_padding_um),
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> Q2dSpec:
+        if payload.get("schema_version") != Q2D_SCHEMA_VERSION:
+            raise ValueError("unsupported Q2D schema")
+        raw_materials = payload.get("materials")
+        if not isinstance(raw_materials, dict):
+            raise TypeError("materials must be a JSON object")
+        materials = {
+            material_id: PdkMaterial(**item)
+            for material_id, item in raw_materials.items()
+        }
+        run = payload.get("run_control")
+        if not isinstance(run, dict):
+            raise TypeError("run_control must be a JSON object")
+        return cls(
+            project_name=_text(payload.get("project", {}).get("name"), "project.name"),
+            design_name=_text(
+                payload.get("project", {}).get("design"), "project.design"
+            ),
+            materials=materials,
+            vacuum_material_id=_text(
+                payload.get("vacuum_material_id"), "vacuum_material_id"
+            ),
+            rectangles=tuple(
+                Q2dRectangleSpec(**item) for item in payload.get("rectangles", ())
+            ),
+            conductors=tuple(
+                Q2dConductorSpec(**item) for item in payload.get("conductors", ())
+            ),
+            run_control=MatrixRunControl(**run),
+            region_padding_um=tuple(payload.get("region_padding_um", ())),  # type: ignore[arg-type]
+            aedt_version=_text(
+                payload.get("aedt", {}).get("requested_version"),
+                "aedt.requested_version",
+            ),
+            pyaedt_version=_text(
+                payload.get("pyaedt", {}).get("locked_version"), "pyaedt.locked_version"
+            ),
+        )
+
+
+AedtSpec = HfssSpec | Q3dSpec | Q2dSpec
 
 
 def parse_aedt_spec(
@@ -936,4 +1146,6 @@ def parse_aedt_spec(
         return HfssEigenmodeSpec.from_payload(payload, base_dir=base_dir)
     if payload.get("schema_version") == Q3D_SCHEMA_VERSION:
         return Q3dSpec.from_payload(payload, base_dir=base_dir)
+    if payload.get("schema_version") == Q2D_SCHEMA_VERSION:
+        return Q2dSpec.from_payload(payload)
     raise ValueError("unsupported AEDT schema")

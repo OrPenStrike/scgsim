@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from .spec import OFFICIAL_PYAEDT_SOURCE_URL, AedtSpec
+from .spec import OFFICIAL_PYAEDT_SOURCE_URL, AedtSpec, Q2dSpec
 from .util import file_sha256, write_json
 
 
@@ -26,31 +26,40 @@ class HandoffPlan:
 
 
 def prepare_handoff(*, spec: AedtSpec, output_dir: str | Path) -> HandoffPlan:
-    """Copy and bind a checked public GDS into a new portable run directory."""
-    source_gds = spec.gds_path.resolve()
-    if not source_gds.is_file():
-        raise FileNotFoundError(f"gds_path must be an existing file: {source_gds}")
-    preflight = _gds_preflight(source_gds)
-    actual_pairs = preflight["polygon_layer_datatypes"]
-    declared_pairs = {(item.layer, item.datatype) for item in spec.layer_imports}
-    if actual_pairs != declared_pairs:
-        raise ValueError(
-            f"GDS layer/datatype pairs {sorted(actual_pairs)!r} do not match spec {sorted(declared_pairs)!r}"
-        )
+    """Bind every required input into a new portable run directory."""
+    source_gds: Path | None = None
+    preflight: dict[str, int | set[tuple[int, int]]] | None = None
+    if not isinstance(spec, Q2dSpec):
+        source_gds = spec.gds_path.resolve()
+        if not source_gds.is_file():
+            raise FileNotFoundError(f"gds_path must be an existing file: {source_gds}")
+        preflight = _gds_preflight(source_gds)
+        actual_pairs = preflight["polygon_layer_datatypes"]
+        declared_pairs = {(item.layer, item.datatype) for item in spec.layer_imports}
+        if actual_pairs != declared_pairs:
+            raise ValueError(
+                f"GDS layer/datatype pairs {sorted(actual_pairs)!r} do not match spec {sorted(declared_pairs)!r}"
+            )
 
     run_dir = Path(output_dir).expanduser().resolve()
     if run_dir.exists():
         raise FileExistsError(
             "output_dir must be new; prepared handoffs never reuse directories"
         )
-    geometry_dir = run_dir / "geometry"
     metadata_dir = run_dir / "metadata"
-    geometry_dir.mkdir(parents=True)
-    metadata_dir.mkdir()
-    copied_gds = geometry_dir / "design.gds"
-    shutil.copy2(source_gds, copied_gds)
+    metadata_dir.mkdir(parents=True)
+    copied_gds: Path | None = None
+    if source_gds is not None:
+        geometry_dir = run_dir / "geometry"
+        geometry_dir.mkdir()
+        copied_gds = geometry_dir / "design.gds"
+        shutil.copy2(source_gds, copied_gds)
 
-    portable_spec = replace(spec, gds_path=Path("geometry/design.gds"))
+    portable_spec = (
+        spec
+        if isinstance(spec, Q2dSpec)
+        else replace(spec, gds_path=Path("geometry/design.gds"))
+    )
     script_path = run_dir / "run_aedt.sh"
     spec_path = run_dir / "aedt_spec.json"
     metadata_path = metadata_dir / "aedt_handoff_metadata.json"
@@ -63,36 +72,42 @@ def prepare_handoff(*, spec: AedtSpec, output_dir: str | Path) -> HandoffPlan:
     _write_script(script_path)
     payload = portable_spec.to_payload()
     write_json(spec_path, payload)
-    write_json(
-        metadata_path,
-        {
-            "schema_version": "scgsim.aedt.handoff.v1",
-            "status": "prepared",
-            "mode": spec.mode,
-            "project": payload["project"],
-            "materials": payload["materials"],
-            "vacuum_material_id": payload["vacuum_material_id"],
-            "run_control": payload["run_control"],
-            "pyaedt": payload["pyaedt"],
-            "aedt": payload["aedt"],
-            "files": {
-                "spec": spec_path.name,
-                "gds": "geometry/design.gds",
-                "receipt": "metadata/aedt_run_receipt.json",
-            },
-            "gds_sha256": file_sha256(copied_gds),
-            "gds_preflight": {
-                "polygon_layer_datatypes": [
-                    list(pair) for pair in sorted(actual_pairs)
-                ],
-                "path_count": preflight["path_count"],
-                "label_count": preflight["label_count"],
-                "labels": "ignored as non-geometry",
-            },
-            "prepared_at_utc": prepared_at,
-            "preparation_seconds": round(time.perf_counter() - started, 6),
-        },
-    )
+    files = {
+        "spec": spec_path.name,
+        "receipt": "metadata/aedt_run_receipt.json",
+    }
+    metadata = {
+        "schema_version": "scgsim.aedt.handoff.v1",
+        "status": "prepared",
+        "mode": spec.mode,
+        "project": payload["project"],
+        "materials": payload["materials"],
+        "vacuum_material_id": payload["vacuum_material_id"],
+        "run_control": payload["run_control"],
+        "pyaedt": payload["pyaedt"],
+        "aedt": payload["aedt"],
+        "files": files,
+        "prepared_at_utc": prepared_at,
+        "preparation_seconds": round(time.perf_counter() - started, 6),
+    }
+    source = {
+        "spec": spec_path.name,
+        "spec_sha256": file_sha256(spec_path),
+    }
+    if copied_gds is not None and preflight is not None:
+        files["gds"] = "geometry/design.gds"
+        metadata["gds_sha256"] = file_sha256(copied_gds)
+        metadata["gds_preflight"] = {
+            "polygon_layer_datatypes": [
+                list(pair) for pair in sorted(preflight["polygon_layer_datatypes"])
+            ],
+            "path_count": preflight["path_count"],
+            "label_count": preflight["label_count"],
+            "labels": "ignored as non-geometry",
+        }
+        source["gds"] = "geometry/design.gds"
+        source["gds_sha256"] = file_sha256(copied_gds)
+    write_json(metadata_path, metadata)
     write_json(
         receipt_path,
         {
@@ -106,23 +121,22 @@ def prepare_handoff(*, spec: AedtSpec, output_dir: str | Path) -> HandoffPlan:
             },
             "pdk_materials": payload["materials"],
             "vacuum_material_id": payload["vacuum_material_id"],
-            "source": {
-                "spec": spec_path.name,
-                "spec_sha256": file_sha256(spec_path),
-                "gds": "geometry/design.gds",
-                "gds_sha256": file_sha256(copied_gds),
-            },
+            "source": source,
             "outputs": {},
             "prepared_at_utc": prepared_at,
         },
     )
-    allowed = (
-        script_path,
-        spec_path,
-        copied_gds,
-        metadata_path,
-        receipt_path,
-        manifest_path,
+    allowed = tuple(
+        path
+        for path in (
+            script_path,
+            spec_path,
+            copied_gds,
+            metadata_path,
+            receipt_path,
+            manifest_path,
+        )
+        if path is not None
     )
     write_json(
         manifest_path,

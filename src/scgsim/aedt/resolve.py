@@ -12,6 +12,7 @@ from .spec import (
     HfssDrivenSpec,
     HfssEigenmodeSpec,
     ModalPort,
+    Q2dSpec,
     Q3dSpec,
     parse_aedt_spec,
 )
@@ -22,7 +23,7 @@ from .util import file_sha256, read_json
 class ResolvedRun:
     """Canonical result paths verified against the completed run receipt."""
 
-    mode: Literal["terminal", "modal", "eigenmode", "q3d"]
+    mode: Literal["terminal", "modal", "eigenmode", "q3d", "q2d"]
     project_path: Path
     primary_csv: Path
     touchstone_path: Path | None
@@ -54,17 +55,22 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
     if receipt.get("release") != {"ok": True}:
         raise RuntimeError("completed receipt lacks a successful owned Desktop release")
     source = receipt.get("source")
-    if (
-        not isinstance(source, dict)
-        or source.get("spec") != "aedt_spec.json"
-        or source.get("gds") != "geometry/design.gds"
-    ):
+    mode = receipt.get("mode")
+    if not isinstance(source, dict) or source.get("spec") != "aedt_spec.json":
         raise RuntimeError("receipt source paths are not canonical")
     spec_path = _verified(root, "aedt_spec.json", source, "spec_sha256")
-    _verified(root, "geometry/design.gds", source, "gds_sha256")
+    if mode == "q2d":
+        if set(source) != {"spec", "spec_sha256"}:
+            raise RuntimeError("Q2D receipt must not contain a GDS source")
+    else:
+        if source.get("gds") != "geometry/design.gds":
+            raise RuntimeError("receipt GDS path is not canonical")
+        _verified(root, "geometry/design.gds", source, "gds_sha256")
     spec = parse_aedt_spec(read_json(spec_path), base_dir=root)
-    mode = receipt.get("mode")
-    if mode not in {"terminal", "modal", "eigenmode", "q3d"} or spec.mode != mode:
+    if (
+        mode not in {"terminal", "modal", "eigenmode", "q3d", "q2d"}
+        or spec.mode != mode
+    ):
         raise RuntimeError("AEDT receipt mode is invalid")
     _validate_readback(root, receipt, spec)
     outputs = receipt.get("outputs")
@@ -76,6 +82,23 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
     project = _verified(root, project_relative, outputs, project_relative)
     if save["project_sha256"] != outputs.get(project_relative):
         raise RuntimeError("saved project hash does not match output manifest")
+    if mode == "q2d":
+        expected = {
+            project_relative,
+            "results/q2d/cg_matrix.csv",
+            "results/q2d/rl_matrix.csv",
+            "results/q2d/matrices.csv",
+        }
+        if set(outputs) != expected:
+            raise RuntimeError("Q2D output manifest is not canonical")
+        return ResolvedRun(
+            "q2d",
+            project,
+            _verified(root, "results/q2d/matrices.csv", outputs),
+            None,
+            None,
+            receipt_path,
+        )
     if mode == "q3d":
         expected = {
             project_relative,
@@ -145,6 +168,10 @@ def _validate_readback(root: Path, receipt: dict[str, Any], spec: Any) -> None:
     }:
         raise RuntimeError("completed receipt has invalid connected version identity")
     readback = receipt.get("result_readback")
+    if isinstance(spec, Q2dSpec):
+        _validate_q2d_readback(root, receipt, spec)
+        _validate_diagnostics(root, receipt.get("diagnostics"))
+        return
     if isinstance(spec, Q3dSpec):
         _validate_q3d_readback(root, receipt, spec)
         _validate_diagnostics(root, receipt.get("diagnostics"))
@@ -199,6 +226,54 @@ def _validate_readback(root: Path, receipt: dict[str, Any], spec: Any) -> None:
     else:
         _validate_modal_native_evidence(ports, spec)
     _validate_diagnostics(root, receipt.get("diagnostics"))
+
+
+def _validate_q2d_readback(root: Path, receipt: dict[str, Any], spec: Q2dSpec) -> None:
+    if receipt.get("ports") != [] or receipt.get("nets") != []:
+        raise RuntimeError("Q2D receipt must not contain HFSS ports or Q3D nets")
+    conductors = receipt.get("conductors")
+    if not isinstance(conductors, list) or len(conductors) != len(spec.conductors):
+        raise RuntimeError("Q2D receipt has invalid conductor evidence")
+    for record, expected in zip(conductors, spec.conductors, strict=True):
+        if (
+            not isinstance(record, dict)
+            or record.get("name") != expected.name
+            or record.get("conductor_type") != expected.conductor_type
+            or record.get("object_names") != list(expected.object_names)
+            or record.get("thickness_um") != expected.thickness_um
+            or record.get("solve_option") != "SolveOnBoundary"
+            or not isinstance(record.get("native_object_ids"), list)
+            or len(record["native_object_ids"]) != len(expected.object_names)
+            or not all(isinstance(value, int) for value in record["native_object_ids"])
+        ):
+            raise RuntimeError("Q2D native conductor evidence does not match the spec")
+    expected_setup = {
+        "name": spec.run_control.setup_name,
+        "native": {
+            "adaptive_frequency": f"{spec.run_control.frequency_ghz:g}GHz",
+            "cg_maximum_passes": str(spec.run_control.maximum_passes),
+            "rl_maximum_passes": str(spec.run_control.maximum_passes),
+        },
+    }
+    if receipt.get("setup") != expected_setup:
+        raise RuntimeError("Q2D native setup evidence is invalid")
+    readback = receipt.get("result_readback")
+    matrices = readback.get("matrices") if isinstance(readback, dict) else None
+    if (
+        not isinstance(matrices, dict)
+        or matrices.get("frequency_ghz") != spec.run_control.frequency_ghz
+        or matrices.get("length_setting") != "Distributed"
+        or matrices.get("length") != "1meter"
+        or set(matrices.get("native", {})) != {"cg", "rl"}
+        or not isinstance(matrices.get("normalized_rows"), int)
+        or matrices["normalized_rows"] <= 0
+    ):
+        raise RuntimeError("Q2D matrix readback is invalid")
+    _validate_normalized_matrices(
+        _contained(root, "results/q2d/matrices.csv"),
+        matrices["normalized_rows"],
+        {"CG", "RL"},
+    )
 
 
 def _validate_q3d_readback(root: Path, receipt: dict[str, Any], spec: Q3dSpec) -> None:
@@ -256,27 +331,36 @@ def _validate_q3d_readback(root: Path, receipt: dict[str, Any], spec: Q3dSpec) -
         or matrices["normalized_rows"] <= 0
     ):
         raise RuntimeError("Q3D matrix readback is invalid")
-    path = _contained(root, "results/q3d/matrices.csv")
+    _validate_normalized_matrices(
+        _contained(root, "results/q3d/matrices.csv"),
+        matrices["normalized_rows"],
+        {"C", "AC RL"},
+    )
+
+
+def _validate_normalized_matrices(
+    path: Path, expected_rows: int, problem_types: set[str]
+) -> None:
     with path.open(newline="", encoding="utf-8") as stream:
         rows = list(csv.DictReader(stream))
-    if len(rows) != matrices["normalized_rows"] or not rows:
-        raise RuntimeError("Q3D normalized matrix row count is invalid")
+    if len(rows) != expected_rows or not rows:
+        raise RuntimeError("normalized matrix row count is invalid")
     expected_quantities = {"C", "G", "L", "R"}
     if {row.get("quantity") for row in rows} != expected_quantities:
-        raise RuntimeError("Q3D normalized matrix quantities are incomplete")
+        raise RuntimeError("normalized matrix quantities are incomplete")
     for row in rows:
         try:
             value = float(row["value"])
         except (KeyError, TypeError, ValueError) as exc:
-            raise RuntimeError("Q3D normalized matrix value is invalid") from exc
+            raise RuntimeError("normalized matrix value is invalid") from exc
         if (
             not math.isfinite(value)
-            or row.get("problem_type") not in {"C", "AC RL"}
+            or row.get("problem_type") not in problem_types
             or not row.get("row")
             or not row.get("column")
             or not row.get("unit")
         ):
-            raise RuntimeError("Q3D normalized matrix row is invalid")
+            raise RuntimeError("normalized matrix row is invalid")
 
 
 def _validate_eigenmode_readback(

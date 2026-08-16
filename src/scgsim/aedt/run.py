@@ -19,10 +19,12 @@ from .spec import (
     POINT_COUNT,
     REQUIRED_AEDT_VERSION,
     SURFACE_APPROXIMATION_LEVEL,
+    AedtSpec,
     HfssDrivenSpec,
     HfssEigenmodeSpec,
     HfssSpec,
     ModalPort,
+    Q2dSpec,
     Q3dSpec,
     TerminalPort,
     parse_aedt_spec,
@@ -62,7 +64,10 @@ def _execute(metadata_path: Path) -> int:
         raise RuntimeError("one-shot handoff is not in not_run state")
     spec_path = run_dir / files["spec"]
     spec = parse_aedt_spec(_object(read_json(spec_path), "spec"), base_dir=run_dir)
-    if spec.gds_path.resolve() != (run_dir / "geometry" / "design.gds").resolve():
+    if (
+        not isinstance(spec, Q2dSpec)
+        and spec.gds_path.resolve() != (run_dir / "geometry" / "design.gds").resolve()
+    ):
         raise RuntimeError("prepared spec must use geometry/design.gds")
     _require_pristine_run(run_dir, spec)
     started = _utc_now()
@@ -83,10 +88,14 @@ def _execute(metadata_path: Path) -> int:
     result: dict[str, Any] | None = None
     try:
         receipt["mode"] = spec.mode
-        _verify_prepared_hashes(metadata, spec_path, spec.gds_path)
+        _verify_prepared_hashes(
+            metadata,
+            spec_path,
+            None if isinstance(spec, Q2dSpec) else spec.gds_path,
+        )
         if _pyaedt_version() != LOCKED_PYAEDT:
             raise RuntimeError("PyAEDT lock mismatch")
-        from ansys.aedt.core import Desktop, Hfss, Q3d
+        from ansys.aedt.core import Desktop, Hfss, Q2d, Q3d
 
         desktop = Desktop(
             version=REQUIRED_AEDT_VERSION,
@@ -97,11 +106,12 @@ def _execute(metadata_path: Path) -> int:
         if desktop.aedt_version_id != REQUIRED_AEDT_VERSION:
             raise RuntimeError(f"AEDT version mismatch: {desktop.aedt_version_id!r}")
         receipt["runtime_source"] = _runtime_source_identity()
-        result = (
-            _solve_q3d(Q3d, run_dir, spec)
-            if isinstance(spec, Q3dSpec)
-            else _solve(Hfss, run_dir, spec)
-        )
+        if isinstance(spec, Q3dSpec):
+            result = _solve_q3d(Q3d, run_dir, spec)
+        elif isinstance(spec, Q2dSpec):
+            result = _solve_q2d(Q2d, run_dir, spec)
+        else:
+            result = _solve(Hfss, run_dir, spec)
         status = "completed"
     except Exception as exc:  # noqa: BLE001 -- receipt must record any solver failure.
         failure = f"{type(exc).__name__}: {exc}"
@@ -132,6 +142,7 @@ def _execute(metadata_path: Path) -> int:
             receipt["project"] = result["project"]
             receipt["ports"] = result.get("ports", [])
             receipt["nets"] = result.get("nets", [])
+            receipt["conductors"] = result.get("conductors", [])
             receipt["mesh"] = result.get("mesh", {})
             receipt["materials"] = result["materials"]
             receipt["region"] = result["region"]
@@ -231,6 +242,48 @@ def _solve_q3d(Q3d: Any, run_dir: Path, spec: Q3dSpec) -> dict[str, Any]:
         },
         "project": project_relative,
         "nets": nets,
+        "materials": materials,
+        "region": region,
+        "setup": setup,
+        "result_readback": result_readback,
+        "save": {"ok": True, "project_sha256": outputs[project_relative]},
+    }
+
+
+def _solve_q2d(Q2d: Any, run_dir: Path, spec: Q2dSpec) -> dict[str, Any]:
+    project_path = run_dir / f"{spec.project_name}.aedt"
+    app = Q2d(
+        project=str(project_path),
+        design=spec.design_name,
+        new_desktop=False,
+        close_on_exit=False,
+    )
+    if app.desktop_class.aedt_version_id != REQUIRED_AEDT_VERSION:
+        raise RuntimeError("Q2D did not bind the owned AEDT 2024.2 desktop")
+    app.modeler.model_units = "um"
+    materials, objects = _create_q2d_geometry(app, spec)
+    region = _create_q2d_region(app, spec)
+    conductors = _assign_q2d_conductors(app, spec, objects)
+    setup = _setup_q2d(app, spec)
+    if not app.save_project() or not project_path.is_file():
+        raise RuntimeError("Q2D project was not saved before solve")
+    if not app.analyze_setup(name=spec.run_control.setup_name, blocking=True):
+        raise RuntimeError(
+            f"Q2D failed to analyze setup {spec.run_control.setup_name!r}"
+        )
+    outputs, result_readback = _export_q2d(app, run_dir, spec)
+    if not app.save_project() or not project_path.is_file():
+        raise RuntimeError("Q2D project was not saved")
+    project_relative = project_path.relative_to(run_dir).as_posix()
+    outputs[project_relative] = file_sha256(project_path)
+    return {
+        "outputs": outputs,
+        "connected": {
+            "aedt_version": app.desktop_class.aedt_version_id,
+            "pyaedt_version": _pyaedt_version(),
+        },
+        "project": project_relative,
+        "conductors": conductors,
         "materials": materials,
         "region": region,
         "setup": setup,
@@ -515,7 +568,13 @@ def _export_q3d(
             20,
             1,
         )
-        rows, summary = _parse_q3d_matrix(path, problem, spec.run_control.frequency_ghz)
+        titles = {
+            "C": {"Capacitance Matrix": "C", "Conductance Matrix": "G"},
+            "AC RL": {"AC Inductance Matrix": "L", "AC Resistance Matrix": "R"},
+        }[problem]
+        rows, summary = _parse_matrix_export(
+            path, "Q3D", problem, spec.run_control.frequency_ghz, titles
+        )
         normalized.extend(rows)
         summaries[stem] = summary
         hashes[path.relative_to(run_dir).as_posix()] = file_sha256(path)
@@ -537,48 +596,48 @@ def _export_q3d(
     }
 
 
-def _parse_q3d_matrix(
-    path: Path, problem: str, frequency_ghz: float
+def _parse_matrix_export(
+    path: Path,
+    solver: str,
+    problem: str,
+    frequency_ghz: float,
+    titles: dict[str, str],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if not path.is_file() or path.stat().st_size == 0:
-        raise RuntimeError(f"Q3D {problem} matrix export is missing or empty")
+        raise RuntimeError(f"{solver} {problem} matrix export is missing or empty")
     lines = path.read_text(encoding="utf-8", errors="strict").splitlines()
     if (
         f"Problem Type:  {problem}" not in lines
         or f"Frequency:  {frequency_ghz:g}GHz" not in lines
     ):
-        raise RuntimeError(f"Q3D {problem} matrix header is invalid")
+        raise RuntimeError(f"{solver} {problem} matrix header is invalid")
     unit_line = next((line for line in lines if " Units:" in line), None)
     if unit_line is None:
-        raise RuntimeError(f"Q3D {problem} matrix units are missing")
+        raise RuntimeError(f"{solver} {problem} matrix units are missing")
     units = dict(re.findall(r"([CGRL]) Units:([^,]+)", unit_line))
-    titles = {
-        "C": {"Capacitance Matrix": "C", "Conductance Matrix": "G"},
-        "AC RL": {"AC Inductance Matrix": "L", "AC Resistance Matrix": "R"},
-    }[problem]
     result: list[dict[str, Any]] = []
     labels_by_quantity: dict[str, list[str]] = {}
     for title, quantity in titles.items():
         try:
             title_index = lines.index(title)
         except ValueError as exc:
-            raise RuntimeError(f"Q3D export is missing {title!r}") from exc
+            raise RuntimeError(f"{solver} export is missing {title!r}") from exc
         header_index = title_index + 1
         while header_index < len(lines) and not lines[header_index].strip():
             header_index += 1
         header = next(csv.reader([lines[header_index]]))
         labels = [value.strip() for value in header[1:] if value.strip()]
         if not labels or len(set(labels)) != len(labels):
-            raise RuntimeError(f"Q3D {title} labels are invalid")
+            raise RuntimeError(f"{solver} {title} labels are invalid")
         labels_by_quantity[quantity] = labels
         for row_index, row_name in enumerate(labels, start=header_index + 1):
             values = next(csv.reader([lines[row_index]]))
             if values[0].strip() != row_name or len(values[1:]) != len(labels):
-                raise RuntimeError(f"Q3D {title} matrix is not square")
+                raise RuntimeError(f"{solver} {title} matrix is not square")
             for column, raw in zip(labels, values[1:], strict=True):
                 value = float(raw)
                 if not math.isfinite(value):
-                    raise RuntimeError(f"Q3D {title} contains a non-finite value")
+                    raise RuntimeError(f"{solver} {title} contains a non-finite value")
                 result.append(
                     {
                         "problem_type": problem,
@@ -596,6 +655,207 @@ def _parse_q3d_matrix(
         "labels": labels_by_quantity,
         "rows": len(result),
         "bytes": path.stat().st_size,
+    }
+
+
+def _create_q2d_geometry(
+    app: Any, spec: Q2dSpec
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if app.modeler.object_names:
+        raise RuntimeError("new Q2D design must not inherit geometry")
+    objects: dict[str, Any] = {}
+    records: list[dict[str, Any]] = []
+    for rectangle in spec.rectangles:
+        material = spec.materials[rectangle.material_id]
+        library_name = "pec" if material.is_superconducting else material.library_name
+        if not material.is_superconducting and not app.materials.exists_material(
+            library_name
+        ):
+            raise RuntimeError(
+                f"AEDT library material is unavailable: {library_name!r}"
+            )
+        obj = app.create_rectangle(
+            list(rectangle.origin_um),
+            list(rectangle.size_um),
+            name=rectangle.name,
+            material=library_name,
+        )
+        if obj is None or obj.name != rectangle.name:
+            raise RuntimeError(f"Q2D rectangle creation failed for {rectangle.name!r}")
+        observed = _native_object_property(obj, "Material").strip('"')
+        if observed.casefold() != library_name.casefold():
+            raise RuntimeError(f"Q2D material readback mismatch for {rectangle.name!r}")
+        objects[rectangle.name] = obj
+        records.append(
+            {
+                "object_name": rectangle.name,
+                "origin_um": list(rectangle.origin_um),
+                "size_um": list(rectangle.size_um),
+                "material_id": material.material_id,
+                "kind": material.kind,
+                "is_superconducting": material.is_superconducting,
+                "requested_library_name": material.library_name,
+                "observed": {"native_material_name": observed},
+            }
+        )
+    if set(app.modeler.object_names) != set(objects):
+        raise RuntimeError("Q2D native object inventory does not match the spec")
+    return records, objects
+
+
+def _create_q2d_region(app: Any, spec: Q2dSpec) -> dict[str, Any]:
+    plus_x, minus_x, plus_y, minus_y = spec.region_padding_um
+    region = app.modeler.create_region(
+        pad_value=[plus_x, plus_y, minus_x, minus_y],
+        pad_type="Absolute Offset",
+        name="Region",
+    )
+    vacuum = spec.materials[spec.vacuum_material_id]
+    if not app.materials.exists_material(vacuum.library_name):
+        raise RuntimeError(
+            f"AEDT vacuum material is unavailable: {vacuum.library_name!r}"
+        )
+    region.material_name = vacuum.library_name
+    observed_material = _native_object_property(region, "Material").strip('"')
+    if region.name != "Region" or observed_material.casefold() != "vacuum":
+        raise RuntimeError("Q2D vacuum region readback failed")
+    return {
+        "material_id": vacuum.material_id,
+        "requested_library_name": vacuum.library_name,
+        "observed_material_name": observed_material,
+        "padding_um": list(spec.region_padding_um),
+        "native_bounding_box_um": [float(value) for value in region.bounding_box],
+    }
+
+
+def _assign_q2d_conductors(
+    app: Any, spec: Q2dSpec, objects: dict[str, Any]
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for conductor in spec.conductors:
+        selected = [objects[name] for name in conductor.object_names]
+        boundary = app.assign_single_conductor(
+            selected,
+            name=conductor.name,
+            conductor_type=conductor.conductor_type,
+            solve_option="SolveOnBoundary",
+            thickness=conductor.thickness_um,
+            units="um",
+        )
+        if boundary is None:
+            raise RuntimeError(
+                f"Q2D conductor assignment failed for {conductor.name!r}"
+            )
+        expected_ids = [int(objects[name].id) for name in conductor.object_names]
+        native_ids = [
+            int(value)
+            for value in app.oboundary.GetExcitationAssignment(conductor.name)
+        ]
+        if native_ids != expected_ids:
+            raise RuntimeError(
+                f"Q2D native conductor assignment mismatch for {conductor.name!r}"
+            )
+        records.append(
+            {
+                "name": conductor.name,
+                "conductor_type": conductor.conductor_type,
+                "object_names": list(conductor.object_names),
+                "thickness_um": conductor.thickness_um,
+                "solve_option": "SolveOnBoundary",
+                "native_object_ids": native_ids,
+            }
+        )
+    return records
+
+
+def _setup_q2d(app: Any, spec: Q2dSpec) -> dict[str, Any]:
+    if app.setup_names:
+        raise RuntimeError("new Q2D design must not inherit a setup")
+    setup = app.create_setup(spec.run_control.setup_name)
+    setup.props["AdaptiveFreq"] = f"{spec.run_control.frequency_ghz:g}GHz"
+    setup.props["CGDataBlock"]["MaxPass"] = spec.run_control.maximum_passes
+    setup.props["RLDataBlock"]["MaxPass"] = spec.run_control.maximum_passes
+    if not setup.update():
+        raise RuntimeError("Q2D setup update failed")
+    analysis = app.get_oo_object(app.odesign, "Analysis")
+    native = {
+        "adaptive_frequency": app.get_oo_property_value(
+            analysis, setup.name, "Adaptive Freq"
+        ),
+        "cg_maximum_passes": app.get_oo_property_value(
+            analysis, setup.name, "CG[Max. Number of Passes]"
+        ),
+        "rl_maximum_passes": app.get_oo_property_value(
+            analysis, setup.name, "RL[Max. Number of Passes]"
+        ),
+    }
+    expected = {
+        "adaptive_frequency": f"{spec.run_control.frequency_ghz:g}GHz",
+        "cg_maximum_passes": str(spec.run_control.maximum_passes),
+        "rl_maximum_passes": str(spec.run_control.maximum_passes),
+    }
+    if app.get_oo_name(app.odesign, "Analysis") != [setup.name] or native != expected:
+        raise RuntimeError(f"Q2D native setup readback mismatch: {native!r}")
+    return {"name": setup.name, "native": native}
+
+
+def _export_q2d(
+    app: Any, run_dir: Path, spec: Q2dSpec
+) -> tuple[dict[str, str], dict[str, Any]]:
+    output_dir = run_dir / "results" / "q2d"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    hashes: dict[str, str] = {}
+    summaries: dict[str, Any] = {}
+    normalized: list[dict[str, Any]] = []
+    frequency_hz = spec.run_control.frequency_ghz * 1e9
+    for problem in ("CG", "RL"):
+        path = output_dir / f"{problem.casefold()}_matrix.csv"
+        app.odesign.ExportMatrixData(
+            str(path),
+            problem,
+            "",
+            f"{spec.run_control.setup_name} : LastAdaptive",
+            "Original",
+            "ohm",
+            "nH",
+            "pF",
+            "mho",
+            frequency_hz,
+            "Distributed",
+            "1meter",
+            "Maxwell",
+            0,
+            15,
+            20,
+            1,
+        )
+        titles = {
+            "CG": {"Capacitance Matrix": "C", "Conductance Matrix": "G"},
+            "RL": {"Inductance Matrix": "L", "Resistance Matrix": "R"},
+        }[problem]
+        rows, summary = _parse_matrix_export(
+            path, "Q2D", problem, spec.run_control.frequency_ghz, titles
+        )
+        normalized.extend(rows)
+        summaries[problem.casefold()] = summary
+        hashes[path.relative_to(run_dir).as_posix()] = file_sha256(path)
+    normalized_path = output_dir / "matrices.csv"
+    write_csv(
+        normalized_path,
+        normalized,
+        fieldnames=["problem_type", "quantity", "row", "column", "value", "unit"],
+    )
+    hashes[normalized_path.relative_to(run_dir).as_posix()] = file_sha256(
+        normalized_path
+    )
+    return hashes, {
+        "matrices": {
+            "frequency_ghz": spec.run_control.frequency_ghz,
+            "length_setting": "Distributed",
+            "length": "1meter",
+            "native": summaries,
+            "normalized_rows": len(normalized),
+        }
     }
 
 
@@ -1121,35 +1381,39 @@ def _canonical_metadata_files(
     files = _object(metadata.get("files"), "files")
     expected = {
         "spec": "aedt_spec.json",
-        "gds": "geometry/design.gds",
         "receipt": "metadata/aedt_run_receipt.json",
     }
+    if metadata.get("mode") != "q2d":
+        expected["gds"] = "geometry/design.gds"
     if files != expected:
         raise RuntimeError("handoff metadata file map is not canonical")
     return expected
 
 
 def _verify_prepared_hashes(
-    metadata: dict[str, Any], spec_path: Path, gds_path: Path
+    metadata: dict[str, Any], spec_path: Path, gds_path: Path | None
 ) -> None:
-    if file_sha256(gds_path) != _text(metadata.get("gds_sha256"), "gds_sha256"):
-        raise RuntimeError("copied GDS hash mismatch")
     receipt = _object(
         read_json(spec_path.parent / "metadata" / "aedt_run_receipt.json"), "receipt"
     )
     source = _object(receipt.get("source"), "receipt.source")
-    if (
-        source.get("spec") != "aedt_spec.json"
-        or source.get("gds") != "geometry/design.gds"
-    ):
+    if source.get("spec") != "aedt_spec.json":
         raise RuntimeError("receipt source paths are not canonical")
     if file_sha256(spec_path) != _text(source.get("spec_sha256"), "source.spec_sha256"):
         raise RuntimeError("prepared spec hash mismatch")
+    if gds_path is None:
+        if set(source) != {"spec", "spec_sha256"} or "gds_sha256" in metadata:
+            raise RuntimeError("Q2D handoff must not contain a GDS source")
+        return
+    if source.get("gds") != "geometry/design.gds":
+        raise RuntimeError("receipt GDS path is not canonical")
+    if file_sha256(gds_path) != _text(metadata.get("gds_sha256"), "gds_sha256"):
+        raise RuntimeError("copied GDS hash mismatch")
     if file_sha256(gds_path) != _text(source.get("gds_sha256"), "source.gds_sha256"):
         raise RuntimeError("receipt GDS hash mismatch")
 
 
-def _require_pristine_run(run_dir: Path, spec: HfssDrivenSpec) -> None:
+def _require_pristine_run(run_dir: Path, spec: AedtSpec) -> None:
     project_path = run_dir / f"{spec.project_name}.aedt"
     if project_path.exists() or (run_dir / "results").exists():
         raise RuntimeError("one-shot handoff already owns project or results artifacts")

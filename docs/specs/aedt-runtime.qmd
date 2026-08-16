@@ -3,9 +3,8 @@ title: "AEDT Runtime Families"
 ---
 
 ::: {.callout-note title="CONVERGING candidate contract"}
-HFSS Driven Terminal/Modal, HFSS Eigenmode, and Q3D have current exact-head live
-run and resolve evidence. Q2D remains an implementation target, not a capability
-claim.
+HFSS Driven Terminal/Modal, HFSS Eigenmode, Q3D, and Q2D have live run and
+strict resolve evidence. The scope remains converging rather than V1 stable.
 :::
 
 ## One shared lifecycle
