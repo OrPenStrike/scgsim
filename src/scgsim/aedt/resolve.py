@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from .spec import HfssDrivenSpec
+from .spec import HfssDrivenSpec, ModalPort
 from .util import file_sha256, read_json
 
 
@@ -14,7 +15,7 @@ from .util import file_sha256, read_json
 class ResolvedRun:
     """Canonical result paths verified against the completed run receipt."""
 
-    mode: Literal["terminal"]
+    mode: Literal["terminal", "modal"]
     project_path: Path
     primary_csv: Path
     touchstone_path: Path | None
@@ -56,8 +57,8 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
     _verified(root, "geometry/design.gds", source, "gds_sha256")
     spec = HfssDrivenSpec.from_payload(read_json(spec_path), base_dir=root)
     mode = receipt.get("mode")
-    if mode != "terminal" or spec.mode != "terminal":
-        raise RuntimeError("AEDT V1 resolves terminal receipts only")
+    if mode not in {"terminal", "modal"} or spec.mode != mode:
+        raise RuntimeError("AEDT driven receipt mode is invalid")
     _validate_readback(root, receipt, spec)
     outputs = receipt.get("outputs")
     if not isinstance(outputs, dict):
@@ -68,18 +69,19 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
     project = _verified(root, project_relative, outputs, project_relative)
     if save["project_sha256"] != outputs.get(project_relative):
         raise RuntimeError("saved project hash does not match output manifest")
+    result_stem = "terminal_st" if mode == "terminal" else "modal_s"
     expected = {
         project_relative,
-        "results/terminal/terminal_st.csv",
-        "results/terminal/terminal.s2p",
+        f"results/{mode}/{result_stem}.csv",
+        f"results/{mode}/{mode}.s2p",
     }
     if set(outputs) != expected:
         raise RuntimeError("terminal output manifest is not canonical")
     return ResolvedRun(
-        "terminal",
+        mode,
         project,
-        _verified(root, "results/terminal/terminal_st.csv", outputs),
-        _verified(root, "results/terminal/terminal.s2p", outputs),
+        _verified(root, f"results/{mode}/{result_stem}.csv", outputs),
+        _verified(root, f"results/{mode}/{mode}.s2p", outputs),
         None,
         receipt_path,
     )
@@ -105,7 +107,7 @@ def _validate_readback(
     }:
         raise RuntimeError("completed receipt has invalid connected version identity")
     readback = receipt.get("result_readback")
-    key = "terminal_st"
+    key = "terminal_st" if spec.mode == "terminal" else "modal_s"
     if not isinstance(readback, dict) or not isinstance(readback.get(key), dict):
         raise TypeError("completed receipt has no canonical result readback")
     frequency = readback[key]
@@ -119,8 +121,9 @@ def _validate_readback(
         raise RuntimeError("completed receipt result frequency readback is invalid")
     touchstone = readback.get("touchstone")
     ports = receipt.get("ports")
-    terminal_order = (
-        [record.get("terminal_excitation") for record in ports]
+    port_key = "terminal_excitation" if spec.mode == "terminal" else "modal_excitation"
+    port_order = (
+        [record.get(port_key) for record in ports]
         if isinstance(ports, list)
         and len(ports) == 2
         and all(isinstance(record, dict) for record in ports)
@@ -129,24 +132,102 @@ def _validate_readback(
     )
     if (
         not isinstance(touchstone, dict)
-        or touchstone.get("path") != "terminal.s2p"
+        or touchstone.get("path") != f"{spec.mode}.s2p"
         or touchstone.get("ports") != 2
         or touchstone.get("records") != 20_000
         or touchstone.get("frequency_unit") != "GHz"
         or touchstone.get("first_frequency_ghz") != spec.run_control.sweep.start_ghz
         or touchstone.get("last_frequency_ghz") != spec.run_control.sweep.stop_ghz
         or touchstone.get("strictly_increasing") is not True
-        or touchstone.get("port_order") != terminal_order
-        or not all(isinstance(name, str) and name for name in terminal_order or [])
-        or len(set(terminal_order or [])) != 2
+        or touchstone.get("port_order") != port_order
+        or not all(isinstance(name, str) and name for name in port_order or [])
+        or len(set(port_order or [])) != 2
         or not isinstance(touchstone.get("bytes"), int)
         or touchstone["bytes"] <= 0
     ):
         raise RuntimeError(
             "completed receipt is missing a two-port Touchstone readback"
         )
-    _validate_terminal_native_evidence(ports, spec)
+    if spec.mode == "terminal":
+        _validate_terminal_native_evidence(ports, spec)
+    else:
+        _validate_modal_native_evidence(ports, spec)
     _validate_diagnostics(root, receipt.get("diagnostics"))
+
+
+def _validate_modal_native_evidence(ports: Any, spec: HfssDrivenSpec) -> None:
+    if not isinstance(ports, list) or len(ports) != 2:
+        raise RuntimeError("completed receipt has invalid modal ports")
+    for record, port in zip(ports, spec.ports, strict=True):
+        if not isinstance(port, ModalPort) or not isinstance(record, dict):
+            raise TypeError("completed receipt has invalid modal port identity")
+        if (
+            record.get("index") != port.index
+            or record.get("boundary") != port.name
+            or record.get("modal_excitation") != port.name
+            or not isinstance(record.get("face_id"), int)
+            or not isinstance(record.get("face_center_um"), list)
+            or len(record["face_center_um"]) != 3
+            or record.get("requested")
+            != {
+                "integration_line_um": [
+                    list(point) for point in port.integration_line_um
+                ],
+                "modes": 1,
+                "renormalize": False,
+                "deembed_um": 0.0,
+                "characteristic_impedance": "Zpi",
+            }
+        ):
+            raise RuntimeError("completed receipt modal request does not match spec")
+        native = record.get("native")
+        if not isinstance(native, dict):
+            raise TypeError("completed receipt has no native modal evidence")
+        expected_names = [item.name for item in spec.ports[: port.index]]
+        expected_boundary = {
+            "bound_type": "Wave Port",
+            "wave_port_type": "Modal",
+            "faces": [record["face_id"]],
+            "num_modes": 1,
+            "deembed": False,
+            "mode_number": 1,
+            "use_integration_line": True,
+            "characteristic_impedance": "Zpi",
+        }
+        saved_boundary = native.get("saved_boundary")
+        integration_line = (
+            saved_boundary.get("integration_line_um")
+            if isinstance(saved_boundary, dict)
+            else None
+        )
+        if (
+            native.get("excitation_names") != expected_names
+            or native.get("boundary_properties")
+            != {
+                "Deembed": False,
+                "Name": port.name,
+                "Num Modes": "1",
+                "Renorm All Modes": False,
+                "Type": "Wave Port",
+            }
+            or not isinstance(saved_boundary, dict)
+            or {
+                key: value
+                for key, value in saved_boundary.items()
+                if key != "integration_line_um"
+            }
+            != expected_boundary
+            or not isinstance(integration_line, list)
+            or len(integration_line) != 2
+            or any(
+                not math.isclose(float(actual), wanted, abs_tol=1e-9)
+                for actual_point, expected_point in zip(
+                    integration_line, port.integration_line_um, strict=True
+                )
+                for actual, wanted in zip(actual_point, expected_point, strict=True)
+            )
+        ):
+            raise RuntimeError("completed receipt modal native evidence mismatch")
 
 
 def _validate_terminal_native_evidence(ports: Any, spec: HfssDrivenSpec) -> None:

@@ -1,0 +1,53 @@
+---
+title: "AEDT Runtime Families"
+---
+
+::: {.callout-note title="CONVERGING candidate contract"}
+HFSS Driven Terminal and Modal have current exact-head live run and resolve
+evidence. The remaining families are implementation targets, not capability
+claims.
+:::
+
+## One shared lifecycle
+
+SCGSim owns one portable AEDT lifecycle:
+
+```text
+PDK geometry and material identities
+-> immutable handoff
+-> explicit local execution
+-> native AEDT readback
+-> hashed receipt
+-> strict result resolution
+```
+
+The lifecycle fixes AEDT 2024.2 and PyAEDT 1.3.0, copies all required inputs,
+opens a new AEDT Desktop only on explicit execution, saves and releases the
+owned project, and fails closed on missing native evidence or result bytes.
+PDK superconductors lower to PEC. Other materials reference exact PDK-provided
+AEDT library names; SCGSim does not invent numeric material properties.
+
+## Solver-specific contracts
+
+The following semantics remain separate even though they share packaging,
+version checks, receipts, and path/hash validation:
+
+| Family | Required model semantics | Required returned data |
+|---|---|---|
+| HFSS Driven Terminal | terminal ports with explicit reference conductors | ordered terminal S-parameters and Touchstone |
+| HFSS Driven Modal | modal ports with exact integration lines | ordered modal S-parameters, impedance, and Touchstone |
+| HFSS Eigenmode | no ports or driven sweep; explicit mode count and search frequency | mode frequency, damping/Q, and convergence evidence |
+| Q3D | exact nets with source/sink assignments | native capacitance and resistance/inductance matrices |
+| Q2D | explicit cross-section geometry and conductor/reference assignments | per-unit-length capacitance/conductance and resistance/inductance matrices |
+
+No family may report completion from requested PyAEDT object properties alone.
+The receipt records direct AEDT state and hashes every resolved output. A
+resolver rejects unsupported families, partial output, mixed run identity,
+unresolved native assignments, and path/hash mismatches.
+
+## Current exclusions
+
+This candidate does not provide S-parameter circuit models, automatic solver
+selection, arbitrary legacy recipe ingestion, custom AEDT material definitions,
+or compatibility fallbacks for old private runtimes. Those are independent
+future scopes.

@@ -18,6 +18,7 @@ from .spec import (
     REQUIRED_AEDT_VERSION,
     SURFACE_APPROXIMATION_LEVEL,
     HfssDrivenSpec,
+    ModalPort,
     TerminalPort,
 )
 from .util import file_sha256, read_json, write_csv, write_json
@@ -80,8 +81,6 @@ def _execute(metadata_path: Path) -> int:
     try:
         receipt["mode"] = spec.mode
         _verify_prepared_hashes(metadata, spec_path, spec.gds_path)
-        if spec.mode != "terminal":
-            raise RuntimeError("modal execution is not implemented for AEDT V1")
         if _pyaedt_version() != LOCKED_PYAEDT:
             raise RuntimeError("PyAEDT lock mismatch")
         from ansys.aedt.core import Desktop, Hfss
@@ -156,7 +155,7 @@ def _solve(Hfss: Any, run_dir: Path, spec: HfssDrivenSpec) -> dict[str, Any]:
     _setup(hfss, spec)
     if not hfss.save_project() or not project_path.is_file():
         raise RuntimeError("HFSS project was not saved before native port readback")
-    ports = _bind_terminal_reference_evidence(hfss, spec, ports)
+    ports = _bind_port_evidence(hfss, spec, ports)
     if not hfss.analyze_setup(name=spec.run_control.setup_name, blocking=True):
         raise RuntimeError(
             f"HFSS failed to analyze setup {spec.run_control.setup_name!r}"
@@ -401,8 +400,6 @@ def _assign_ports(hfss: Any, spec: HfssDrivenSpec) -> list[dict[str, Any]]:
     centers = {face_id: center for face_id, center in faces}
     records: list[dict[str, Any]] = []
     for port in spec.ports:
-        if not isinstance(port, TerminalPort):
-            raise TypeError("AEDT V1 port assignment requires terminal ports")
         face_id = _face_for_side(faces, port.side)
         if isinstance(port, TerminalPort):
             before = set(hfss.oboundary.GetExcitationsOfType("Terminal"))
@@ -438,6 +435,46 @@ def _assign_ports(hfss: Any, spec: HfssDrivenSpec) -> list[dict[str, Any]]:
                     "native": native,
                 }
             )
+        elif isinstance(port, ModalPort):
+            before = set(hfss.get_oo_name(hfss.odesign, "Excitations"))
+            boundary = hfss.wave_port(
+                face_id,
+                integration_line=[list(point) for point in port.integration_line_um],
+                modes=1,
+                impedance=50,
+                name=port.name,
+                renormalize=False,
+                deembed=0,
+                characteristic_impedance="Zpi",
+            )
+            after = set(hfss.get_oo_name(hfss.odesign, "Excitations"))
+            names = sorted(after - before)
+            if boundary is None or names != [port.name]:
+                raise RuntimeError(
+                    f"modal excitation readback failed for {port.name!r}: {names!r}"
+                )
+            native = _native_modal_oo_readback(hfss, port.name)
+            records.append(
+                {
+                    "index": port.index,
+                    "boundary": port.name,
+                    "modal_excitation": port.name,
+                    "face_id": face_id,
+                    "face_center_um": list(centers[face_id]),
+                    "requested": {
+                        "integration_line_um": [
+                            list(point) for point in port.integration_line_um
+                        ],
+                        "modes": 1,
+                        "renormalize": False,
+                        "deembed_um": 0.0,
+                        "characteristic_impedance": "Zpi",
+                    },
+                    "native": native,
+                }
+            )
+        else:  # pragma: no cover - HfssDrivenSpec already closes this boundary.
+            raise TypeError("unsupported HFSS driven port type")
     return records
 
 
@@ -510,15 +547,17 @@ def _setup(hfss: Any, spec: HfssDrivenSpec) -> None:
 def _export(
     hfss: Any, run_dir: Path, spec: HfssDrivenSpec, ports: list[dict[str, Any]]
 ) -> tuple[dict[str, str], dict[str, Any]]:
-    if spec.mode != "terminal":
-        raise RuntimeError("modal export is not implemented for AEDT V1")
     output_dir = run_dir / "results" / spec.mode
     output_dir.mkdir(parents=True, exist_ok=True)
     setup_sweep = f"{spec.run_control.setup_name} : {spec.run_control.sweep_name}"
-    names = [record["terminal_excitation"] for record in ports]
+    terminal = spec.mode == "terminal"
+    names = [
+        record["terminal_excitation" if terminal else "modal_excitation"]
+        for record in ports
+    ]
     hashes: dict[str, str] = {}
     readback: dict[str, Any] = {}
-    touchstone = output_dir / "terminal.s2p"
+    touchstone = output_dir / f"{spec.mode}.s2p"
     if (
         not hfss.export_touchstone(
             setup=spec.run_control.setup_name,
@@ -527,16 +566,19 @@ def _export(
         )
         or not touchstone.is_file()
     ):
-        raise RuntimeError("terminal Touchstone export failed")
+        raise RuntimeError(f"{spec.mode} Touchstone export failed")
     readback["touchstone"] = _verify_touchstone(touchstone, spec, names)
-    expressions = [f"St({left},{right})" for left in names for right in names]
+    prefix = "St" if terminal else "S"
+    expressions = [f"{prefix}({left},{right})" for left in names for right in names]
     data = hfss.post.get_solution_data(
         expressions=expressions,
         setup_sweep_name=setup_sweep,
-        report_category="Terminal Solution Data",
+        report_category=(
+            "Terminal Solution Data" if terminal else "Modal Solution Data"
+        ),
     )
-    csv_path = output_dir / "terminal_st.csv"
-    readback["terminal_st"] = _write_complex_csv(
+    csv_path = output_dir / f"{spec.mode}_{prefix.casefold()}.csv"
+    readback[f"{spec.mode}_{prefix.casefold()}"] = _write_complex_csv(
         data, expressions, csv_path, suffix="", spec=spec
     )
     hashes[touchstone.relative_to(run_dir).as_posix()] = file_sha256(touchstone)
@@ -604,12 +646,12 @@ def _write_complex_csv(
 
 
 def _verify_touchstone(
-    path: Path, spec: HfssDrivenSpec, native_terminal_names: list[str]
+    path: Path, spec: HfssDrivenSpec, native_port_names: list[str]
 ) -> dict[str, Any]:
     if path.suffix.lower() != ".s2p" or path.stat().st_size == 0:
         raise RuntimeError("Touchstone must be a nonempty .s2p file")
-    if len(native_terminal_names) != 2 or len(set(native_terminal_names)) != 2:
-        raise RuntimeError("Touchstone requires two ordered native terminal names")
+    if len(native_port_names) != 2 or len(set(native_port_names)) != 2:
+        raise RuntimeError("Touchstone requires two ordered native port names")
     unit: str | None = None
     frequencies: list[float] = []
     header_ports: dict[int, str] = {}
@@ -655,9 +697,9 @@ def _verify_touchstone(
         raise RuntimeError(
             "Touchstone records have invalid count, units, endpoints, or ordering"
         )
-    if [header_ports.get(1), header_ports.get(2)] != native_terminal_names:
+    if [header_ports.get(1), header_ports.get(2)] != native_port_names:
         raise RuntimeError(
-            "Touchstone indexed port-name order does not match native terminals"
+            "Touchstone indexed port-name order does not match native ports"
         )
     return {
         "path": path.name,
@@ -667,7 +709,7 @@ def _verify_touchstone(
         "first_frequency_ghz": frequencies[0],
         "last_frequency_ghz": frequencies[-1],
         "strictly_increasing": True,
-        "port_order": native_terminal_names,
+        "port_order": native_port_names,
         "bytes": path.stat().st_size,
     }
 
@@ -861,6 +903,98 @@ def _native_terminal_readback(
         "boundary_properties": boundary_properties,
         "terminal_properties": terminal_properties,
     }
+
+
+def _native_modal_oo_readback(hfss: Any, boundary_name: str) -> dict[str, Any]:
+    """Read the direct AEDT object-tree state of one modal wave port."""
+    excitation_names = hfss.get_oo_name(hfss.odesign, "Excitations")
+    if boundary_name not in excitation_names:
+        raise RuntimeError(f"AEDT modal boundary is missing: {boundary_name!r}")
+    properties = _native_oo_properties(hfss, f"Excitations\\{boundary_name}")
+    _require_native_properties(
+        properties,
+        {
+            "Name": boundary_name,
+            "Type": "Wave Port",
+            "Num Modes": 1,
+            "Deembed": False,
+            "Renorm All Modes": False,
+        },
+        f"modal boundary {boundary_name!r}",
+    )
+    return {
+        "excitation_names": excitation_names,
+        "boundary_properties": properties,
+    }
+
+
+def _bind_port_evidence(
+    hfss: Any, spec: HfssDrivenSpec, ports: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    if spec.mode == "terminal":
+        return _bind_terminal_reference_evidence(hfss, spec, ports)
+    return _bind_modal_evidence(hfss, spec, ports)
+
+
+def _bind_modal_evidence(
+    hfss: Any, spec: HfssDrivenSpec, ports: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Bind modal integration lines from AEDT's saved native design state."""
+    try:
+        boundaries = hfss.design_properties["BoundarySetup"]["Boundaries"]
+    except (KeyError, TypeError) as exc:
+        raise RuntimeError("AEDT native modal boundaries are unavailable") from exc
+    if not isinstance(boundaries, dict):
+        raise TypeError("AEDT native modal boundary data is invalid")
+    for record, port in zip(ports, spec.ports, strict=True):
+        if not isinstance(port, ModalPort):
+            raise TypeError("modal evidence requires ModalPort entries")
+        boundary = boundaries.get(port.name)
+        try:
+            mode = boundary["Modes"]["Mode1"]
+            positions = mode["IntLine"]["GeometryPosition"]
+        except (KeyError, TypeError) as exc:
+            raise RuntimeError(
+                f"AEDT native modal integration line is unavailable: {port.name!r}"
+            ) from exc
+        observed = [
+            [float(item[f"{axis}Position"]) for axis in "XYZ"] for item in positions
+        ]
+        expected = [list(point) for point in port.integration_line_um]
+        if (
+            boundary.get("BoundType") != "Wave Port"
+            or boundary.get("WavePortType") != "Modal"
+            or boundary.get("NumModes") != 1
+            or boundary.get("Faces") != [record["face_id"]]
+            or boundary.get("DoDeembed") is not False
+            or mode.get("ModeNum") != 1
+            or mode.get("UseIntLine") is not True
+            or mode.get("CharImp") != "Zpi"
+            or len(observed) != 2
+            or any(
+                not math.isclose(actual, wanted, abs_tol=1e-9)
+                for actual_point, expected_point in zip(observed, expected, strict=True)
+                for actual, wanted in zip(actual_point, expected_point, strict=True)
+            )
+        ):
+            raise RuntimeError(
+                f"AEDT native modal port readback mismatch: {port.name!r}"
+            )
+        native = record.get("native")
+        if not isinstance(native, dict):
+            raise TypeError("modal native OO evidence is unavailable")
+        native["saved_boundary"] = {
+            "bound_type": boundary["BoundType"],
+            "wave_port_type": boundary["WavePortType"],
+            "faces": boundary["Faces"],
+            "num_modes": boundary["NumModes"],
+            "deembed": boundary["DoDeembed"],
+            "mode_number": mode["ModeNum"],
+            "use_integration_line": mode["UseIntLine"],
+            "integration_line_um": observed,
+            "characteristic_impedance": mode["CharImp"],
+        }
+    return ports
 
 
 def _bind_terminal_reference_evidence(

@@ -2,21 +2,24 @@
 title: "Backend Support Matrix"
 ---
 
-No backend is implemented in Phase 1. The table is a roadmap, not a capability
-claim.
+This matrix records current runtime evidence. `CONVERGING` means the candidate
+exists but is not an accepted or stable V1 capability.
 
 | Backend surface | Public namespace | Phase-1 state | Planned order |
 |---|---|---|---|
-| Palace Electrostatic | `scgsim.palace` | Planned; not implemented | Near term, with Surface EPR emphasis |
-| Palace Eigenmode | `scgsim.palace` | Planned; not implemented | Near term |
+| Palace Electrostatic | `scgsim.palace` | CONVERGING; Route A/B LTlab Slurm + resolve/report exercised | Stabilize after Human acceptance |
+| Palace Eigenmode | `scgsim.palace` | CONVERGING; Route A/B LTlab Slurm + resolve/report exercised | Stabilize after Human acceptance |
 | Palace Driven | `scgsim.palace` | Planned; not implemented | Later |
 | Palace Magnetostatic | `scgsim.palace` | Planned; not implemented | Later |
-| HFSS Eigenmode | `scgsim.aedt` | Planned; not implemented | Near term |
-| HFSS Driven Modal | `scgsim.aedt` | Planned; not implemented | Near term |
-| HFSS Driven Terminal | `scgsim.aedt` | Planned; not implemented | Near term |
-| Q3D | `scgsim.aedt` | Planned; not implemented | Near term |
-| Q2D | `scgsim.aedt` | Planned; not implemented | Near term |
+| HFSS Eigenmode | `scgsim.aedt` | CONVERGING; implementation and live evidence pending | Current |
+| HFSS Driven Modal | `scgsim.aedt` | CONVERGING; AEDT 2024.2 run + strict resolve exercised | Current |
+| HFSS Driven Terminal | `scgsim.aedt` | CONVERGING; AEDT 2024.2 run + strict resolve exercised | Current |
+| Q3D | `scgsim.aedt` | CONVERGING; implementation and live evidence pending | Current |
+| Q2D | `scgsim.aedt` | CONVERGING; implementation and live evidence pending | Current |
 | Meep | None | Excluded | Not planned |
 
 Backend support requires real implementation, validation, and evidence. A
 namespace name or source-lane identity is not support.
+
+See [AEDT Runtime Families](specs/aedt-runtime.qmd) for the current ownership
+and failure contract.
