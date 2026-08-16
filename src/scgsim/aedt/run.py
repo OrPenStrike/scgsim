@@ -1,8 +1,9 @@
-"""Explicit local HFSS execution for one prepared two-port CPW handoff."""
+"""Explicit local execution for one prepared AEDT handoff."""
 
 from __future__ import annotations
 
 import argparse
+import csv
 import math
 import os
 import re
@@ -22,8 +23,9 @@ from .spec import (
     HfssEigenmodeSpec,
     HfssSpec,
     ModalPort,
+    Q3dSpec,
     TerminalPort,
-    parse_hfss_spec,
+    parse_aedt_spec,
 )
 from .util import file_sha256, read_json, write_csv, write_json
 
@@ -59,7 +61,7 @@ def _execute(metadata_path: Path) -> int:
     if receipt.get("status") != "not_run":
         raise RuntimeError("one-shot handoff is not in not_run state")
     spec_path = run_dir / files["spec"]
-    spec = parse_hfss_spec(_object(read_json(spec_path), "spec"), base_dir=run_dir)
+    spec = parse_aedt_spec(_object(read_json(spec_path), "spec"), base_dir=run_dir)
     if spec.gds_path.resolve() != (run_dir / "geometry" / "design.gds").resolve():
         raise RuntimeError("prepared spec must use geometry/design.gds")
     _require_pristine_run(run_dir, spec)
@@ -84,7 +86,7 @@ def _execute(metadata_path: Path) -> int:
         _verify_prepared_hashes(metadata, spec_path, spec.gds_path)
         if _pyaedt_version() != LOCKED_PYAEDT:
             raise RuntimeError("PyAEDT lock mismatch")
-        from ansys.aedt.core import Desktop, Hfss
+        from ansys.aedt.core import Desktop, Hfss, Q3d
 
         desktop = Desktop(
             version=REQUIRED_AEDT_VERSION,
@@ -95,7 +97,11 @@ def _execute(metadata_path: Path) -> int:
         if desktop.aedt_version_id != REQUIRED_AEDT_VERSION:
             raise RuntimeError(f"AEDT version mismatch: {desktop.aedt_version_id!r}")
         receipt["runtime_source"] = _runtime_source_identity()
-        result = _solve(Hfss, run_dir, spec)
+        result = (
+            _solve_q3d(Q3d, run_dir, spec)
+            if isinstance(spec, Q3dSpec)
+            else _solve(Hfss, run_dir, spec)
+        )
         status = "completed"
     except Exception as exc:  # noqa: BLE001 -- receipt must record any solver failure.
         failure = f"{type(exc).__name__}: {exc}"
@@ -124,11 +130,13 @@ def _execute(metadata_path: Path) -> int:
             receipt["outputs"] = result["outputs"]
             receipt["connected"] = result["connected"]
             receipt["project"] = result["project"]
-            receipt["ports"] = result["ports"]
-            receipt["mesh"] = result["mesh"]
+            receipt["ports"] = result.get("ports", [])
+            receipt["nets"] = result.get("nets", [])
+            receipt["mesh"] = result.get("mesh", {})
             receipt["materials"] = result["materials"]
             receipt["region"] = result["region"]
             receipt["result_readback"] = result["result_readback"]
+            receipt["setup"] = result.get("setup")
         receipt["diagnostics"] = _read_physics_warnings(run_dir)
         receipt["status"] = status
         receipt["finished_at_utc"] = _utc_now()
@@ -189,7 +197,49 @@ def _solve(Hfss: Any, run_dir: Path, spec: HfssSpec) -> dict[str, Any]:
     }
 
 
-def _import_and_bind(hfss: Any, spec: HfssSpec) -> list[dict[str, Any]]:
+def _solve_q3d(Q3d: Any, run_dir: Path, spec: Q3dSpec) -> dict[str, Any]:
+    project_path = run_dir / f"{spec.project_name}.aedt"
+    app = Q3d(
+        project=str(project_path),
+        design=spec.design_name,
+        new_desktop=False,
+        close_on_exit=False,
+    )
+    if app.desktop_class.aedt_version_id != REQUIRED_AEDT_VERSION:
+        raise RuntimeError("Q3D did not bind the owned AEDT 2024.2 desktop")
+    app.modeler.model_units = "um"
+    materials = _import_and_bind(app, spec)
+    region = _create_region(app, spec)
+    nets = _assign_q3d_nets(app, spec)
+    setup = _setup_q3d(app, spec)
+    if not app.save_project() or not project_path.is_file():
+        raise RuntimeError("Q3D project was not saved before solve")
+    if not app.analyze_setup(name=spec.run_control.setup_name, blocking=True):
+        raise RuntimeError(
+            f"Q3D failed to analyze setup {spec.run_control.setup_name!r}"
+        )
+    outputs, result_readback = _export_q3d(app, run_dir, spec)
+    if not app.save_project() or not project_path.is_file():
+        raise RuntimeError("Q3D project was not saved")
+    project_relative = project_path.relative_to(run_dir).as_posix()
+    outputs[project_relative] = file_sha256(project_path)
+    return {
+        "outputs": outputs,
+        "connected": {
+            "aedt_version": app.desktop_class.aedt_version_id,
+            "pyaedt_version": _pyaedt_version(),
+        },
+        "project": project_relative,
+        "nets": nets,
+        "materials": materials,
+        "region": region,
+        "setup": setup,
+        "result_readback": result_readback,
+        "save": {"ok": True, "project_sha256": outputs[project_relative]},
+    }
+
+
+def _import_and_bind(hfss: Any, spec: HfssSpec | Q3dSpec) -> list[dict[str, Any]]:
     mapping = {
         item.layer: [
             (item.z_min_um, item.z_max_um - item.z_min_um),
@@ -242,8 +292,19 @@ def _import_and_bind(hfss: Any, spec: HfssSpec) -> list[dict[str, Any]]:
             "native_destination_layer_prefix": layer.layer_name,
         }
         if material.is_superconducting:
-            pec.append(binding.object_name)
-            record["requested_pec_boundary"] = "SCGSimPEC"
+            if isinstance(spec, Q3dSpec):
+                obj.material_name = "pec"
+                observed_material = _native_object_property(obj, "Material").strip('"')
+                if observed_material.casefold() != "pec":
+                    raise RuntimeError(
+                        f"Q3D PEC material readback mismatch for {binding.object_name!r}"
+                    )
+                record["observed"] = {
+                    "native_material_name": observed_material,
+                }
+            else:
+                pec.append(binding.object_name)
+                record["requested_pec_boundary"] = "SCGSimPEC"
         else:
             existing = hfss.materials.exists_material(material.library_name)
             if not existing:
@@ -284,7 +345,7 @@ def _import_and_bind(hfss: Any, spec: HfssSpec) -> list[dict[str, Any]]:
     return observed
 
 
-def _create_region(hfss: Any, spec: HfssSpec) -> dict[str, Any]:
+def _create_region(hfss: Any, spec: HfssSpec | Q3dSpec) -> dict[str, Any]:
     if hfss.modeler.get_object_from_name("Region") is not None:
         raise RuntimeError("new V1 design unexpectedly already has Region")
     region = hfss.modeler.create_region(
@@ -309,6 +370,232 @@ def _create_region(hfss: Any, spec: HfssSpec) -> dict[str, Any]:
         "requested_library_name": vacuum.library_name,
         "observed_material_name": observed_material,
         "padding_um": list(spec.region_padding_um),
+    }
+
+
+def _assign_q3d_nets(app: Any, spec: Q3dSpec) -> list[dict[str, Any]]:
+    directions = {"-X": 0, "-Y": 1, "-Z": 2, "+X": 3, "+Y": 4, "+Z": 5}
+    records: list[dict[str, Any]] = []
+    for net in spec.nets:
+        boundary = app.assign_net(list(net.object_names), net.name, net.net_type)
+        if boundary is None or net.name not in app.net_names:
+            raise RuntimeError(f"Q3D net assignment failed for {net.name!r}")
+        expected_ids = [
+            int(app.modeler.get_object_from_name(name).id) for name in net.object_names
+        ]
+        observed_ids = [
+            int(value) for value in app.oboundary.GetExcitationAssignment(net.name)
+        ]
+        if observed_ids != expected_ids:
+            raise RuntimeError(f"Q3D native net assignment mismatch for {net.name!r}")
+        record: dict[str, Any] = {
+            "name": net.name,
+            "net_type": net.net_type,
+            "object_names": list(net.object_names),
+            "native_object_ids": observed_ids,
+        }
+        if net.net_type == "Signal":
+            source_name = f"{net.name}Source"
+            sink_name = f"{net.name}Sink"
+            source_direction = directions[net.source_side]
+            sink_direction = directions[net.sink_side]
+            source = app.source(
+                net.source_object,
+                direction=source_direction,
+                name=source_name,
+                net_name=net.name,
+            )
+            sink = app.sink(
+                net.sink_object,
+                direction=sink_direction,
+                name=sink_name,
+                net_name=net.name,
+            )
+            if source is None or sink is None:
+                raise RuntimeError(
+                    f"Q3D source/sink assignment failed for {net.name!r}"
+                )
+            source_faces = [
+                int(value)
+                for value in app.oboundary.GetExcitationAssignment(source_name)
+            ]
+            sink_faces = [
+                int(value) for value in app.oboundary.GetExcitationAssignment(sink_name)
+            ]
+            expected_source = int(
+                app.modeler._get_faceid_on_axis(net.source_object, source_direction)
+            )
+            expected_sink = int(
+                app.modeler._get_faceid_on_axis(net.sink_object, sink_direction)
+            )
+            if source_faces != [expected_source] or sink_faces != [expected_sink]:
+                raise RuntimeError(
+                    f"Q3D native source/sink assignment mismatch for {net.name!r}"
+                )
+            record["source"] = {
+                "name": source_name,
+                "object_name": net.source_object,
+                "side": net.source_side,
+                "native_face_ids": source_faces,
+            }
+            record["sink"] = {
+                "name": sink_name,
+                "object_name": net.sink_object,
+                "side": net.sink_side,
+                "native_face_ids": sink_faces,
+            }
+        records.append(record)
+    if app.net_names != [net.name for net in spec.nets]:
+        raise RuntimeError("Q3D native net order does not match the structured spec")
+    return records
+
+
+def _setup_q3d(app: Any, spec: Q3dSpec) -> dict[str, Any]:
+    if app.setup_names:
+        raise RuntimeError("new Q3D design must not inherit a setup")
+    setup = app.create_setup(spec.run_control.setup_name)
+    setup.dc_enabled = False
+    setup.props["AdaptiveFreq"] = f"{spec.run_control.frequency_ghz:g}GHz"
+    setup.props["Cap"]["MaxPass"] = spec.run_control.maximum_passes
+    setup.props["AC"]["MaxPass"] = spec.run_control.maximum_passes
+    if not setup.update():
+        raise RuntimeError("Q3D setup update failed")
+    analysis = app.get_oo_object(app.odesign, "Analysis")
+    names = app.get_oo_name(app.odesign, "Analysis")
+    properties = app.get_oo_properties(analysis, setup.name)
+    native = {
+        "adaptive_frequency": app.get_oo_property_value(
+            analysis, setup.name, "Adaptive Freq"
+        ),
+        "capacitance_maximum_passes": app.get_oo_property_value(
+            analysis, setup.name, "CG[Max. Number of Passes]"
+        ),
+        "ac_rl_maximum_passes": app.get_oo_property_value(
+            analysis, setup.name, "AC[Max. Number of Passes]"
+        ),
+        "dc_enabled": "DC[Max. Number of Passes]" in properties,
+    }
+    expected = {
+        "adaptive_frequency": f"{spec.run_control.frequency_ghz:g}GHz",
+        "capacitance_maximum_passes": str(spec.run_control.maximum_passes),
+        "ac_rl_maximum_passes": str(spec.run_control.maximum_passes),
+        "dc_enabled": False,
+    }
+    if names != [setup.name] or native != expected:
+        raise RuntimeError(f"Q3D native setup readback mismatch: {native!r}")
+    return {"name": setup.name, "native": native}
+
+
+def _export_q3d(
+    app: Any, run_dir: Path, spec: Q3dSpec
+) -> tuple[dict[str, str], dict[str, Any]]:
+    output_dir = run_dir / "results" / "q3d"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    hashes: dict[str, str] = {}
+    summaries: dict[str, Any] = {}
+    normalized: list[dict[str, Any]] = []
+    frequency_hz = spec.run_control.frequency_ghz * 1e9
+    for problem, stem in (("C", "c"), ("AC RL", "ac_rl")):
+        path = output_dir / f"{stem}_matrix.csv"
+        app.odesign.ExportMatrixData(
+            str(path),
+            problem,
+            "",
+            f"{spec.run_control.setup_name} : LastAdaptive",
+            "Original",
+            "ohm",
+            "nH",
+            "pF",
+            "mho",
+            frequency_hz,
+            "Maxwell",
+            0,
+            False,
+            15,
+            20,
+            1,
+        )
+        rows, summary = _parse_q3d_matrix(path, problem, spec.run_control.frequency_ghz)
+        normalized.extend(rows)
+        summaries[stem] = summary
+        hashes[path.relative_to(run_dir).as_posix()] = file_sha256(path)
+    normalized_path = output_dir / "matrices.csv"
+    write_csv(
+        normalized_path,
+        normalized,
+        fieldnames=["problem_type", "quantity", "row", "column", "value", "unit"],
+    )
+    hashes[normalized_path.relative_to(run_dir).as_posix()] = file_sha256(
+        normalized_path
+    )
+    return hashes, {
+        "matrices": {
+            "frequency_ghz": spec.run_control.frequency_ghz,
+            "native": summaries,
+            "normalized_rows": len(normalized),
+        }
+    }
+
+
+def _parse_q3d_matrix(
+    path: Path, problem: str, frequency_ghz: float
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not path.is_file() or path.stat().st_size == 0:
+        raise RuntimeError(f"Q3D {problem} matrix export is missing or empty")
+    lines = path.read_text(encoding="utf-8", errors="strict").splitlines()
+    if (
+        f"Problem Type:  {problem}" not in lines
+        or f"Frequency:  {frequency_ghz:g}GHz" not in lines
+    ):
+        raise RuntimeError(f"Q3D {problem} matrix header is invalid")
+    unit_line = next((line for line in lines if " Units:" in line), None)
+    if unit_line is None:
+        raise RuntimeError(f"Q3D {problem} matrix units are missing")
+    units = dict(re.findall(r"([CGRL]) Units:([^,]+)", unit_line))
+    titles = {
+        "C": {"Capacitance Matrix": "C", "Conductance Matrix": "G"},
+        "AC RL": {"AC Inductance Matrix": "L", "AC Resistance Matrix": "R"},
+    }[problem]
+    result: list[dict[str, Any]] = []
+    labels_by_quantity: dict[str, list[str]] = {}
+    for title, quantity in titles.items():
+        try:
+            title_index = lines.index(title)
+        except ValueError as exc:
+            raise RuntimeError(f"Q3D export is missing {title!r}") from exc
+        header_index = title_index + 1
+        while header_index < len(lines) and not lines[header_index].strip():
+            header_index += 1
+        header = next(csv.reader([lines[header_index]]))
+        labels = [value.strip() for value in header[1:] if value.strip()]
+        if not labels or len(set(labels)) != len(labels):
+            raise RuntimeError(f"Q3D {title} labels are invalid")
+        labels_by_quantity[quantity] = labels
+        for row_index, row_name in enumerate(labels, start=header_index + 1):
+            values = next(csv.reader([lines[row_index]]))
+            if values[0].strip() != row_name or len(values[1:]) != len(labels):
+                raise RuntimeError(f"Q3D {title} matrix is not square")
+            for column, raw in zip(labels, values[1:], strict=True):
+                value = float(raw)
+                if not math.isfinite(value):
+                    raise RuntimeError(f"Q3D {title} contains a non-finite value")
+                result.append(
+                    {
+                        "problem_type": problem,
+                        "quantity": quantity,
+                        "row": row_name,
+                        "column": column,
+                        "value": value,
+                        "unit": units[quantity],
+                    }
+                )
+    return result, {
+        "problem_type": problem,
+        "frequency_ghz": frequency_ghz,
+        "quantities": list(titles.values()),
+        "labels": labels_by_quantity,
+        "rows": len(result),
+        "bytes": path.stat().st_size,
     }
 
 

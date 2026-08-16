@@ -1,4 +1,4 @@
-"""Portable, manual-only handoff preparation for one two-port HFSS CPW run."""
+"""Portable, manual-only handoff preparation for one AEDT run."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from .spec import OFFICIAL_PYAEDT_SOURCE_URL, HfssSpec
+from .spec import OFFICIAL_PYAEDT_SOURCE_URL, AedtSpec
 from .util import file_sha256, write_json
 
 
@@ -25,7 +25,7 @@ class HandoffPlan:
     archive_path: Path
 
 
-def prepare_handoff(*, spec: HfssSpec, output_dir: str | Path) -> HandoffPlan:
+def prepare_handoff(*, spec: AedtSpec, output_dir: str | Path) -> HandoffPlan:
     """Copy and bind a checked public GDS into a new portable run directory."""
     source_gds = spec.gds_path.resolve()
     if not source_gds.is_file():

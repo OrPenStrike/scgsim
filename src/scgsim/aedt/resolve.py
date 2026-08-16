@@ -1,7 +1,8 @@
-"""Receipt-bound resolution of one completed HFSS CPW handoff."""
+"""Receipt-bound resolution of one completed AEDT handoff."""
 
 from __future__ import annotations
 
+import csv
 import math
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,9 +11,9 @@ from typing import Any, Literal
 from .spec import (
     HfssDrivenSpec,
     HfssEigenmodeSpec,
-    HfssSpec,
     ModalPort,
-    parse_hfss_spec,
+    Q3dSpec,
+    parse_aedt_spec,
 )
 from .util import file_sha256, read_json
 
@@ -21,7 +22,7 @@ from .util import file_sha256, read_json
 class ResolvedRun:
     """Canonical result paths verified against the completed run receipt."""
 
-    mode: Literal["terminal", "modal", "eigenmode"]
+    mode: Literal["terminal", "modal", "eigenmode", "q3d"]
     project_path: Path
     primary_csv: Path
     touchstone_path: Path | None
@@ -61,10 +62,10 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
         raise RuntimeError("receipt source paths are not canonical")
     spec_path = _verified(root, "aedt_spec.json", source, "spec_sha256")
     _verified(root, "geometry/design.gds", source, "gds_sha256")
-    spec = parse_hfss_spec(read_json(spec_path), base_dir=root)
+    spec = parse_aedt_spec(read_json(spec_path), base_dir=root)
     mode = receipt.get("mode")
-    if mode not in {"terminal", "modal", "eigenmode"} or spec.mode != mode:
-        raise RuntimeError("AEDT HFSS receipt mode is invalid")
+    if mode not in {"terminal", "modal", "eigenmode", "q3d"} or spec.mode != mode:
+        raise RuntimeError("AEDT receipt mode is invalid")
     _validate_readback(root, receipt, spec)
     outputs = receipt.get("outputs")
     if not isinstance(outputs, dict):
@@ -75,6 +76,23 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
     project = _verified(root, project_relative, outputs, project_relative)
     if save["project_sha256"] != outputs.get(project_relative):
         raise RuntimeError("saved project hash does not match output manifest")
+    if mode == "q3d":
+        expected = {
+            project_relative,
+            "results/q3d/c_matrix.csv",
+            "results/q3d/ac_rl_matrix.csv",
+            "results/q3d/matrices.csv",
+        }
+        if set(outputs) != expected:
+            raise RuntimeError("Q3D output manifest is not canonical")
+        return ResolvedRun(
+            "q3d",
+            project,
+            _verified(root, "results/q3d/matrices.csv", outputs),
+            None,
+            None,
+            receipt_path,
+        )
     if mode == "eigenmode":
         expected = {
             project_relative,
@@ -119,7 +137,7 @@ def _contained(root: Path, relative: str) -> Path:
     return resolved
 
 
-def _validate_readback(root: Path, receipt: dict[str, Any], spec: HfssSpec) -> None:
+def _validate_readback(root: Path, receipt: dict[str, Any], spec: Any) -> None:
     connected = receipt.get("connected")
     if not isinstance(connected, dict) or connected != {
         "aedt_version": spec.aedt_version,
@@ -127,6 +145,10 @@ def _validate_readback(root: Path, receipt: dict[str, Any], spec: HfssSpec) -> N
     }:
         raise RuntimeError("completed receipt has invalid connected version identity")
     readback = receipt.get("result_readback")
+    if isinstance(spec, Q3dSpec):
+        _validate_q3d_readback(root, receipt, spec)
+        _validate_diagnostics(root, receipt.get("diagnostics"))
+        return
     if isinstance(spec, HfssEigenmodeSpec):
         _validate_eigenmode_readback(receipt, spec)
         _validate_diagnostics(root, receipt.get("diagnostics"))
@@ -177,6 +199,84 @@ def _validate_readback(root: Path, receipt: dict[str, Any], spec: HfssSpec) -> N
     else:
         _validate_modal_native_evidence(ports, spec)
     _validate_diagnostics(root, receipt.get("diagnostics"))
+
+
+def _validate_q3d_readback(root: Path, receipt: dict[str, Any], spec: Q3dSpec) -> None:
+    if receipt.get("ports") != []:
+        raise RuntimeError("Q3D receipt must not contain HFSS ports")
+    nets = receipt.get("nets")
+    if not isinstance(nets, list) or len(nets) != len(spec.nets):
+        raise RuntimeError("Q3D receipt has invalid net evidence")
+    for record, expected in zip(nets, spec.nets, strict=True):
+        if (
+            not isinstance(record, dict)
+            or record.get("name") != expected.name
+            or record.get("net_type") != expected.net_type
+            or record.get("object_names") != list(expected.object_names)
+            or not isinstance(record.get("native_object_ids"), list)
+            or not record["native_object_ids"]
+        ):
+            raise RuntimeError("Q3D native net evidence does not match the spec")
+        if expected.net_type == "Signal":
+            for kind, object_name, side in (
+                ("source", expected.source_object, expected.source_side),
+                ("sink", expected.sink_object, expected.sink_side),
+            ):
+                terminal = record.get(kind)
+                if (
+                    not isinstance(terminal, dict)
+                    or terminal.get("name") != f"{expected.name}{kind.title()}"
+                    or terminal.get("object_name") != object_name
+                    or terminal.get("side") != side
+                    or not isinstance(terminal.get("native_face_ids"), list)
+                    or len(terminal["native_face_ids"]) != 1
+                    or not isinstance(terminal["native_face_ids"][0], int)
+                ):
+                    raise RuntimeError("Q3D native terminal evidence is invalid")
+        elif "source" in record or "sink" in record:
+            raise RuntimeError("Q3D Ground net receipt must not contain terminals")
+    expected_setup = {
+        "name": spec.run_control.setup_name,
+        "native": {
+            "adaptive_frequency": f"{spec.run_control.frequency_ghz:g}GHz",
+            "capacitance_maximum_passes": str(spec.run_control.maximum_passes),
+            "ac_rl_maximum_passes": str(spec.run_control.maximum_passes),
+            "dc_enabled": False,
+        },
+    }
+    if receipt.get("setup") != expected_setup:
+        raise RuntimeError("Q3D native setup evidence is invalid")
+    readback = receipt.get("result_readback")
+    matrices = readback.get("matrices") if isinstance(readback, dict) else None
+    if (
+        not isinstance(matrices, dict)
+        or matrices.get("frequency_ghz") != spec.run_control.frequency_ghz
+        or set(matrices.get("native", {})) != {"c", "ac_rl"}
+        or not isinstance(matrices.get("normalized_rows"), int)
+        or matrices["normalized_rows"] <= 0
+    ):
+        raise RuntimeError("Q3D matrix readback is invalid")
+    path = _contained(root, "results/q3d/matrices.csv")
+    with path.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    if len(rows) != matrices["normalized_rows"] or not rows:
+        raise RuntimeError("Q3D normalized matrix row count is invalid")
+    expected_quantities = {"C", "G", "L", "R"}
+    if {row.get("quantity") for row in rows} != expected_quantities:
+        raise RuntimeError("Q3D normalized matrix quantities are incomplete")
+    for row in rows:
+        try:
+            value = float(row["value"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("Q3D normalized matrix value is invalid") from exc
+        if (
+            not math.isfinite(value)
+            or row.get("problem_type") not in {"C", "AC RL"}
+            or not row.get("row")
+            or not row.get("column")
+            or not row.get("unit")
+        ):
+            raise RuntimeError("Q3D normalized matrix row is invalid")
 
 
 def _validate_eigenmode_readback(

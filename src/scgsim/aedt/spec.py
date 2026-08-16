@@ -1,4 +1,4 @@
-"""Explicit, fail-closed input contract for the two-port HFSS CPW V1."""
+"""Explicit, fail-closed input contracts for the AEDT runtime families."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ Side = Literal["+X", "-X", "+Y", "-Y", "+Z", "-Z"]
 
 SCHEMA_VERSION = "scgsim.aedt.hfss-driven.v1"
 EIGENMODE_SCHEMA_VERSION = "scgsim.aedt.hfss-eigenmode.v1"
+Q3D_SCHEMA_VERSION = "scgsim.aedt.q3d.v1"
 OFFICIAL_PYAEDT_SOURCE_URL = "https://github.com/ansys/pyaedt/tree/v1.3.0"
 LOCKED_PYAEDT = "1.3.0"
 REQUIRED_AEDT_VERSION = "2024.2"
@@ -706,12 +707,233 @@ class HfssEigenmodeSpec:
 HfssSpec = HfssDrivenSpec | HfssEigenmodeSpec
 
 
-def parse_hfss_spec(
+@dataclass(frozen=True)
+class Q3dRunControl:
+    """One Q3D setup solving capacitance and AC R/L at one frequency."""
+
+    setup_name: str
+    frequency_ghz: float
+    maximum_passes: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "setup_name", _text(self.setup_name, "setup_name"))
+        frequency = _number(self.frequency_ghz, "frequency_ghz")
+        if frequency <= 0:
+            raise ValueError("Q3D frequency_ghz must be > 0")
+        if not isinstance(self.maximum_passes, int) or self.maximum_passes <= 0:
+            raise ValueError("Q3D maximum_passes must be a positive integer")
+        object.__setattr__(self, "frequency_ghz", frequency)
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "setup_name": self.setup_name,
+            "frequency_ghz": self.frequency_ghz,
+            "maximum_passes": self.maximum_passes,
+        }
+
+
+@dataclass(frozen=True)
+class Q3dNetSpec:
+    """One exact connected Q3D net and optional signal source/sink."""
+
+    name: str
+    net_type: Literal["Signal", "Ground"]
+    object_names: tuple[str, ...]
+    source_object: str | None = None
+    source_side: Side | None = None
+    sink_object: str | None = None
+    sink_side: Side | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "name", _text(self.name, "net.name"))
+        if self.net_type not in {"Signal", "Ground"}:
+            raise ValueError("Q3D net_type must be Signal or Ground")
+        objects = tuple(_text(value, "net.object_name") for value in self.object_names)
+        if not objects or len(set(objects)) != len(objects):
+            raise ValueError("Q3D net object_names must be nonempty and unique")
+        object.__setattr__(self, "object_names", objects)
+        terminal_values = (
+            self.source_object,
+            self.source_side,
+            self.sink_object,
+            self.sink_side,
+        )
+        if self.net_type == "Ground":
+            if any(value is not None for value in terminal_values):
+                raise ValueError("Q3D Ground nets must not define source or sink")
+            return
+        if any(value is None for value in terminal_values):
+            raise ValueError(
+                "Q3D Signal nets require exact source and sink objects/sides"
+            )
+        source = _text(self.source_object, "net.source_object")
+        sink = _text(self.sink_object, "net.sink_object")
+        if source not in objects or sink not in objects:
+            raise ValueError("Q3D source and sink objects must belong to their net")
+        if self.source_side not in {
+            "+X",
+            "-X",
+            "+Y",
+            "-Y",
+            "+Z",
+            "-Z",
+        } or self.sink_side not in {
+            "+X",
+            "-X",
+            "+Y",
+            "-Y",
+            "+Z",
+            "-Z",
+        }:
+            raise ValueError("Q3D source and sink sides are invalid")
+        object.__setattr__(self, "source_object", source)
+        object.__setattr__(self, "sink_object", sink)
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "net_type": self.net_type,
+            "object_names": list(self.object_names),
+            "source_object": self.source_object,
+            "source_side": self.source_side,
+            "sink_object": self.sink_object,
+            "sink_side": self.sink_side,
+        }
+
+
+@dataclass(frozen=True)
+class Q3dSpec:
+    """One direct-GDS Q3D capacitance and AC R/L extraction."""
+
+    gds_path: Path | str
+    project_name: str
+    design_name: str
+    materials: Mapping[str, PdkMaterial]
+    vacuum_material_id: str
+    layer_imports: tuple[LayerImport, ...]
+    object_bindings: tuple[ObjectBinding, ...]
+    nets: tuple[Q3dNetSpec, ...]
+    run_control: Q3dRunControl
+    region_padding_um: tuple[float, float, float, float, float, float]
+    aedt_version: str = REQUIRED_AEDT_VERSION
+    pyaedt_version: str = LOCKED_PYAEDT
+
+    @property
+    def mode(self) -> Literal["q3d"]:
+        return "q3d"
+
+    def __post_init__(self) -> None:
+        grounds, signals = _normalize_gds_spec(self)
+        object.__setattr__(self, "region_padding_um", _padding(self.region_padding_um))
+        nets = tuple(self.nets)
+        if (
+            not nets
+            or len({net.name for net in nets}) != len(nets)
+            or not any(net.net_type == "Signal" for net in nets)
+            or not any(net.net_type == "Ground" for net in nets)
+        ):
+            raise ValueError("Q3D requires unique Signal and Ground nets")
+        owners = {object_name: net for net in nets for object_name in net.object_names}
+        if len(owners) != sum(len(net.object_names) for net in nets):
+            raise ValueError("Q3D conductor objects must belong to exactly one net")
+        if set(owners) != grounds | signals:
+            raise ValueError("Q3D nets must cover every declared conductor exactly")
+        if any(
+            (name in signals) != (net.net_type == "Signal")
+            for name, net in owners.items()
+        ):
+            raise ValueError("Q3D net types must match structured conductor roles")
+        layers = {item.layer: item for item in self.layer_imports}
+        if any(
+            layers[binding.layer].z_max_um <= layers[binding.layer].z_min_um
+            for binding in self.object_bindings
+            if binding.role in {"signal", "ground"}
+        ):
+            raise ValueError("Q3D conductor imports require positive finite thickness")
+        object.__setattr__(self, "nets", nets)
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": Q3D_SCHEMA_VERSION,
+            "mode": self.mode,
+            "aedt": {"requested_version": self.aedt_version},
+            "pyaedt": {
+                "locked_version": self.pyaedt_version,
+                "official_source": OFFICIAL_PYAEDT_SOURCE_URL,
+            },
+            "project": {"name": self.project_name, "design": self.design_name},
+            "materials": {
+                material_id: item.to_payload()
+                for material_id, item in self.materials.items()
+            },
+            "vacuum_material_id": self.vacuum_material_id,
+            "gds": {"path": self.gds_path.as_posix()},
+            "layer_imports": [item.to_payload() for item in self.layer_imports],
+            "object_bindings": [item.to_payload() for item in self.object_bindings],
+            "nets": [item.to_payload() for item in self.nets],
+            "run_control": self.run_control.to_payload(),
+            "region_padding_um": list(self.region_padding_um),
+        }
+
+    @classmethod
+    def from_payload(
+        cls, payload: dict[str, Any], *, base_dir: Path | None = None
+    ) -> Q3dSpec:
+        if payload.get("schema_version") != Q3D_SCHEMA_VERSION:
+            raise ValueError("unsupported Q3D schema")
+        gds = Path(_text(payload.get("gds", {}).get("path"), "gds.path"))
+        if base_dir is not None and not gds.is_absolute():
+            gds = base_dir / gds
+        raw_materials = payload.get("materials")
+        if not isinstance(raw_materials, dict):
+            raise TypeError("materials must be a JSON object")
+        materials = {
+            material_id: PdkMaterial(**item)
+            for material_id, item in raw_materials.items()
+        }
+        run = payload.get("run_control")
+        if not isinstance(run, dict):
+            raise TypeError("run_control must be a JSON object")
+        return cls(
+            gds_path=gds,
+            project_name=_text(payload.get("project", {}).get("name"), "project.name"),
+            design_name=_text(
+                payload.get("project", {}).get("design"), "project.design"
+            ),
+            materials=materials,
+            vacuum_material_id=_text(
+                payload.get("vacuum_material_id"), "vacuum_material_id"
+            ),
+            layer_imports=tuple(
+                LayerImport(**item) for item in payload.get("layer_imports", ())
+            ),
+            object_bindings=tuple(
+                ObjectBinding(**item) for item in payload.get("object_bindings", ())
+            ),
+            nets=tuple(Q3dNetSpec(**item) for item in payload.get("nets", ())),
+            run_control=Q3dRunControl(**run),
+            region_padding_um=tuple(payload.get("region_padding_um", ())),  # type: ignore[arg-type]
+            aedt_version=_text(
+                payload.get("aedt", {}).get("requested_version"),
+                "aedt.requested_version",
+            ),
+            pyaedt_version=_text(
+                payload.get("pyaedt", {}).get("locked_version"), "pyaedt.locked_version"
+            ),
+        )
+
+
+AedtSpec = HfssSpec | Q3dSpec
+
+
+def parse_aedt_spec(
     payload: dict[str, Any], *, base_dir: Path | None = None
-) -> HfssSpec:
-    """Dispatch one explicit HFSS schema without inferring solver family."""
+) -> AedtSpec:
+    """Dispatch one explicit AEDT schema without inferring solver family."""
     if payload.get("schema_version") == SCHEMA_VERSION:
         return HfssDrivenSpec.from_payload(payload, base_dir=base_dir)
     if payload.get("schema_version") == EIGENMODE_SCHEMA_VERSION:
         return HfssEigenmodeSpec.from_payload(payload, base_dir=base_dir)
-    raise ValueError("unsupported HFSS schema")
+    if payload.get("schema_version") == Q3D_SCHEMA_VERSION:
+        return Q3dSpec.from_payload(payload, base_dir=base_dir)
+    raise ValueError("unsupported AEDT schema")

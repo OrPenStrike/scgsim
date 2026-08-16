@@ -7,8 +7,8 @@ state without silently changing behavior.
 
 from .handoff import HandoffPlan, prepare_handoff
 from .resolve import ResolvedRun, resolve_results
-from .run import main as run_main
 from .spec import (
+    AedtSpec,
     EigenmodeRunControl,
     FrequencySweepSpec,
     HfssDrivenMode,
@@ -21,11 +21,15 @@ from .spec import (
     ModalPort,
     ObjectBinding,
     PdkMaterial,
+    Q3dNetSpec,
+    Q3dRunControl,
+    Q3dSpec,
     TerminalPort,
-    parse_hfss_spec,
+    parse_aedt_spec,
 )
 
 __all__ = [
+    "AedtSpec",
     "EigenmodeRunControl",
     "FrequencySweepSpec",
     "HandoffPlan",
@@ -39,10 +43,12 @@ __all__ = [
     "ModalPort",
     "ObjectBinding",
     "PdkMaterial",
+    "Q3dNetSpec",
+    "Q3dRunControl",
+    "Q3dSpec",
     "ResolvedRun",
     "TerminalPort",
-    "parse_hfss_spec",
+    "parse_aedt_spec",
     "prepare_handoff",
     "resolve_results",
-    "run_main",
 ]
