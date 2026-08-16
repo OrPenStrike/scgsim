@@ -12,6 +12,10 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 
 [project.optional-dependencies]
+aedt = [
+    "gdstk",
+    "pyaedt==1.3.0",
+]
 palace = [
     "gdsfactory>=9,<10",
     "gdstk",
