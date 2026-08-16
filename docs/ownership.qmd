@@ -22,6 +22,7 @@ Generated site output is never source authority.
 | Owner | Responsibility |
 |---|---|
 | SCGSim Development | Package/build/runtime/report source, schemas, tests, scripts, CI/release, and generated API-reference producers |
+| OrPen SC PDK | Public PDK facts, public Component source, and public component-simulation notebooks |
 | SCQ Documentation | `README.md`, `_quarto.yml`, authored `docs/**`, authored documentation assets, Quarto information architecture and prose, generated-reference placement/presentation |
 | Chip Design EPR | Surface-EPR requirements and private consumer validation only |
 | `scq-ansys-aedt` | Version-locked AEDT/PyAEDT procedure only; no repository path ownership |

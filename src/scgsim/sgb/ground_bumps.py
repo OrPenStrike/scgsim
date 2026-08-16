@@ -1,4 +1,4 @@
-"""Public OrPen SC PDK semantic-stack adapter for the Xmon example."""
+"""PDK-driven deterministic ground-bump fill."""
 
 from __future__ import annotations
 
@@ -6,251 +6,10 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
-from math import ceil, cos, isfinite, radians, sin
+from math import ceil, isfinite
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
-
-_LEVELS = (
-    "D0_SUBSTRATE",
-    "D0_TO_D1_GAP",
-    "D1_SUBSTRATE",
-    "OUTER_VACUUM",
-    "D0_TOP_M1",
-    "D1_BOTTOM_M1",
-    "D0_D1_INDIUM_BUMP",
-)
-
-# This adapter is intentionally tied to the public examples extra pin.  The
-# receipt records the source identity alongside the PDK-owned primitive/spec.
-_ORPEN_SC_PDK_REVISION = "8be8fc48c26f6bed06298cab673d49b9a6afbe7f"
-_FILL_OWNER_SEMANTIC_IDS = ("D0_TOP_GROUND_PLANE", "D1_BOTTOM_GROUND_PLANE")
-
-
-def build_kosen2024_flip_chip_xmon_stack(
-    *,
-    component: Any,
-    layer_stack: Any,
-    material_records: Mapping[str, Mapping[str, Any]],
-    d0_top_ground_mask_layer: tuple[int, int],
-    indium_bump_layer: tuple[int, int],
-    coupon_padding_um: float,
-    include_airbox: bool = True,
-    air_below_thickness_um: float | None = None,
-    air_above_thickness_um: float | None = None,
-) -> dict[str, Any]:
-    """Project public PDK facts into the one SCGSim Route-A/B stack contract.
-
-    PDK records remain the authority for material, z, thickness and layers.
-    Signal identities come only from the documented topology anchor and authored
-    component ports; no layout-name, bbox, or residual-policy inference occurs.
-    """
-    if not isinstance(include_airbox, bool):
-        raise TypeError("include_airbox must be a bool.")
-    levels = getattr(layer_stack, "layers", None)
-    if not isinstance(levels, Mapping):
-        raise TypeError("layer_stack must expose public LayerStack.layers.")
-    required_levels = _LEVELS if include_airbox else _LEVELS[:3] + _LEVELS[4:]
-    missing = [name for name in required_levels if name not in levels]
-    if missing:
-        raise ValueError(f"public OrPen LayerStack lacks {missing!r}.")
-    d0_substrate, gap, d1_substrate = (levels[name] for name in _LEVELS[:3])
-    outer = levels["OUTER_VACUUM"] if include_airbox else None
-    d0_top, d1_bottom, bump = (levels[name] for name in _LEVELS[4:])
-    coupon_bounds_um = _coupon_domain_bounds(component, coupon_padding_um)
-    d0_z_min = _zmin(d0_substrate)
-    d0_z_max = d0_z_min + _thickness(d0_substrate)
-    gap_z_min = _zmin(gap)
-    gap_z_max = gap_z_min + _thickness(gap)
-    d1_z_min = _zmin(d1_substrate)
-    d1_z_max = d1_z_min + _thickness(d1_substrate)
-    if (abs(d0_z_max - gap_z_min) > 1e-9) or (abs(gap_z_max - d1_z_min) > 1e-9):
-        raise ValueError("public OrPen D0/gap/D1 solution regions must be contiguous.")
-    air_below_thickness = None
-    air_above_thickness = None
-    if include_airbox:
-        air_below_thickness = _positive_number(
-            air_below_thickness_um, "air_below_thickness_um"
-        )
-        air_above_thickness = _positive_number(
-            air_above_thickness_um, "air_above_thickness_um"
-        )
-    info = getattr(component, "info", {})
-    try:
-        layers = info["layers"]
-    except (KeyError, TypeError):
-        layers = {}
-    d1_draw = _layer_tuple(layers.get("q_chip_draw"))
-    d1_mask = _layer_tuple(layers.get("q_chip_ground_mask"))
-    d0_mask = _layer_tuple(d0_top_ground_mask_layer)
-    bump_layer = _layer_tuple(indium_bump_layer)
-    if not all((d1_draw, d1_mask, d0_mask, bump_layer)):
-        raise ValueError("public PDK lacks required D0/D1/bump GDS-layer facts.")
-
-    materials = _materials(material_records)
-    signal_group = "D1_BOTTOM_SIGNAL_GROUP"
-    common = _metal_record(
-        layer=d1_draw,
-        level=d1_bottom,
-        host="D0_TO_D1_GAP",
-        part_role="face_metal",
-        representations={"A": "surface_sheet", "B": "cutout_boundary_shell"},
-        source_layer_name="D1_BOTTOM_M1_DRAW",
-    )
-    selectors = _signal_selectors(component)
-    signal_layers = [
-        {
-            **common,
-            "semantic_id": semantic_id,
-            "net_id": net_id,
-            "geometry": {**common["geometry"], "selector_point_um": point},
-            "metadata": {
-                **common["metadata"],
-                "semantic_group_id": signal_group,
-                "logical_layer_id": "D1_BOTTOM_M1",
-                "source_selector": source,
-            },
-        }
-        for semantic_id, net_id, point, source in selectors
-    ]
-    d0_ground = _metal_record(
-        layer=d0_mask,
-        level=d0_top,
-        host="D0_TO_D1_GAP",
-        part_role="face_metal",
-        representations={"A": "surface_sheet", "B": "cutout_boundary_shell"},
-        source_layer_name="D0_TOP_GROUND_MASK",
-    )
-    d1_ground = _metal_record(
-        layer=d1_mask,
-        level=d1_bottom,
-        host="D0_TO_D1_GAP",
-        part_role="face_metal",
-        representations={"A": "surface_sheet", "B": "cutout_boundary_shell"},
-        source_layer_name="D1_BOTTOM_GROUND_MASK",
-    )
-    d0_ground.update(
-        {
-            "semantic_id": "D0_TOP_GROUND_PLANE",
-            "net_id": "Ground",
-            "geometry": {
-                **d0_ground["geometry"],
-                "geometry_source": "die_face_minus_ground_mask",
-                "plane_bounds_ref": "D0_SUBSTRATE",
-            },
-            "metadata": {
-                **d0_ground["metadata"],
-                "equipotential_id": "Ground",
-            },
-        }
-    )
-    d1_ground.update(
-        {
-            "semantic_id": "D1_BOTTOM_GROUND_PLANE",
-            "net_id": "Ground",
-            "geometry": {
-                **d1_ground["geometry"],
-                "geometry_source": "die_face_minus_ground_mask",
-                "mask_layer": d1_mask,
-                "include_layer": d1_draw,
-                "include_selector_points_um": [(-62.0, -37.0)],
-                "plane_bounds_ref": "D1_SUBSTRATE",
-            },
-            "metadata": {
-                **d1_ground["metadata"],
-                "logical_layer_id": "D1_BOTTOM_M1",
-                "source_selector": "public lower-left junction ground-arm anchor",
-                "equipotential_id": "Ground",
-            },
-        }
-    )
-    bumps = _metal_record(
-        layer=bump_layer,
-        level=bump,
-        host="D0_TO_D1_GAP",
-        part_role="bump_body",
-        representations={"A": "cutout_boundary_shell", "B": "cutout_boundary_shell"},
-        source_layer_name="D0_D1_INDIUM_BUMP",
-    )
-    bumps.update(
-        {
-            "semantic_id": "D0_D1_INDIUM_BUMP",
-            "net_id": "Ground",
-            "geometry": {**bumps["geometry"], "split_polygons_as_entities": True},
-            "metadata": {
-                **bumps["metadata"],
-                # Coalescing is family-scoped; the adapter still retains each
-                # source polygon as a distinct structured entity.
-                "semantic_group_id": "D0_D1_INDIUM_BUMP",
-                "source_kind": "authored",
-                "source_semantic_id": "D0_D1_INDIUM_BUMP",
-            },
-        }
-    )
-    solution_regions = {
-        "D0_SUBSTRATE": _solution(
-            material_id=str(d0_substrate.material),
-            z_min_um=d0_z_min,
-            z_max_um=d0_z_max,
-            domain_bounds_um=coupon_bounds_um,
-        ),
-        "D0_TO_D1_GAP": _solution(
-            material_id=str(gap.material),
-            z_min_um=gap_z_min,
-            z_max_um=gap_z_max,
-            domain_bounds_um=coupon_bounds_um,
-        ),
-        "D1_SUBSTRATE": _solution(
-            material_id=str(d1_substrate.material),
-            z_min_um=d1_z_min,
-            z_max_um=d1_z_max,
-            domain_bounds_um=coupon_bounds_um,
-        ),
-    }
-    if include_airbox:
-        assert outer is not None
-        assert air_below_thickness is not None
-        assert air_above_thickness is not None
-        solution_regions = {
-            "AIR_BELOW": _solution(
-                material_id=str(outer.material),
-                z_min_um=d0_z_min - air_below_thickness,
-                z_max_um=d0_z_min,
-                domain_bounds_um=coupon_bounds_um,
-                is_airbox=True,
-                airbox_side="below",
-            ),
-            **solution_regions,
-            "AIR_ABOVE": _solution(
-                material_id=str(outer.material),
-                z_min_um=d1_z_max,
-                z_max_um=d1_z_max + air_above_thickness,
-                domain_bounds_um=coupon_bounds_um,
-                is_airbox=True,
-                airbox_side="above",
-            ),
-        }
-    metadata = {
-        "adapter": "scgsim.sgb.orpen.build_kosen2024_flip_chip_xmon_stack",
-        "component_contract": "kosen2024_flip_chip_xmon_qubit public zero-argument cell",
-        "excluded_layers": ("D1_BOTTOM_JJ_DRAW", "D0_D1_UNDER_BUMP"),
-        "signal_group": signal_group,
-        "coupon_domain_bounds_um": coupon_bounds_um,
-        "coupon_padding_um": float(coupon_padding_um),
-    }
-    if include_airbox:
-        metadata.update(
-            {
-                "air_below_thickness_um": air_below_thickness,
-                "air_above_thickness_um": air_above_thickness,
-            }
-        )
-    return {
-        "solution_regions": solution_regions,
-        "materials": materials,
-        "layers": [d0_ground, d1_ground, *signal_layers, bumps],
-        "metadata": metadata,
-    }
 
 
 def _prepare_indium_ground_bump_fill(
@@ -263,37 +22,42 @@ def _prepare_indium_ground_bump_fill(
 ) -> dict[str, Any]:
     """Materialize PDK-defined ground-bump fill without mutating its input cell.
 
-    The public PDK owns the bump primitive, physical origin, and keepout-layer
-    meaning.  SCGSim only enumerates the explicit lattice and carries its
-    resulting per-site semantic records through the existing Route-A/B planner.
+    The PDK owns bump polygons, layers, physical origin, and keepout meaning.
+    SCGSim only enumerates the explicit lattice and carries the resulting
+    per-site records through the existing Route-A/B planner.
     """
     if not isinstance(fill, bool):
         raise TypeError("fill must be a bool.")
     pitch = _positive_number(fill_pitch_um, "fill_pitch_um")
     clearance = _non_negative_number(fill_clearance_um, "fill_clearance_um")
-    try:
-        from orpen_sc_pdk import get_indium_ground_bump_spec
-        from orpen_sc_pdk.cells.indium import indium_bump
-    except ImportError as exc:
-        raise RuntimeError(
-            "set_indium_ground_bumps() requires the public orpen-sc-pdk examples extra."
-        ) from exc
-
-    spec = dict(get_indium_ground_bump_spec())
-    if spec.get("schema_identity") != "orpen.indium_ground_bump_spec.v1":
-        raise ValueError("unsupported public indium ground bump spec identity.")
-    origin = _point2(spec.get("lattice_origin_um"), "lattice_origin_um")
-    bump_layer, under_bump_layer = _spec_layers(spec)
-    settings = spec.get("canonical_component_settings")
-    if not isinstance(settings, Mapping):
-        raise TypeError("public indium bump spec settings must be a mapping.")
-
     import gdstk
 
     from scgsim.sgb.adapter import build_gds_stack_geometry_input
     from scgsim.sgb.models import LayoutPolygonSpec, SemanticEntitySpec
 
     result_stack = deepcopy(dict(stack))
+    template, spec = _ground_bump_fill_spec(result_stack)
+    origin = _point2(spec["lattice_origin_um"], "lattice_origin_um")
+    bump_layer = _layer_pair(spec["body_layer"], "body_layer")
+    under_bump_layer = _layer_pair(spec["contact_layer"], "contact_layer")
+    body_polygon = _relative_polygon(spec["body_polygon_um"], "body_polygon_um")
+    contact_polygon = _relative_polygon(
+        spec["contact_polygon_um"], "contact_polygon_um"
+    )
+    template_semantic_id = str(template["semantic_id"])
+    fill_prefix = f"{template_semantic_id}_GROUND_FILL"
+    geometry_digest = hashlib.sha256(
+        json.dumps(
+            {
+                "body_layer": bump_layer,
+                "body_polygon_um": body_polygon,
+                "contact_layer": under_bump_layer,
+                "contact_polygon_um": contact_polygon,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     with TemporaryDirectory(prefix="scgsim-indium-fill-") as temporary:
         temporary_path = Path(temporary)
         source_gds = temporary_path / "source.gds"
@@ -313,6 +77,7 @@ def _prepare_indium_ground_bump_fill(
             bump_layer=bump_layer,
             under_bump_layer=under_bump_layer,
             spec=spec,
+            semantic_contract=_bump_semantic_contract(template),
         )
         receipt: dict[str, Any] = {
             "schema_version": 2,
@@ -320,9 +85,9 @@ def _prepare_indium_ground_bump_fill(
                 "identity": "scgsim.indium_ground_bump_fill.v1",
                 "version": 1,
             },
-            "source": "scgsim.sgb.orpen._prepare_indium_ground_bump_fill",
-            "pdk_revision": _ORPEN_SC_PDK_REVISION,
+            "source": "scgsim.sgb.ground_bumps._prepare_indium_ground_bump_fill",
             "pdk_spec": spec,
+            "pdk_spec_sha256": geometry_digest,
             "input": {
                 "component_gds_sha256": _sha256_file(source_gds),
                 "canonical_stack_sha256": _sha256_file(source_stack),
@@ -355,10 +120,6 @@ def _prepare_indium_ground_bump_fill(
         ground = audit["ground_intersection"]
         blockers = list(audit["blockers"])
         bounds = _coupon_bounds(result_stack)
-        footprint_size = max(
-            float(settings["indium_bump_size"]),
-            float(settings["under_bump_size"]),
-        )
         accepted: list[tuple[int, int, float, float]] = []
         rejected: list[dict[str, Any]] = []
         for i in range(
@@ -370,16 +131,16 @@ def _prepare_indium_ground_bump_fill(
                 ceil((bounds["y_max_um"] - origin[1]) / pitch) + 1,
             ):
                 x, y = origin[0] + i * pitch, origin[1] + j * pitch
-                candidate = gdstk.rectangle(
-                    (x - footprint_size / 2, y - footprint_size / 2),
-                    (x + footprint_size / 2, y + footprint_size / 2),
+                candidate = (
+                    gdstk.Polygon(_translate_polygon(body_polygon, x, y)),
+                    gdstk.Polygon(_translate_polygon(contact_polygon, x, y)),
                 )
                 expanded = (
-                    gdstk.offset((candidate,), clearance, join="round", tolerance=1e-6)
+                    gdstk.offset(candidate, clearance, join="round", tolerance=1e-6)
                     if clearance
-                    else [candidate]
+                    else list(candidate)
                 )
-                candidate_id = _fill_id(i, j)
+                candidate_id = _fill_id(fill_prefix, i, j)
                 blocker_ids: tuple[str, ...] = ()
                 if gdstk.boolean(expanded, ground, "not", precision=1e-9):
                     reason = "outside_d0_d1_ground_intersection"
@@ -397,7 +158,7 @@ def _prepare_indium_ground_bump_fill(
                                 semantic_id=candidate_id,
                                 lattice_index=(i, j),
                                 center_um=(x, y),
-                                footprint_size_um=footprint_size,
+                                geometry_digest=geometry_digest,
                             ),
                             "owner_semantic_ids": audit["semantic_contract"][
                                 "owner_semantic_ids"
@@ -420,17 +181,19 @@ def _prepare_indium_ground_bump_fill(
                     accepted.append((i, j, x, y))
                     # This exact canonical footprint becomes a blocker for all
                     # later lattice sites; it is not a separate meshing path.
-                    blockers.append((f"generated_site:{candidate_id}", (candidate,)))
+                    blockers.append((f"generated_site:{candidate_id}", candidate))
 
-    derived = _component_with_canonical_bumps(
-        component, indium_bump, settings, accepted, pitch
-    )
+    derived = _component_with_canonical_bumps(component, spec, accepted, pitch)
     _assert_generated_center_selectors(derived, bump_layer, accepted)
-    _exclude_generated_bumps_from_authored_layer(result_stack, accepted)
+    _exclude_generated_bumps_from_authored_layer(
+        result_stack, template_semantic_id, accepted
+    )
     fill_entities, fill_polygons = _fill_semantic_records(
         accepted=accepted,
+        fill_prefix=fill_prefix,
+        template_semantic_id=template_semantic_id,
         bump_layer=bump_layer,
-        bump_size_um=float(settings["indium_bump_size"]),
+        body_polygon_um=body_polygon,
         result_stack=result_stack,
         semantic_contract=receipt["semantic_contract"],
         LayoutPolygonSpec=LayoutPolygonSpec,
@@ -438,14 +201,14 @@ def _prepare_indium_ground_bump_fill(
     )
     receipt["accepted"] = [
         {
-            "semantic_id": _fill_id(i, j),
+            "semantic_id": _fill_id(fill_prefix, i, j),
             "lattice_index": [i, j],
             "center_um": [x, y],
             "geometry_placement_sha256": _placement_digest(
-                semantic_id=_fill_id(i, j),
+                semantic_id=_fill_id(fill_prefix, i, j),
                 lattice_index=(i, j),
                 center_um=(x, y),
-                footprint_size_um=footprint_size,
+                geometry_digest=geometry_digest,
             ),
             "owner_semantic_ids": receipt["semantic_contract"]["owner_semantic_ids"],
             "net_id": receipt["semantic_contract"]["net_id"],
@@ -454,7 +217,7 @@ def _prepare_indium_ground_bump_fill(
                 "host_solution_volume_id"
             ],
             "source_kind": "fill",
-            "source_semantic_id": _fill_id(i, j),
+            "source_semantic_id": _fill_id(fill_prefix, i, j),
             "disposition": "accepted",
             "source_provenance": "public_pdk_indium_ground_fill",
         }
@@ -489,13 +252,13 @@ def _placement_digest(
     semantic_id: str,
     lattice_index: tuple[int, int],
     center_um: tuple[float, float],
-    footprint_size_um: float,
+    geometry_digest: str,
 ) -> str:
     payload = {
         "semantic_id": semantic_id,
         "lattice_index": list(lattice_index),
         "center_um": list(center_um),
-        "collision_footprint_size_um": footprint_size_um,
+        "pdk_geometry_sha256": geometry_digest,
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -509,6 +272,7 @@ def _audit_authored_indium_sites(
     bump_layer: tuple[int, int],
     under_bump_layer: tuple[int, int],
     spec: Mapping[str, Any],
+    semantic_contract: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Audit authored sites and semantic ownership before either fill mode.
 
@@ -520,21 +284,24 @@ def _audit_authored_indium_sites(
 
     polygons_by_id = {polygon.polygon_id: polygon for polygon in build_input.polygons}
     entities = {entity.semantic_id: entity for entity in build_input.entities}
+    owner_ids = tuple(semantic_contract["owner_semantic_ids"])
+    expected_net = semantic_contract["net_id"]
+    expected_equipotential = semantic_contract["equipotential_id"]
+    expected_host = semantic_contract["host_solution_volume_id"]
     owners = []
-    for semantic_id in _FILL_OWNER_SEMANTIC_IDS:
+    for semantic_id in owner_ids:
         entity = entities.get(semantic_id)
         if entity is None:
             raise ValueError(f"indium fill requires structured owner {semantic_id!r}.")
         if (
             entity.role != "metal"
             or entity.part_role != "face_metal"
-            or entity.net_id != "Ground"
-            or not isinstance(entity.host_void_semantic_id, str)
-            or not entity.host_void_semantic_id
-            or entity.metadata.get("equipotential_id") != "Ground"
+            or entity.net_id != expected_net
+            or entity.host_void_semantic_id != expected_host
+            or entity.metadata.get("equipotential_id") != expected_equipotential
         ):
             raise ValueError(
-                f"structured owner {semantic_id!r} lacks exact Ground role/net/equipotential/host facts."
+                f"structured owner {semantic_id!r} disagrees with the authored bump contract."
             )
         selected = [
             polygons_by_id[key] for key in entity.polygon_ids if key in polygons_by_id
@@ -548,24 +315,23 @@ def _audit_authored_indium_sites(
         entity.metadata.get("equipotential_id") for entity, _ in owners
     }
     if (
-        owner_nets != {"Ground"}
-        or owner_equipotentials != {"Ground"}
-        or len(owner_hosts) != 1
+        owner_nets != {expected_net}
+        or owner_equipotentials != {expected_equipotential}
+        or owner_hosts != {expected_host}
     ):
         raise ValueError(
-            "D0/D1 structured ground owners disagree on exact Ground net/equipotential or host."
+            "structured ground owners disagree on exact net/equipotential or host."
         )
     ground = gdstk.boolean(owners[0][1], owners[1][1], "and", precision=1e-9)
     if not ground:
         raise ValueError("D0/D1 structured Ground intersection is empty.")
 
-    owner_ids = tuple(entity.semantic_id for entity, _ in owners)
     owner_net = next(iter(owner_nets))
     owner_host = next(iter(owner_hosts))
-    semantic_contract = {
+    resolved_contract = {
         "owner_semantic_ids": list(owner_ids),
         "net_id": owner_net,
-        "equipotential_id": "Ground",
+        "equipotential_id": expected_equipotential,
         "host_solution_volume_id": owner_host,
         "owners": [
             {
@@ -578,7 +344,7 @@ def _audit_authored_indium_sites(
             }
             for entity, _ in owners
         ],
-        "source_provenance": "public_pdk_indium_ground_fill",
+        "source_provenance": "pdk_ground_bump_fill",
     }
 
     blockers: list[tuple[str, tuple[Any, ...]]] = []
@@ -714,7 +480,7 @@ def _audit_authored_indium_sites(
         "ground_intersection": tuple(ground),
         "blockers": blockers,
         "authored_sites": authored_sites,
-        "semantic_contract": semantic_contract,
+        "semantic_contract": resolved_contract,
     }
 
 
@@ -752,13 +518,103 @@ def _point2(value: Any, name: str) -> tuple[float, float]:
     return float(value[0]), float(value[1])
 
 
-def _spec_layers(spec: Mapping[str, Any]) -> tuple[tuple[int, int], tuple[int, int]]:
-    settings = spec.get("canonical_component_settings")
-    if not isinstance(settings, Mapping):
-        raise TypeError("public indium bump spec settings must be a mapping.")
-    bump = _point2(settings.get("indium_bump_layer"), "indium_bump_layer")
-    under = _point2(settings.get("under_bump_layer"), "under_bump_layer")
-    return (int(bump[0]), int(bump[1])), (int(under[0]), int(under[1]))
+def _ground_bump_fill_spec(
+    stack: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], dict[str, Any]]:
+    layers = stack.get("layers")
+    if not isinstance(layers, Sequence) or isinstance(layers, str | bytes):
+        raise TypeError("ground-bump fill requires a semantic layer sequence.")
+    matches = [
+        record
+        for record in layers
+        if isinstance(record, Mapping)
+        and isinstance(record.get("metadata"), Mapping)
+        and "ground_bump_fill_spec" in record["metadata"]
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            "ground-bump fill requires exactly one PDK ground_bump_fill_spec."
+        )
+    template = matches[0]
+    raw = template["metadata"]["ground_bump_fill_spec"]
+    if not isinstance(raw, Mapping) or raw.get("schema_version") != 1:
+        raise ValueError("unsupported PDK ground_bump_fill_spec schema.")
+    required = {
+        "schema_version",
+        "body_layer",
+        "body_polygon_um",
+        "contact_layer",
+        "contact_polygon_um",
+        "lattice_origin_um",
+        "keepout_records",
+    }
+    if set(raw) != required:
+        raise ValueError("PDK ground_bump_fill_spec fields are not canonical.")
+    return template, deepcopy(dict(raw))
+
+
+def _bump_semantic_contract(template: Mapping[str, Any]) -> dict[str, Any]:
+    metadata = template.get("metadata")
+    if not isinstance(metadata, Mapping):
+        raise TypeError("ground-bump template metadata must be a mapping.")
+    owners = metadata.get("owner_semantic_ids")
+    if (
+        isinstance(owners, str | bytes)
+        or not isinstance(owners, Sequence)
+        or len(owners) != 2
+        or any(not isinstance(owner, str) or not owner for owner in owners)
+    ):
+        raise ValueError("ground-bump template requires exactly two structured owners.")
+    net_id = template.get("net_id")
+    equipotential_id = metadata.get("equipotential_id")
+    host = template.get("host_void_semantic_id")
+    if any(
+        not isinstance(value, str) or not value
+        for value in (net_id, equipotential_id, host)
+    ):
+        raise ValueError(
+            "ground-bump template lacks exact net/equipotential/host facts."
+        )
+    return {
+        "owner_semantic_ids": tuple(owners),
+        "net_id": net_id,
+        "equipotential_id": equipotential_id,
+        "host_solution_volume_id": host,
+    }
+
+
+def _layer_pair(value: Any, name: str) -> tuple[int, int]:
+    if (
+        isinstance(value, str | bytes)
+        or not isinstance(value, Sequence)
+        or len(value) != 2
+        or any(isinstance(item, bool) or not isinstance(item, int) for item in value)
+    ):
+        raise TypeError(f"{name} must be a two-item integer layer pair.")
+    return int(value[0]), int(value[1])
+
+
+def _relative_polygon(value: Any, name: str) -> tuple[tuple[float, float], ...]:
+    if (
+        isinstance(value, str | bytes)
+        or not isinstance(value, Sequence)
+        or len(value) < 3
+    ):
+        raise TypeError(f"{name} must contain at least three 2D points.")
+    points = tuple(_point2(point, name) for point in value)
+    area = sum(
+        x1 * y2 - x2 * y1
+        for (x1, y1), (x2, y2) in zip(points, (*points[1:], points[0]), strict=True)
+    )
+    if not isfinite(area) or abs(area) <= 1e-12:
+        raise ValueError(f"{name} must define a finite nondegenerate polygon.")
+    return points
+
+
+def _translate_polygon(
+    points: Sequence[tuple[float, float]], x: float, y: float
+) -> tuple[tuple[float, float], ...]:
+    return tuple((px + x, py + y) for px, py in points)
 
 
 def _gdstk_cell(library: Any, name: str) -> Any:
@@ -827,22 +683,23 @@ def _authored_bump_source_identity(
 
 
 def _coupon_bounds(stack: Mapping[str, Any]) -> Mapping[str, float]:
-    regions = stack.get("solution_regions")
-    if not isinstance(regions, Mapping) or "D0_SUBSTRATE" not in regions:
-        raise ValueError("fill requires D0_SUBSTRATE solution-region bounds.")
-    raw = regions["D0_SUBSTRATE"].get("geometry", {}).get("domain_bounds_um")
+    metadata = stack.get("metadata")
+    raw = (
+        metadata.get("coupon_domain_bounds_um")
+        if isinstance(metadata, Mapping)
+        else None
+    )
     if not isinstance(raw, Mapping):
-        raise TypeError("D0_SUBSTRATE requires explicit domain_bounds_um.")
+        raise TypeError("ground-bump fill requires explicit coupon_domain_bounds_um.")
     required = ("x_min_um", "x_max_um", "y_min_um", "y_max_um")
     if any(key not in raw for key in required):
-        raise ValueError("D0_SUBSTRATE bounds must define x/y min/max.")
+        raise ValueError("coupon bounds must define x/y min/max.")
     return {key: float(raw[key]) for key in required}
 
 
 def _component_with_canonical_bumps(
     component: Any,
-    factory: Any,
-    settings: Mapping[str, Any],
+    spec: Mapping[str, Any],
     accepted: Sequence[tuple[int, int, float, float]],
     pitch: float,
 ) -> Any:
@@ -850,7 +707,15 @@ def _component_with_canonical_bumps(
 
     derived = gf.Component()
     derived << component
-    bump = factory(**dict(settings))
+    bump = gf.Component()
+    bump.add_polygon(
+        _relative_polygon(spec["body_polygon_um"], "body_polygon_um"),
+        layer=_layer_pair(spec["body_layer"], "body_layer"),
+    )
+    bump.add_polygon(
+        _relative_polygon(spec["contact_polygon_um"], "contact_polygon_um"),
+        layer=_layer_pair(spec["contact_layer"], "contact_layer"),
+    )
     rows: dict[tuple[int, int], list[tuple[int, float, float]]] = {}
     for i, j, x, y in accepted:
         rows.setdefault((j, 0), []).append((i, x, y))
@@ -900,7 +765,8 @@ def _assert_generated_center_selectors(
             ]
             if len(matches) != 1:
                 raise ValueError(
-                    f"generated bump selector {_fill_id(i, j)!r} matched {len(matches)} canonical bump polygons."
+                    f"generated bump at lattice index {(i, j)!r} matched "
+                    f"{len(matches)} canonical body polygons."
                 )
 
 
@@ -917,7 +783,9 @@ def _point_in_polygon(point: tuple[float, float], vertices: Any) -> bool:
 
 
 def _exclude_generated_bumps_from_authored_layer(
-    stack: dict[str, Any], accepted: Sequence[tuple[int, int, float, float]]
+    stack: dict[str, Any],
+    template_semantic_id: str,
+    accepted: Sequence[tuple[int, int, float, float]],
 ) -> None:
     layers = stack.get("layers")
     if not isinstance(layers, list):
@@ -925,7 +793,7 @@ def _exclude_generated_bumps_from_authored_layer(
     for record in layers:
         if (
             isinstance(record, dict)
-            and record.get("semantic_id") == "D0_D1_INDIUM_BUMP"
+            and record.get("semantic_id") == template_semantic_id
         ):
             geometry = dict(record.get("geometry", {}))
             geometry.update(
@@ -940,14 +808,16 @@ def _exclude_generated_bumps_from_authored_layer(
                 "source_provenance": "authored_indium_bump",
             }
             return
-    raise ValueError("fill stack lacks the authored D0_D1_INDIUM_BUMP layer.")
+    raise ValueError("fill stack lacks its authored ground-bump layer.")
 
 
 def _fill_semantic_records(
     *,
     accepted: Sequence[tuple[int, int, float, float]],
+    fill_prefix: str,
+    template_semantic_id: str,
     bump_layer: tuple[int, int],
-    bump_size_um: float,
+    body_polygon_um: Sequence[tuple[float, float]],
     result_stack: Mapping[str, Any],
     semantic_contract: Mapping[str, Any],
     LayoutPolygonSpec: Any,
@@ -958,7 +828,7 @@ def _fill_semantic_records(
     template = next(
         record
         for record in result_stack["layers"]
-        if record.get("semantic_id") == "D0_D1_INDIUM_BUMP"
+        if record.get("semantic_id") == template_semantic_id
     )
     net_id = semantic_contract.get("net_id")
     equipotential_id = semantic_contract.get("equipotential_id")
@@ -967,7 +837,8 @@ def _fill_semantic_records(
     if (
         not isinstance(net_id, str)
         or not net_id
-        or equipotential_id != "Ground"
+        or not isinstance(equipotential_id, str)
+        or not equipotential_id
         or not isinstance(host_solution_volume_id, str)
         or not host_solution_volume_id
         or isinstance(owner_semantic_ids, str | bytes)
@@ -988,20 +859,17 @@ def _fill_semantic_records(
         raise ValueError("indium fill requires an exact authored bump family id.")
     entities, polygons = [], []
     for i, j, x, y in accepted:
-        semantic_id = _fill_id(i, j)
+        semantic_id = _fill_id(fill_prefix, i, j)
         polygon_id = f"{semantic_id}__P0000"
-        square = gdstk.rectangle(
-            (x - bump_size_um / 2, y - bump_size_um / 2),
-            (x + bump_size_um / 2, y + bump_size_um / 2),
-        )
+        body = gdstk.Polygon(_translate_polygon(body_polygon_um, x, y))
         polygon = LayoutPolygonSpec(
             polygon_id=polygon_id,
             layer=f"{bump_layer[0]}/{bump_layer[1]}",
-            exterior=tuple((float(px), float(py)) for px, py in square.points),
+            exterior=tuple((float(px), float(py)) for px, py in body.points),
             object_name=semantic_id,
             net_name=net_id,
             metadata={
-                "source": "public_pdk_indium_ground_fill",
+                "source": "pdk_ground_bump_fill",
                 "lattice_index": (i, j),
                 "center_um": (x, y),
             },
@@ -1033,12 +901,12 @@ def _fill_semantic_records(
                         }
                     },
                     "outer_loop": polygon.exterior,
-                    "source_provenance": "public_pdk_indium_ground_fill",
+                    "source_provenance": "pdk_ground_bump_fill",
                 },
                 metadata={
                     "semantic_group_id": semantic_group_id,
                     "source_layer_name": str(template["metadata"]["source_layer_name"]),
-                    "source_provenance": "public_pdk_indium_ground_fill",
+                    "source_provenance": "pdk_ground_bump_fill",
                     "source_kind": "fill",
                     "source_semantic_id": semantic_id,
                     "owner_semantic_ids": tuple(owner_semantic_ids),
@@ -1051,8 +919,8 @@ def _fill_semantic_records(
     return entities, polygons
 
 
-def _fill_id(i: int, j: int) -> str:
-    return f"D0_D1_INDIUM_GROUND_FILL__I{i:+05d}__J{j:+05d}"
+def _fill_id(prefix: str, i: int, j: int) -> str:
+    return f"{prefix}__I{i:+05d}__J{j:+05d}"
 
 
 def _set_indium_fill_metadata(
@@ -1076,75 +944,6 @@ def _non_negative_number(value: Any, name: str) -> float:
     return result
 
 
-def _materials(records: Mapping[str, Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
-    kinds = {
-        "superconductor": "conductor",
-        "conductive": "conductor",
-        "conductor": "conductor",
-        "vacuum": "vacuum",
-        "dielectric": "dielectric",
-    }
-    result: dict[str, dict[str, Any]] = {}
-    for name, record in records.items():
-        raw_kind = record.get("material_kind")
-        if raw_kind not in kinds:
-            continue
-        normalized = kinds[raw_kind]
-        item: dict[str, Any] = {"kind": normalized}
-        if normalized != "conductor":
-            permittivity = record.get("relative_permittivity")
-            if isinstance(permittivity, (int, float)):
-                item["permittivity"] = float(permittivity)
-        loss_tangent = record.get("loss_tangent")
-        if isinstance(loss_tangent, (int, float)):
-            item["loss_tangent"] = float(loss_tangent)
-        result[str(name)] = item
-    if not result:
-        raise ValueError(
-            "public PDK material records contain no supported material kinds."
-        )
-    return result
-
-
-def _solution(
-    *,
-    material_id: str,
-    z_min_um: float,
-    z_max_um: float,
-    domain_bounds_um: Mapping[str, float],
-    is_airbox: bool = False,
-    airbox_side: str | None = None,
-) -> dict[str, Any]:
-    geometry: dict[str, Any] = {
-        "z_min_um": z_min_um,
-        "z_max_um": z_max_um,
-        "domain_bounds_um": dict(domain_bounds_um),
-    }
-    record: dict[str, Any] = {
-        "role": "solution_region",
-        "is_airbox": is_airbox,
-        "material_id": material_id,
-        "geometry_kind": "domain",
-        "geometry": geometry,
-    }
-    if airbox_side is not None:
-        record["airbox_side"] = airbox_side
-    return record
-
-
-def _coupon_domain_bounds(component: Any, padding_um: float) -> dict[str, float]:
-    padding = _positive_number(padding_um, "coupon_padding_um")
-    bbox = component.dbbox()
-    if bbox is None:
-        raise ValueError("public Xmon component must have a physical-unit dbbox.")
-    return {
-        "x_min_um": float(bbox.left) - padding,
-        "y_min_um": float(bbox.bottom) - padding,
-        "x_max_um": float(bbox.right) + padding,
-        "y_max_um": float(bbox.top) + padding,
-    }
-
-
 def _positive_number(value: Any, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TypeError(f"{name} must be a finite positive number.")
@@ -1152,91 +951,3 @@ def _positive_number(value: Any, name: str) -> float:
     if not isfinite(result) or result <= 0.0:
         raise ValueError(f"{name} must be a finite positive number.")
     return result
-
-
-def _metal_record(
-    *,
-    layer: tuple[int, int],
-    level: Any,
-    host: str,
-    part_role: str,
-    representations: Mapping[str, str],
-    source_layer_name: str,
-) -> dict[str, Any]:
-    return {
-        "layer": layer[0],
-        "datatype": layer[1],
-        "role": "metal",
-        "material_id": str(level.material),
-        "priority": int(getattr(level, "mesh_order", 0) or 0),
-        "part_role": part_role,
-        "host_void_semantic_id": host,
-        "geometry_kind": "layout_extrusion",
-        "geometry": {
-            "z_um": _zmin(level),
-            "thickness_um": _thickness(level),
-            "geometry_source": "gds_polygon",
-            "route_ab_fused_selector_mode": True,
-        },
-        "route_representations": dict(representations),
-        "metadata": {
-            "source_layer_name": source_layer_name,
-            "source_authority": "orpen-sc-pdk public LayerStack",
-        },
-    }
-
-
-def _signal_selectors(
-    component: Any,
-) -> tuple[tuple[str, str, tuple[float, float], str], ...]:
-    ports = getattr(component, "ports", None)
-    if ports is None:
-        raise TypeError("public Xmon component must expose authored ports.")
-    result = [("D1_XMON_PAD", "xmon_pad", (0.0, 0.0), "public topology anchor (0, 0)")]
-    for index, name in enumerate(("o1", "o2", "o3", "o4"), 1):
-        port = ports[name]
-        center = tuple(float(value) for value in port.center)
-        distance = float(port.width) / 2
-        angle = radians(float(port.orientation))
-        result.append(
-            (
-                f"D1_COUPLER_{index}",
-                f"coupler_{index}",
-                (center[0] - distance * cos(angle), center[1] - distance * sin(angle)),
-                f"authored component port {name}",
-            )
-        )
-    return tuple(result)
-
-
-def _layer_tuple(value: Any) -> tuple[int, int] | None:
-    if isinstance(value, (tuple, list)) and len(value) == 2:
-        return int(value[0]), int(value[1])
-    if hasattr(value, "layer") and hasattr(value, "datatype"):
-        return int(value.layer), int(value.datatype)
-    candidates = (value, getattr(value, "layer", None))
-    for candidate in candidates:
-        if candidate is None:
-            continue
-        try:
-            layout = candidate.layout
-            raw = int(getattr(candidate, "layer", candidate))
-            info = layout.get_info(raw)
-            return int(info.layer), int(info.datatype)
-        except (AttributeError, TypeError, ValueError):
-            continue
-    return None
-
-
-def _zmin(level: Any) -> float:
-    return float(level.zmin)
-
-
-def _thickness(level: Any) -> float:
-    value = float(level.thickness)
-    if value <= 0:
-        raise ValueError("public PDK LayerLevel thickness must be positive.")
-    return value
-
-
-__all__ = ["build_kosen2024_flip_chip_xmon_stack"]

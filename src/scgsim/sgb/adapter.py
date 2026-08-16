@@ -17,6 +17,7 @@ from scgsim.sgb.models import (
     PortSheetRegionRecord,
     SemanticEntitySpec,
 )
+from scgsim.sgb.stack import build_component_stack
 
 if TYPE_CHECKING:
     from gdsfactory import Component
@@ -186,11 +187,10 @@ def build_gdsfactory_geometry_input(
     `build_gds_stack_geometry_input`. The adapter does not invent a second
     semantic language.
 
-    `layer_stack` must expose `layers` and `dielectrics` like gsim's
-    `LayerStack`. Only conductor/via layout layers become semantic metal
-    entities in this first slice; solution regions come from `dielectrics`.
-    Missing GDS layer, z-range, material, air/vacuum region, or route
-    representation data fails fast.
+    `layer_stack.layers[*].info` supplies PDK-owned material, fabrication,
+    host-volume, and 3D-integration semantics. `component.info` supplies
+    component-owned conductor identities, nets, and topology selectors.
+    Missing or mixed authority fails before geometry lowering.
 
     `work_dir` makes the generated GDS and stack JSON reviewable. Without it,
     temporary files are used only long enough to call the Level-0 adapter.
@@ -245,6 +245,7 @@ def _build_gdsfactory_geometry_input_from_dir(
         write_gds(str(gds_path))
 
     stack_mapping = _semantic_stack_mapping_from_layer_stack(
+        component,
         layer_stack,
         materials=materials,
         source_gds=gds_path,
@@ -270,158 +271,29 @@ def _build_gdsfactory_geometry_input_from_dir(
 
 
 def _semantic_stack_mapping_from_layer_stack(
+    component: Any,
     layer_stack: Any,
     *,
     materials: Mapping[str, Any] | None,
     source_gds: Path,
     padding_um: float,
 ) -> dict[str, Any]:
-    layers = getattr(layer_stack, "layers", None)
-    if not isinstance(layers, Mapping):
-        raise TypeError("layer_stack must expose a mapping 'layers'")
-
-    if not materials:
-        raise ValueError("GDSFactory adaptation requires explicit materials")
-    solution_regions = _solution_regions_from_layer_stack(
-        layer_stack,
-        materials=materials,
-        padding_um=padding_um,
+    stack = build_component_stack(
+        component=component,
+        layer_stack=layer_stack,
+        material_records=materials,  # type: ignore[arg-type]
+        coupon_padding_um=padding_um,
     )
-    layer_records = [
-        _semantic_layer_record(name, layer, materials=materials)
-        for name, layer in layers.items()
-        if _layer_type(layer) in {"conductor", "via"}
-    ]
-    if not layer_records:
-        raise ValueError("layer_stack has no conductor/via layers to adapt")
-
-    return {
-        "metadata": {
+    stack["metadata"].update(
+        {
             "schema": "semantic_geometry_stack_v1",
             "units": "um",
             "source": str(source_gds),
             "adapter": "gdsfactory",
             "material_names": sorted(str(key) for key in (materials or {})),
-        },
-        "solution_regions": solution_regions,
-        "materials": dict(materials),
-        "layers": layer_records,
-    }
-
-
-def _solution_regions_from_layer_stack(
-    layer_stack: Any,
-    *,
-    materials: Mapping[str, Any],
-    padding_um: float,
-) -> dict[str, Any]:
-    raw_dielectrics = getattr(layer_stack, "dielectrics", None)
-    if not _is_record_sequence(raw_dielectrics):
-        raise TypeError("layer_stack must expose sequence 'dielectrics'")
-
-    regions: dict[str, Any] = {}
-    for index, raw in enumerate(raw_dielectrics):
-        if not isinstance(raw, Mapping):
-            raise TypeError("layer_stack.dielectrics items must be mappings")
-        material_id = str(raw.get("material") or raw.get("material_id") or "")
-        if not material_id:
-            raise ValueError("dielectric records must define material")
-        semantic_id = str(raw.get("name") or raw.get("domain") or material_id or index)
-        z_min = raw.get("zmin", raw.get("z_min_um"))
-        z_max = raw.get("zmax", raw.get("z_max_um"))
-        if z_min is None or z_max is None:
-            raise ValueError(f"solution region {semantic_id!r} needs zmin/zmax")
-        is_airbox = raw.get("is_airbox", False)
-        if not isinstance(is_airbox, bool):
-            raise TypeError(f"solution region {semantic_id!r} is_airbox must be a bool")
-        regions[semantic_id] = {
-            "role": "solution_region",
-            "material_id": material_id,
-            "material_kind": _resolve_material_kind(
-                raw,
-                material_id=material_id,
-                materials=materials,
-                context=f"solution region {semantic_id!r}",
-            ),
-            "is_airbox": is_airbox,
-            "geometry_kind": "domain",
-            "geometry": {
-                "domain": semantic_id,
-                "padding_um": padding_um,
-                "z_min_um": float(z_min),
-                "z_max_um": float(z_max),
-            },
         }
-    return regions
-
-
-def _semantic_layer_record(
-    name: Any,
-    layer: Any,
-    *,
-    materials: Mapping[str, Any],
-) -> dict[str, Any]:
-    gds_layer = _gds_layer_tuple(layer)
-    layer_type = _layer_type(layer)
-    z_min = getattr(layer, "zmin", None)
-    thickness = getattr(layer, "thickness", None)
-    material_id = str(getattr(layer, "material", "") or "")
-    if z_min is None or thickness is None:
-        raise ValueError(f"layer {name!r} needs zmin/thickness")
-    if not material_id:
-        raise ValueError(f"layer {name!r} needs material")
-    info = getattr(layer, "info", None)
-    raw_kind = getattr(layer, "material_kind", None)
-    if raw_kind is None and isinstance(info, Mapping):
-        raw_kind = info.get("material_kind")
-    host_void_semantic_id = getattr(layer, "host_void_semantic_id", None)
-    if host_void_semantic_id is None and isinstance(info, Mapping):
-        host_void_semantic_id = info.get("host_void_semantic_id")
-    if not isinstance(host_void_semantic_id, str) or not host_void_semantic_id:
-        raise ValueError(f"layer {name!r} needs explicit host_void_semantic_id")
-
-    semantic_id = str(name)
-    is_via = layer_type == "via"
-    return {
-        "layer": gds_layer[0],
-        "datatype": gds_layer[1],
-        "semantic_id": semantic_id,
-        "role": "metal",
-        "material_id": material_id,
-        "material_kind": _resolve_material_kind(
-            {"material_kind": raw_kind},
-            material_id=material_id,
-            materials=materials,
-            context=f"layer {name!r}",
-        ),
-        "priority": int(getattr(layer, "mesh_order", 0) or 0),
-        "part_role": "bump_body" if is_via else "face_metal",
-        "net_id": semantic_id,
-        "geometry_kind": "layout_extrusion",
-        "host_void_semantic_id": host_void_semantic_id,
-        "geometry": {
-            "z_um": float(z_min),
-            "thickness_um": float(thickness),
-            "geometry_source": "gds_polygon",
-        },
-        "route_representations": (
-            {
-                "A": "cutout_boundary_shell",
-                "B": "cutout_boundary_shell",
-                "C": "material_volume",
-            }
-            if is_via
-            else {
-                "A": "surface_sheet",
-                "B": "cutout_boundary_shell",
-                "C": "material_volume",
-            }
-        ),
-        "metadata": {
-            "source_layer_name": semantic_id,
-            "source_layer_type": layer_type,
-        },
-    }
+    )
+    return stack
 
 
 def _resolve_material_kind(
@@ -456,30 +328,6 @@ def _resolve_material_kind(
             f"{context} material_kind disagrees with materials[{material_id!r}].kind"
         )
     return str(stack_kind)
-
-
-def _gds_layer_tuple(layer: Any) -> tuple[int, int]:
-    value = getattr(layer, "gds_layer", None)
-    if value is None:
-        value = getattr(layer, "layer", None)
-    if (
-        isinstance(value, Sequence)
-        and not isinstance(value, str | bytes)
-        and len(value) == 2
-    ):
-        return int(value[0]), int(value[1])
-    raise ValueError("layer must define gds_layer as a 2-item tuple")
-
-
-def _layer_type(layer: Any) -> str:
-    value = getattr(layer, "layer_type", None)
-    if value is None:
-        info = getattr(layer, "info", None)
-        if isinstance(info, Mapping):
-            value = info.get("layer_type")
-    if value is None:
-        raise ValueError("layer must define layer_type")
-    return str(value)
 
 
 def _load_stack_mapping(

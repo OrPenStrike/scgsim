@@ -280,23 +280,6 @@ wheels = [
 ]
 
 [[package]]
-name = "doroutes"
-version = "1.2.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "kfactory" },
-    { name = "kwasm" },
-    { name = "numpy" },
-    { name = "shapely" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/62/9a/008744e31752592c9eb019f36874e52e73979fdcdc8bd957a723910c4b4f/doroutes-1.2.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:342eb51d62a68a0378714289dc36fa0c238ae9d78dfe88213df678d5d5ae522b", size = 3331244, upload-time = "2026-07-08T15:38:51.496Z" },
-    { url = "https://files.pythonhosted.org/packages/f6/a0/8bedb9a202304b54abab66be1524423a2ae120dafdcbe7fa63b62d9235e8/doroutes-1.2.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:914df86a812014ea90890d82280a12ca71593ec446336bce2bdd9887be1f9505", size = 3497797, upload-time = "2026-07-08T15:38:53.83Z" },
-    { url = "https://files.pythonhosted.org/packages/f9/da/2dc2fadfe55e6437a0c2f8c2054d78a5ad4690e6a3b7b2f5ad453d111a8f/doroutes-1.2.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:8229b25a6024214be09d6f44f4810de67c520c46fb038dcb3b20d7adf04d2832", size = 3672426, upload-time = "2026-07-08T15:38:55.444Z" },
-    { url = "https://files.pythonhosted.org/packages/c6/d3/6b5b20bfbf02a35dbc241fd5e097ffe45d1c0e6aa7690b3b9226cd6a32f9/doroutes-1.2.0-cp312-cp312-win_amd64.whl", hash = "sha256:1d5c48daa832d5d505d8f7697a7e242fc3df24e1bcae936a61490da66a9daeb6", size = 3062682, upload-time = "2026-07-08T15:38:57.107Z" },
-]
-
-[[package]]
 name = "executing"
 version = "2.2.1"
 source = { registry = "https://pypi.org/simple" }
@@ -750,17 +733,6 @@ wheels = [
 ]
 
 [[package]]
-name = "kwasm"
-version = "0.2.24"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "typer" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/28/b8/fcbc6aaa140861e74b5cfb42ea72a3cb23c135d403a843e8d7ecc34970be/kwasm-0.2.24-py3-none-any.whl", hash = "sha256:f09fbb1226e4e2f26bea4087bbdbf5a58ac7f7da2af1cdbe87a341ab2a46a9b8", size = 6923298, upload-time = "2026-08-13T12:37:53.051Z" },
-]
-
-[[package]]
 name = "lazy-loader"
 version = "0.5"
 source = { registry = "https://pypi.org/simple" }
@@ -977,20 +949,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/06/69/850264ccf6d80f6b174620d30a87f65c9b1490aba33fe6b62798e618cad3/orjson-3.11.9-cp312-cp312-win32.whl", hash = "sha256:2d057a602cdd19a0ad680417527c45b6961a095081c0f46fe0e03e304aac6470", size = 131606, upload-time = "2026-05-06T15:10:15.791Z" },
     { url = "https://files.pythonhosted.org/packages/b9/d5/973a43fc9c55e20f2051e9830997649f669be0cb3ca52192087c0143f118/orjson-3.11.9-cp312-cp312-win_amd64.whl", hash = "sha256:59e403b1cc5a676da8eaf31f6254801b7341b3e29efa85f92b48d272637e77be", size = 127101, upload-time = "2026-05-06T15:10:17.129Z" },
     { url = "https://files.pythonhosted.org/packages/fe/ae/495470f0e4a18f73fa10b7f6b84b464ec4cc5291c4e0c7c2a6c400bef006/orjson-3.11.9-cp312-cp312-win_arm64.whl", hash = "sha256:9af678d6488357948f1f84c6cd1c1d397c014e1ae2f98ae082a44eb48f602624", size = 126736, upload-time = "2026-05-06T15:10:18.645Z" },
-]
-
-[[package]]
-name = "orpen-sc-pdk"
-version = "0.1.0"
-source = { git = "https://github.com/OrPenStrike/orpen-sc-pdk.git?rev=8be8fc48c26f6bed06298cab673d49b9a6afbe7f#8be8fc48c26f6bed06298cab673d49b9a6afbe7f" }
-dependencies = [
-    { name = "doroutes" },
-    { name = "gdsfactory" },
-    { name = "networkx" },
-    { name = "numpy" },
-    { name = "pydantic" },
-    { name = "pyyaml" },
-    { name = "typing-extensions" },
 ]
 
 [[package]]
@@ -1515,9 +1473,6 @@ dev = [
     { name = "jupytext" },
     { name = "nbformat" },
 ]
-examples = [
-    { name = "orpen-sc-pdk" },
-]
 palace = [
     { name = "gdsfactory" },
     { name = "gdstk" },
@@ -1532,10 +1487,9 @@ requires-dist = [
     { name = "gmsh", marker = "extra == 'palace'" },
     { name = "jupytext", marker = "extra == 'dev'" },
     { name = "nbformat", marker = "extra == 'dev'" },
-    { name = "orpen-sc-pdk", marker = "extra == 'examples'", git = "https://github.com/OrPenStrike/orpen-sc-pdk.git?rev=8be8fc48c26f6bed06298cab673d49b9a6afbe7f" },
     { name = "pyaedt", marker = "extra == 'aedt'", specifier = "==1.3.0" },
 ]
-provides-extras = ["aedt", "palace", "examples", "dev"]
+provides-extras = ["aedt", "palace", "dev"]
 
 [[package]]
 name = "scikit-image"
