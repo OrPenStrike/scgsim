@@ -30,6 +30,23 @@ class ResolvedRun:
     provenance_path: Path | None
     receipt_path: Path
 
+    def physics_results(self) -> tuple[dict[str, str], ...]:
+        """Return the verified primary CSV as solver-native string rows."""
+
+        with self.primary_csv.open(newline="", encoding="utf-8-sig") as stream:
+            return tuple(dict(row) for row in csv.DictReader(stream))
+
+    def simulation_benchmark(self) -> dict[str, Any]:
+        """Return the receipt-bound execution summary for notebook display."""
+
+        receipt = read_json(self.receipt_path)
+        return {
+            "mode": self.mode,
+            "execution_seconds": receipt["execution_seconds"],
+            "project_bytes": self.project_path.stat().st_size,
+            "primary_csv_bytes": self.primary_csv.stat().st_size,
+        }
+
 
 def resolve_results(run_dir: str | Path) -> ResolvedRun:
     """Return results only when a complete exact receipt proves every artifact."""
