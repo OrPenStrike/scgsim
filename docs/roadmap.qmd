@@ -6,7 +6,8 @@ title: "Roadmap and Current Status"
 
 | Surface | State |
 |---|---|
-| Documentation and public contracts | CONVERGING with current runtime |
+| PDK/Component/SCGSim authority and notebook ownership | ACCEPTED 2026-08-16 |
+| Solver runtime contracts | CONVERGING; not V1 stable |
 | Installable/importable package and version metadata | Implemented and CI-validated |
 | In-tree `scgsim.sgb` Core | Implemented; Route A/B candidate |
 | `scgsim.palace` | Electrostatic/Eigenmode implemented; LTlab Slurm + strict report exercised |
@@ -17,8 +18,8 @@ title: "Roadmap and Current Status"
 
 ## Near term
 
-1. Obtain Human acceptance for the current semantic and runtime contracts.
-2. Stabilize accepted behavior with focused tests and current documentation.
+1. Stabilize the accepted semantic-authority and notebook-ownership scope.
+2. Continue converging the solver runtime contracts.
 3. Continue solver-specific report presentation without flattening physics.
 
 ## Later

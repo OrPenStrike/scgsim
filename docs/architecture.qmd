@@ -35,9 +35,11 @@ flowchart LR
 
 ## Current truth
 
+The Human accepted the PDK/Component/SCGSim semantic-authority split and public
+notebook ownership on 2026-08-16. SCGSim owns no public notebook source; OrPen
+SC PDK owns the public component examples and calls the shared runtime directly.
+
 The Palace Electrostatic/Eigenmode and version-locked AEDT runtime families are
-implemented but remain `CONVERGING`, not V1 stable. SCGSim owns no public
-notebook source; OrPen SC PDK owns the public component examples and calls the
-shared runtime directly.
+implemented but remain `CONVERGING`, not V1 stable.
 
 See [Folder tree and ownership](ownership.qmd) for repository placement.
