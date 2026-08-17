@@ -23,6 +23,13 @@ This contract permits Route A or Route B for the current Surface-EPR direction.
 It publishes no private component, selector, dimension, screenshot, config,
 mesh, receipt, or artifact.
 
+Notebooks may set `amr_max_passes` (Palace `MaxIts`) and
+`amr_nonconformal` (Palace `Model.Refinement.Nonconformal`).
+`write_config()` always emits the `Nonconformal` key. The SCGSim default is
+`false` so generated configs do not inherit Palace's `true` default. Set
+`amr_nonconformal=True` only to opt into nonconformal AMR. Do not delete the
+key from a generated config.
+
 ## AEDT notebook contract
 
 AEDT examples use the same stage-local rule. Backend-specific setup remains

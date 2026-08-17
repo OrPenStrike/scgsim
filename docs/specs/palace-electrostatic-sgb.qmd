@@ -71,6 +71,11 @@ These values are **CONVERGING**, not accepted scientific defaults or Gates:
 | `save_fields` | `0` |
 | `unassigned_conductor_policy` | `"ground"` |
 | `exterior_boundary_policy` | `"none"` |
+| `Model.Refinement.Nonconformal` | `false` unless the notebook sets `amr_nonconformal=True` |
+
+Palace defaults `Nonconformal` to `true` when the key is omitted. SCGSim always
+writes the key and defaults it to `false` (conformal tet AMR). Notebooks opt
+into nonconformal AMR with `set_numerical(amr_nonconformal=True)`.
 
 External gsim and historical SGB revisions are derivation evidence only. The
 runtime authority is the in-tree `scgsim.sgb` Core and the current

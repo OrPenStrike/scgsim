@@ -464,10 +464,14 @@ def _linear_solver(numerical: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _build_refinement(numerical: Mapping[str, Any]) -> dict[str, Any]:
+    # Palace defaults Model.Refinement.Nonconformal to true if the key is omitted.
+    # SCGSim always writes the key. The default is false (conformal tet AMR);
+    # notebooks may set amr_nonconformal=True to opt into NC AMR.
     refinement = {
         "UniformLevels": 0,
         "Tol": float(numerical["amr_tolerance"]),
         "MaxIts": int(numerical["amr_max_passes"]),
+        "Nonconformal": bool(numerical.get("amr_nonconformal", False)),
     }
     if numerical.get("save_adapt_iterations") is not None:
         refinement["SaveAdaptIterations"] = bool(numerical["save_adapt_iterations"])
@@ -500,6 +504,7 @@ def configure_numerical_controls(
     refined_mesh_size: float = 5.0,
     max_mesh_size: float = 300.0,
     amr_max_passes: int = 0,
+    amr_nonconformal: bool = False,
     amr_tolerance: float = 1e-2,
     amr_update_fraction: float | None = None,
     save_adapt_iterations: bool | None = None,
@@ -507,6 +512,12 @@ def configure_numerical_controls(
     output_paraview: bool | None = None,
     output_grid_function: bool | None = None,
 ) -> dict[str, Any]:
+    """Validate notebook numerical controls for Palace config synthesis.
+
+    ``amr_max_passes`` becomes ``Model.Refinement.MaxIts``.
+    ``amr_nonconformal`` becomes ``Model.Refinement.Nonconformal`` and defaults
+    to ``False`` so generated configs do not inherit Palace's ``true`` default.
+    """
     if not isinstance(order, int) or isinstance(order, bool) or not 1 <= order <= 4:
         raise ValueError("order must be an integer from 1 through 4.")
     if not _positive_finite(tolerance):
@@ -541,6 +552,8 @@ def configure_numerical_controls(
         raise TypeError("amr_max_passes must be an integer.")
     if amr_max_passes < 0:
         raise ValueError("amr_max_passes must be >= 0.")
+    if not isinstance(amr_nonconformal, bool):
+        raise TypeError("amr_nonconformal must be a bool.")
     if not _positive_finite(amr_tolerance):
         raise ValueError("amr_tolerance must be finite and positive.")
     if amr_update_fraction is not None:
@@ -574,6 +587,7 @@ def configure_numerical_controls(
         "refined_mesh_size": refined,
         "max_mesh_size": maximum,
         "amr_max_passes": int(amr_max_passes),
+        "amr_nonconformal": bool(amr_nonconformal),
         "amr_tolerance": float(amr_tolerance),
         "amr_update_fraction": (
             float(amr_update_fraction) if amr_update_fraction is not None else None

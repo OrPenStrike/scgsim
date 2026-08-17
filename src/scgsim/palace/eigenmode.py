@@ -246,6 +246,7 @@ class EigenmodeSim:
         refined_mesh_size: float | None = None,
         max_mesh_size: float | None = None,
         amr_max_passes: int = 0,
+        amr_nonconformal: bool = False,
         amr_tolerance: float = 1e-2,
         amr_update_fraction: float | None = None,
         save_adapt_iterations: bool | None = None,
@@ -253,6 +254,12 @@ class EigenmodeSim:
         output_paraview: bool | None = None,
         output_grid_function: bool | None = None,
     ) -> None:
+        """Set solver, FEM, AMR, and output controls for the next config write.
+
+        ``amr_max_passes`` is Palace ``MaxIts``. ``amr_nonconformal`` is Palace
+        ``Model.Refinement.Nonconformal`` and defaults to ``False``. Set
+        ``True`` only to opt into nonconformal AMR.
+        """
         if (refined_mesh_size is None) != (max_mesh_size is None):
             raise ValueError(
                 "refined_mesh_size and max_mesh_size must be provided together."
@@ -276,6 +283,7 @@ class EigenmodeSim:
             device=device,
             **mesh_sizes,
             amr_max_passes=amr_max_passes,
+            amr_nonconformal=amr_nonconformal,
             amr_tolerance=amr_tolerance,
             amr_update_fraction=amr_update_fraction,
             save_adapt_iterations=save_adapt_iterations,
