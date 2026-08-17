@@ -325,10 +325,28 @@ def _render_script(
     directives: list[str] = []
     if profile != "ltlab-local":
         for key, value in resources.items():
-            if key in {"launcher", "command_style", "threads", "processes"}:
+            if key in {
+                "launcher",
+                "command_style",
+                "threads",
+                "processes",
+                "output",
+                "error",
+                "open_mode",
+            }:
                 continue
             _single_line(str(value), f"resource {key}")
             directives.append(f"#SBATCH --{key.replace('_', '-')}={value}")
+        # Slurm defaults to slurm-%j.out in the submit directory. Palace stdout
+        # already belongs in logs/palace-%j.log, so bind both streams there and
+        # do not tee (tee would duplicate every line into the same file).
+        directives.extend(
+            [
+                "#SBATCH --output=logs/palace-%j.log",
+                "#SBATCH --error=logs/palace-%j.log",
+                "#SBATCH --open-mode=append",
+            ]
+        )
     launcher = (
         []
         if profile == "ltlab-local"
@@ -369,7 +387,8 @@ def _render_script(
         '[[ -f "$RUN_DIR/metadata/palace_index_map.json" ]] || { echo "missing canonical index map" >&2; exit 2; }',
         'cd "$RUN_DIR" || exit 2',
         "mkdir -p logs results/palace metadata",
-        "rm -f metadata/palace_returned_run_receipt.json logs/palace-*.log",
+        "rm -f metadata/palace_returned_run_receipt.json",
+        *(["rm -f logs/palace-*.log"] if profile == "ltlab-local" else []),
         "rm -rf results/palace",
         "mkdir -p results/palace",
         'PALACE_CONFIG="config.json"',
@@ -410,7 +429,7 @@ def _render_script(
             ]
         )
 
-    lines.extend(
+    execution_lines = (
         [
             "set -o pipefail",
             f'{command} 2>&1 | tee "$PALACE_LOG"',
@@ -419,6 +438,18 @@ def _render_script(
             "TEE_EXIT_CODE=${PALACE_PIPE_STATUS[1]:-1}",
             "PIPELINE_EXIT_CODE=$PALACE_EXIT_CODE",
             'if [ "$PIPELINE_EXIT_CODE" -eq 0 ] && [ "$TEE_EXIT_CODE" -ne 0 ]; then PIPELINE_EXIT_CODE=$TEE_EXIT_CODE; fi',
+        ]
+        if profile == "ltlab-local"
+        else [
+            command,
+            "PALACE_EXIT_CODE=$?",
+            "TEE_EXIT_CODE=0",
+            "PIPELINE_EXIT_CODE=$PALACE_EXIT_CODE",
+        ]
+    )
+    lines.extend(
+        [
+            *execution_lines,
             (
                 f'python3 metadata/{returned_receipt_recorder_name} "$(pwd)" '
                 '"$PIPELINE_EXIT_CODE" --log-path "$PALACE_LOG" '

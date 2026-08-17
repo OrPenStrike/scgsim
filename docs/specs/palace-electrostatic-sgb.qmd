@@ -27,7 +27,9 @@ construct component
 ```
 
 Handoff preparation does not submit Palace. Generated local or Slurm scripts
-execute explicitly and write a receipt that the resolver verifies.
+execute explicitly and write a receipt that the resolver verifies. Slurm
+scripts bind `#SBATCH --output` and `--error` to `logs/palace-%j.log` so the
+scheduler does not also write `slurm-%j.out`.
 
 | Stage | Candidate method | Intended responsibility |
 |---|---|---|
