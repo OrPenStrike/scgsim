@@ -3,7 +3,7 @@ title: "Palace Electrostatic + SGB"
 ---
 
 ::: {.callout-note title="CONVERGING candidate contract"}
-The backend, Route A/B lowering, handoff, LTlab Slurm execution, strict result
+The backend, Route A/B lowering, handoff, Slurm execution, strict result
 resolution, and report summaries have live candidate evidence. They remain
 CONVERGING and are not V1 stable.
 :::

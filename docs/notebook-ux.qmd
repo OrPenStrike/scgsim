@@ -30,9 +30,10 @@ Notebooks may set `amr_max_passes` (Palace `MaxIts`) and
 `amr_nonconformal=True` only to opt into nonconformal AMR. Do not delete the
 key from a generated config.
 
-`prepare_handoff()` owns `run_palace.sbatch` / `run_palace.sh`. Slurm jobs
-write stdout and stderr only to `logs/palace-%j.log`. Do not keep a duplicate
-`slurm-%j.out`.
+`prepare_handoff()` owns `run_palace.sbatch` / `run_palace.sh`. The `profile`
+argument is `direct-local`, `slurm-single-node`, or `slurm-multi-node`.
+Slurm jobs write stdout and stderr only to `logs/palace-%j.log`. Do not keep a
+duplicate `slurm-%j.out`.
 
 ## AEDT notebook contract
 

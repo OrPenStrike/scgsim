@@ -5,16 +5,18 @@ title: "Execution Profiles and Local/Manual-HPC Handoff"
 SCGSim uses one run-and-handoff contract. It does not define separate semantic
 runners for different machines.
 
-## Fixed machine profiles
+## Fixed handoff profiles
+
+Profile names describe launch shape, not a site or hostname.
 
 | Profile | Intended use | Required receipt scope |
 |---|---|---|
-| LTlab direct-local compiled binary | Smoke, debug, mesh/config validation, and small solves | Executable identity, inputs, environment, exit state, artifacts |
-| LTlab single-node Slurm | `sbatch`, MPI/OpenMP, scheduler lifecycle, resource receipt, and result resolution | Scheduler/job identity, resources, launch shape, artifacts, resolution state |
-| F1 multi-node/high-memory Slurm | Production-scale runs | Scheduler/job identity, nodes/resources, launch shape, artifacts, resolution state |
+| `direct-local` | Direct local binary; smoke, debug, mesh/config validation, and small solves | Executable identity, inputs, environment, exit state, artifacts |
+| `slurm-single-node` | Single-node `sbatch`; MPI/OpenMP, scheduler lifecycle, resource receipt, and result resolution | Scheduler/job identity, resources, launch shape, artifacts, resolution state |
+| `slurm-multi-node` | Multi-node / high-memory `sbatch`; production-scale runs | Scheduler/job identity, nodes/resources, launch shape, artifacts, resolution state |
 
-Machine differences live in profile data and receipts. They do not fork the
-run model.
+Machine differences live in caller-supplied executable, setup commands,
+resources, and receipts. They do not fork the run model.
 
 ## Handoff lifecycle
 

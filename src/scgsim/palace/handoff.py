@@ -22,8 +22,13 @@ from ._mesh import (
 )
 from ._staged import RUNTIME_VERSION, SCHEMA_VERSION
 
-HandoffProfile = Literal["ltlab-local", "ltlab-slurm", "f1-slurm"]
-_PROFILES = {"ltlab-local", "ltlab-slurm", "f1-slurm"}
+HandoffProfile = Literal["direct-local", "slurm-single-node", "slurm-multi-node"]
+_PROFILES = {"direct-local", "slurm-single-node", "slurm-multi-node"}
+_LEGACY_PROFILES = {
+    "ltlab-local": "direct-local",
+    "ltlab-slurm": "slurm-single-node",
+    "f1-slurm": "slurm-multi-node",
+}
 PORTABLE_HANDOFF_SHA = "8cf5fa79fa3abb176940dbfc520ff34a44f4770e"
 
 
@@ -58,6 +63,11 @@ def prepare_handoff(
     problem: Literal["Electrostatic", "Eigenmode"] = "Electrostatic",
 ) -> HandoffPlan:
     """Create only portable handoff artifacts; caller owns executable and resources."""
+    if profile in _LEGACY_PROFILES:
+        raise ValueError(
+            f"Unsupported handoff profile {profile!r}; it was renamed to "
+            f"{_LEGACY_PROFILES[profile]!r}."
+        )
     if profile not in _PROFILES:
         raise ValueError(f"Unsupported handoff profile {profile!r}.")
     if not config_path.is_file() or not mesh_result.mesh_path.is_file():
@@ -76,10 +86,10 @@ def prepare_handoff(
         directory.mkdir(parents=True, exist_ok=True)
 
     script_path = run_dir / (
-        "run_palace.sh" if profile == "ltlab-local" else "run_palace.sbatch"
+        "run_palace.sh" if profile == "direct-local" else "run_palace.sbatch"
     )
     (
-        run_dir / ("run_palace.sbatch" if profile == "ltlab-local" else "run_palace.sh")
+        run_dir / ("run_palace.sbatch" if profile == "direct-local" else "run_palace.sh")
     ).unlink(missing_ok=True)
 
     metadata_path = run_dir / "metadata" / "palace_handoff_metadata.json"
@@ -275,32 +285,32 @@ def _validate_resources(
     if not isinstance(resources, Mapping) or not resources:
         raise ValueError("handoff requires caller-supplied resources.")
     result = dict(resources)
-    if profile == "ltlab-local":
+    if profile == "direct-local":
         _positive_int(result.get("threads", 1), "resources.threads")
         _positive_int(result.get("processes", 1), "resources.processes")
     else:
         _positive_int(result.get("ntasks"), "resources.ntasks")
         _positive_int(result.get("cpus_per_task"), "resources.cpus_per_task")
         nodes = _positive_int(result.get("nodes"), "resources.nodes")
-        if profile == "ltlab-slurm" and nodes != 1:
+        if profile == "slurm-single-node" and nodes != 1:
             raise ValueError(
-                "ltlab-slurm is a single-node profile and requires resources.nodes=1."
+                "slurm-single-node is a single-node profile and requires resources.nodes=1."
             )
-        if profile == "f1-slurm":
+        if profile == "slurm-multi-node":
             if nodes < 2:
                 raise ValueError(
-                    "f1-slurm is a multi-node profile and requires resources.nodes >= 2."
+                    "slurm-multi-node is a multi-node profile and requires resources.nodes >= 2."
                 )
             if not any(key in result for key in ("mem", "mem_per_cpu")):
                 raise ValueError(
-                    "f1-slurm requires caller-supplied high-memory resource (mem or mem_per_cpu)."
+                    "slurm-multi-node requires caller-supplied high-memory resource (mem or mem_per_cpu)."
                 )
     style = result.get("command_style", "binary")
     if style not in {"binary", "wrapper"}:
         raise ValueError("resources.command_style must be 'binary' or 'wrapper'.")
-    if profile != "ltlab-local" and style == "wrapper":
+    if profile != "direct-local" and style == "wrapper":
         raise ValueError(
-            "resources.command_style='wrapper' is supported only for ltlab-local; "
+            "resources.command_style='wrapper' is supported only for direct-local; "
             "Slurm profiles require 'binary'."
         )
     return result
@@ -323,7 +333,7 @@ def _render_script(
         resources.get("processes", resources.get("ntasks", 1)), "processes"
     )
     directives: list[str] = []
-    if profile != "ltlab-local":
+    if profile != "direct-local":
         for key, value in resources.items():
             if key in {
                 "launcher",
@@ -349,10 +359,10 @@ def _render_script(
         )
     launcher = (
         []
-        if profile == "ltlab-local"
+        if profile == "direct-local"
         else _launcher_tokens(resources.get("launcher", ("srun",)))
     )
-    if profile != "ltlab-local" and not launcher:
+    if profile != "direct-local" and not launcher:
         raise ValueError("Slurm profile launcher must be non-empty.")
 
     arguments = ['"$PALACE_EXECUTABLE"']
@@ -366,7 +376,7 @@ def _render_script(
             'SCRIPT_SOURCE="${BASH_SOURCE[0]}"',
             'RUN_DIR="$(CDPATH= cd -- "$(dirname -- "$SCRIPT_SOURCE")" && pwd -P)" || exit 2',
         ]
-        if profile == "ltlab-local"
+        if profile == "direct-local"
         else [
             '[[ -n "${SLURM_SUBMIT_DIR:-}" ]] || { echo "missing SLURM_SUBMIT_DIR" >&2; exit 2; }',
             'RUN_DIR="$(CDPATH= cd -- "$SLURM_SUBMIT_DIR" && pwd -P)" || exit 2',
@@ -388,7 +398,7 @@ def _render_script(
         'cd "$RUN_DIR" || exit 2',
         "mkdir -p logs results/palace metadata",
         "rm -f metadata/palace_returned_run_receipt.json",
-        *(["rm -f logs/palace-*.log"] if profile == "ltlab-local" else []),
+        *(["rm -f logs/palace-*.log"] if profile == "direct-local" else []),
         "rm -rf results/palace",
         "mkdir -p results/palace",
         'PALACE_CONFIG="config.json"',
@@ -439,7 +449,7 @@ def _render_script(
             "PIPELINE_EXIT_CODE=$PALACE_EXIT_CODE",
             'if [ "$PIPELINE_EXIT_CODE" -eq 0 ] && [ "$TEE_EXIT_CODE" -ne 0 ]; then PIPELINE_EXIT_CODE=$TEE_EXIT_CODE; fi',
         ]
-        if profile == "ltlab-local"
+        if profile == "direct-local"
         else [
             command,
             "PALACE_EXIT_CODE=$?",
@@ -473,10 +483,10 @@ def _redacted_command(
 ) -> dict[str, Any]:
     return {
         "manual_only": True,
-        "script": "run_palace.sh" if profile == "ltlab-local" else "run_palace.sbatch",
+        "script": "run_palace.sh" if profile == "direct-local" else "run_palace.sbatch",
         "executable_identity": Path(executable).name,
         "launcher": resources.get(
-            "launcher", "local" if profile == "ltlab-local" else "srun"
+            "launcher", "local" if profile == "direct-local" else "srun"
         ),
         "arguments": ["[executable]", "config.json"],
     }
