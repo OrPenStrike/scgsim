@@ -5054,37 +5054,101 @@ def _solution_domain_sidewall_geometry_refs(
         ),
     ):
         for edge_index, (start, end) in enumerate(_ring_edges(ring_loop)):
-            edge_z_min_um = _solution_boundary_edge_z_min_um(
+            parameters = _solution_boundary_edge_parameters(
                 build_input,
                 route=route,
                 solution=solution,
                 start=start,
                 end=end,
-                default_z_min_um=z_min_um,
             )
-            edge_z_max_um = _solution_boundary_edge_z_max_um(
-                build_input,
-                route=route,
-                solution=solution,
-                start=start,
-                end=end,
-                default_z_max_um=z_max_um,
-            )
-            if edge_z_max_um - edge_z_min_um <= _TOPOLOGY_EPS_UM:
-                continue
-            refs.append(
-                {
-                    "quad_points": (
-                        (start[0], start[1], edge_z_min_um),
-                        (end[0], end[1], edge_z_min_um),
-                        (end[0], end[1], edge_z_max_um),
-                        (start[0], start[1], edge_z_max_um),
-                    ),
-                    "sidewall_ring_role": ring_role,
-                    "sidewall_edge_index": edge_index,
-                }
-            )
+            for first, second in pairwise(parameters):
+                segment_start = _interpolate_2d(start, end, first)
+                segment_end = _interpolate_2d(start, end, second)
+                if (
+                    hypot(
+                        segment_end[0] - segment_start[0],
+                        segment_end[1] - segment_start[1],
+                    )
+                    <= _TOPOLOGY_EPS_UM
+                ):
+                    continue
+                edge_z_min_um = _solution_boundary_edge_z_min_um(
+                    build_input,
+                    route=route,
+                    solution=solution,
+                    start=segment_start,
+                    end=segment_end,
+                    default_z_min_um=z_min_um,
+                )
+                edge_z_max_um = _solution_boundary_edge_z_max_um(
+                    build_input,
+                    route=route,
+                    solution=solution,
+                    start=segment_start,
+                    end=segment_end,
+                    default_z_max_um=z_max_um,
+                )
+                if edge_z_max_um - edge_z_min_um <= _TOPOLOGY_EPS_UM:
+                    continue
+                refs.append(
+                    {
+                        "quad_points": (
+                            (*segment_start, edge_z_min_um),
+                            (*segment_end, edge_z_min_um),
+                            (*segment_end, edge_z_max_um),
+                            (*segment_start, edge_z_max_um),
+                        ),
+                        "sidewall_ring_role": ring_role,
+                        "sidewall_edge_index": edge_index,
+                    }
+                )
     return tuple(refs)
+
+
+def _solution_boundary_edge_parameters(
+    build_input: GeometryBuildInput,
+    *,
+    route: RouteLiteral,
+    solution: SemanticEntitySpec,
+    start: tuple[float, float],
+    end: tuple[float, float],
+) -> tuple[float, ...]:
+    """Split a vacuum exterior edge at exact finite-conductor endpoints."""
+    if route != "B" or not _is_vacuum_solution_entity(solution):
+        return (0.0, 1.0)
+    parameters = {0.0, 1.0}
+    solution_z_min = float(solution.geometry["z_min_um"])
+    solution_z_max = float(solution.geometry["z_max_um"])
+    for entity in _active_route_conductor_entities(build_input, route):
+        if entity.route_representations[route] not in {
+            "cutout_boundary_shell",
+            "material_volume",
+        }:
+            continue
+        entity_z_min, entity_z_max = _entity_z_range_um(entity)
+        if not (
+            _same_z(entity_z_min, solution_z_min)
+            or _same_z(entity_z_max, solution_z_max)
+        ):
+            continue
+        for edge_start, edge_end in _ring_edges(
+            _clean_loop(entity.geometry["outer_loop"])
+        ):
+            interval = _segment_overlap_interval(start, end, edge_start, edge_end)
+            if interval is not None:
+                parameters.update(interval)
+    return tuple(sorted(parameters))
+
+
+def _interpolate_2d(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    parameter: float,
+) -> tuple[float, float]:
+    return (
+        start[0] + (end[0] - start[0]) * parameter,
+        start[1] + (end[1] - start[1]) * parameter,
+    )
 
 
 def _solution_boundary_edge_z_min_um(
@@ -5113,7 +5177,7 @@ def _solution_boundary_edge_z_min_um(
         entity_z_min_um, entity_z_max_um = _entity_z_range_um(entity)
         if not _same_z(entity_z_min_um, default_z_min_um):
             continue
-        if _edge_matches_loop_edge(start, end, entity.geometry["outer_loop"]):
+        if _edge_is_covered_by_loop_edge(start, end, entity.geometry["outer_loop"]):
             z_min_um = max(z_min_um, entity_z_max_um)
     return z_min_um
 
@@ -5144,25 +5208,23 @@ def _solution_boundary_edge_z_max_um(
         entity_z_min_um, entity_z_max_um = _entity_z_range_um(entity)
         if not _same_z(entity_z_max_um, default_z_max_um):
             continue
-        if _edge_matches_loop_edge(start, end, entity.geometry["outer_loop"]):
+        if _edge_is_covered_by_loop_edge(start, end, entity.geometry["outer_loop"]):
             z_max_um = min(z_max_um, entity_z_min_um)
     return z_max_um
 
 
-def _edge_matches_loop_edge(
+def _edge_is_covered_by_loop_edge(
     start: tuple[float, float],
     end: tuple[float, float],
     loop: Any,
 ) -> bool:
-    edge_key = {_point2d_key(start), _point2d_key(end)}
     return any(
-        {_point2d_key(edge_start), _point2d_key(edge_end)} == edge_key
+        interval is not None
+        and interval[0] <= _TOPOLOGY_EPS_UM
+        and interval[1] >= 1.0 - _TOPOLOGY_EPS_UM
         for edge_start, edge_end in _ring_edges(_clean_loop(loop))
+        for interval in (_segment_overlap_interval(start, end, edge_start, edge_end),)
     )
-
-
-def _point2d_key(point: tuple[float, float]) -> tuple[float, float]:
-    return (round(float(point[0]), 9), round(float(point[1]), 9))
 
 
 def _canonical_face_signature_3d(
