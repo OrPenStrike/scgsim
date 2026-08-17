@@ -20,7 +20,9 @@ def build_component_stack(
     integration semantics. The component owns conductor identities, nets, and
     topology selectors. Geometry bounds size the coupon only.
     """
-    padding = _positive_number(coupon_padding_um, "coupon_padding_um")
+    padding = _finite_number(coupon_padding_um, "coupon_padding_um")
+    if padding < 0.0:
+        raise ValueError("coupon_padding_um must be a finite non-negative number.")
     bounds = _coupon_domain_bounds(component, padding)
     try:
         spec = _mapping(
