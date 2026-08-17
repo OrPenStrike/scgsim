@@ -24,11 +24,6 @@ from ._staged import RUNTIME_VERSION, SCHEMA_VERSION
 
 HandoffProfile = Literal["direct-local", "slurm-single-node", "slurm-multi-node"]
 _PROFILES = {"direct-local", "slurm-single-node", "slurm-multi-node"}
-_LEGACY_PROFILES = {
-    "ltlab-local": "direct-local",
-    "ltlab-slurm": "slurm-single-node",
-    "f1-slurm": "slurm-multi-node",
-}
 PORTABLE_HANDOFF_SHA = "8cf5fa79fa3abb176940dbfc520ff34a44f4770e"
 
 
@@ -63,11 +58,6 @@ def prepare_handoff(
     problem: Literal["Electrostatic", "Eigenmode"] = "Electrostatic",
 ) -> HandoffPlan:
     """Create only portable handoff artifacts; caller owns executable and resources."""
-    if profile in _LEGACY_PROFILES:
-        raise ValueError(
-            f"Unsupported handoff profile {profile!r}; it was renamed to "
-            f"{_LEGACY_PROFILES[profile]!r}."
-        )
     if profile not in _PROFILES:
         raise ValueError(f"Unsupported handoff profile {profile!r}.")
     if not config_path.is_file() or not mesh_result.mesh_path.is_file():
