@@ -30,12 +30,49 @@ def _prepare_indium_ground_bump_fill(
         raise TypeError("fill must be a bool.")
     pitch = _positive_number(fill_pitch_um, "fill_pitch_um")
     clearance = _non_negative_number(fill_clearance_um, "fill_clearance_um")
+    result_stack = deepcopy(dict(stack))
+    layers = result_stack.get("layers")
+    if not isinstance(layers, Sequence) or isinstance(layers, str | bytes):
+        raise TypeError("indium ground bumps require a semantic layer sequence.")
+    has_authored_bumps = any(
+        isinstance(record, Mapping) and record.get("part_role") == "bump_body"
+        for record in layers
+    )
+    if not fill and not has_authored_bumps:
+        receipt: dict[str, Any] = {
+            "schema_version": 2,
+            "rule": {
+                "identity": "scgsim.indium_ground_bump_fill.v1",
+                "version": 1,
+            },
+            "source": "scgsim.sgb.ground_bumps._prepare_indium_ground_bump_fill",
+            "pdk_spec": None,
+            "pdk_spec_sha256": None,
+            "controls": {
+                "fill": False,
+                "fill_pitch_um": pitch,
+                "fill_clearance_um": clearance,
+            },
+            "authored_sites": [],
+            "accepted": [],
+            "rejected": [],
+            "semantic_contract": None,
+            "counts": {"authored": 0, "generated": 0, "rejected": 0},
+        }
+        _set_indium_fill_metadata(result_stack, receipt)
+        return {
+            "component": component,
+            "stack": result_stack,
+            "injected_entities": (),
+            "injected_polygons": (),
+            "receipt": receipt,
+        }
+
     import gdstk
 
     from scgsim.sgb.adapter import build_gds_stack_geometry_input
     from scgsim.sgb.models import LayoutPolygonSpec, SemanticEntitySpec
 
-    result_stack = deepcopy(dict(stack))
     template, spec = _ground_bump_fill_spec(result_stack)
     origin = _point2(spec["lattice_origin_um"], "lattice_origin_um")
     bump_layer = _layer_pair(spec["body_layer"], "body_layer")
