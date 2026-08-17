@@ -470,6 +470,11 @@ def _entities_and_polygons_from_layer_record(
             cell_bounds_um=cell_bounds_um,
             domain_bounds_by_semantic_id=domain_bounds_by_semantic_id,
         )
+        if len(entity_polygons) > 1:
+            return tuple(
+                _split_polygon_entity(entity, polygon, index)
+                for index, polygon in enumerate(entity_polygons)
+            )
         return (
             (_entity_with_polygon_geometry(entity, entity_polygons), entity_polygons),
         )
@@ -825,7 +830,10 @@ def _derived_ground_polygons(
 ) -> tuple[LayoutPolygonSpec, ...]:
     import gdstk
 
-    from scgsim.sgb.planning import _split_gdstk_cutline_loop
+    from scgsim.sgb.planning import (
+        _canonical_loop_sort_key,
+        _split_gdstk_cutline_loop,
+    )
 
     mask_layer = entity.geometry.get("mask_layer")
     if mask_layer is None:
@@ -890,14 +898,23 @@ def _derived_ground_polygons(
                 )
             included.extend(_layout_polygon_region(gdstk, matches[0]))
     regions = gdstk.boolean(without_mask or (), tuple(included), "or", precision=1e-9)
-    if not regions or len(regions) != 1:
+    normalized_regions = sorted(
+        (
+            _split_gdstk_cutline_loop(_ring_from_gdstk_polygon(region))
+            for region in regions or ()
+        ),
+        key=lambda region: (
+            _canonical_loop_sort_key(region[0]),
+            tuple(_canonical_loop_sort_key(hole) for hole in region[1]),
+        ),
+    )
+    if not normalized_regions:
         raise ValueError(
-            f"{entity.semantic_id} derived ground must lower to one planar region"
+            f"{entity.semantic_id} derived ground must lower to at least one planar region"
         )
-    outer, holes = _split_gdstk_cutline_loop(_ring_from_gdstk_polygon(regions[0]))
-    return (
+    return tuple(
         LayoutPolygonSpec(
-            polygon_id=f"{entity.semantic_id}__P0000",
+            polygon_id=f"{entity.semantic_id}__P{index:04d}",
             layer=f"{mask_key[0]}/{mask_key[1]}",
             exterior=outer,
             holes=holes,
@@ -909,7 +926,8 @@ def _derived_ground_polygons(
                 "source": "die_face_minus_ground_mask",
                 "include_layer": include_layer,
             },
-        ),
+        )
+        for index, (outer, holes) in enumerate(normalized_regions)
     )
 
 
