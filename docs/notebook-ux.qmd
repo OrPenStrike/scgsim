@@ -43,7 +43,10 @@ incomplete after time-limit or OOM, they fall back to
 `inspect_run_trustworthiness(run_dir)`, which still reads `iterationNN`
 snapshots. Numerical Evidence plots each readable AMR scalar as its own
 figure. AMR error Norm, Maximum, and Mean share one log plot; Minimum is
-omitted. Simulation Benchmark keeps whole-run totals and also records
+omitted. Legends sit to the right of each figure. `show_run_trustworthiness()`
+and `inspect_run_trustworthiness()` accept `theme="light"` (default) or
+`theme="dark"`. Light is a designed light palette, not inherited notebook
+colors. Simulation Benchmark keeps whole-run totals and also records
 per-AMR-pass wall time, DOFs, and seconds per million DOFs so later runs
 can accumulate cost statistics.
 
