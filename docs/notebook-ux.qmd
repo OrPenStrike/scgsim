@@ -42,9 +42,10 @@ are a later report layer and are not the first notebook view. Notebooks call
 incomplete after time-limit or OOM, they fall back to
 `inspect_run_trustworthiness(run_dir)`, which still reads `iterationNN`
 snapshots. Numerical Evidence plots each readable AMR scalar as its own
-figure, with the legend under that figure. Simulation Benchmark keeps
-whole-run totals and also records per-AMR-pass wall time, DOFs, and seconds
-per million DOFs so later runs can accumulate cost statistics.
+figure. AMR error Norm, Maximum, and Mean share one log plot; Minimum is
+omitted. Simulation Benchmark keeps whole-run totals and also records
+per-AMR-pass wall time, DOFs, and seconds per million DOFs so later runs
+can accumulate cost statistics.
 
 ## AEDT notebook contract
 

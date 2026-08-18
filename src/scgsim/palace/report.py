@@ -21,6 +21,22 @@ _FREQ_HEADER = "Re{f} (GHz)"
 _CAP_HEADER_PREFIX = "C[i]["
 _INDEX_COLUMNS = {"m", "i"}
 _SKIP_EIG_COLUMNS = {"Error (Bkwd.)", "Error (Abs.)"}
+_ERROR_INDICATOR_TRACES = ("Norm", "Maximum", "Mean")
+_MUTED = "#8b949e"
+_COLORWAY = (
+    "#56B4E9",
+    "#E69F00",
+    "#009E73",
+    "#CC79A7",
+    "#0072B2",
+    "#D55E00",
+    "#F0E442",
+)
+_PLOTLY_CONFIG = {
+    "displaylogo": False,
+    "responsive": True,
+    "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+}
 
 _ELECTROSTATIC_RESULT_TABLES = (
     "terminal-C",
@@ -129,16 +145,16 @@ class PalaceTrustReport:
                 if isinstance(item, str):
                     display(HTML(item))
                 else:
-                    display(item)
+                    _show_figure(item)
         display(HTML(self._benchmark_cards_html()))
         benchmark = self._benchmark_time_figure()
         if isinstance(benchmark, str):
             display(HTML(benchmark))
         else:
-            display(benchmark)
+            _show_figure(benchmark)
         display(HTML(self._benchmark_pass_table_html()))
         for figure in self._benchmark_pass_figures():
-            display(figure)
+            _show_figure(figure)
 
     def _identity_html(self) -> str:
         cards = (
@@ -252,34 +268,43 @@ class PalaceTrustReport:
             )
             if delta is not None:
                 items.append(delta)
-        for name in ("Norm", "Maximum", "Mean", "Minimum"):
-            ys = [
-                None if pass_.error_indicators is None else pass_.error_indicators.get(name)
-                for pass_ in self.passes
-            ]
-            hline = None
-            if name == "Norm" and self.amr_tolerance is not None:
-                hline = (self.amr_tolerance, "configured AMR Tol")
-            figure = _line_figure(
-                title=f"AMR error indicator ({name}) vs AMR pass",
-                xlabel="AMR pass",
-                ylabel=name,
-                xs=xs,
-                traces=[(name, ys)],
-                yaxis_type="log",
-                hline=hline,
+        traces = [
+            (
+                name,
+                [
+                    None
+                    if pass_.error_indicators is None
+                    else pass_.error_indicators.get(name)
+                    for pass_ in self.passes
+                ],
             )
-            if figure is not None:
-                items.append(figure)
+            for name in _ERROR_INDICATOR_TRACES
+        ]
+        hline = None
+        if self.amr_tolerance is not None:
+            hline = (self.amr_tolerance, "configured AMR Tol")
+        figure = _line_figure(
+            title="AMR error indicator vs AMR pass",
+            xlabel="AMR pass",
+            ylabel="error indicator",
+            xs=xs,
+            traces=traces,
+            yaxis_type="log",
+            hline=hline,
+        )
+        if figure is not None:
+            items.append(figure)
         return items
 
     def _convergence_heading_html(self) -> str:
         return (
             "<section><h3>Numerical Evidence</h3>"
             "<p style='opacity:0.75;margin-top:0'>Each readable AMR scalar is its own "
-            "figure, with the legend under that figure. The dashed line is the configured "
-            "Palace AMR Tol, not a newly invented acceptance Gate. Surface-Q and domain-E "
-            "participation remain the later physics layer.</p></section>"
+            "figure. AMR error Norm, Maximum, and Mean share one log plot because they "
+            "are the same local indicator. Minimum is omitted. The dashed line is the "
+            "configured Palace AMR Tol, not a newly invented acceptance Gate. "
+            "Surface-Q and domain-E participation remain the later physics layer.</p>"
+            "</section>"
         )
 
     def _convergence_status_html(self) -> str:
@@ -365,20 +390,24 @@ class PalaceTrustReport:
                     x=values,
                     y=labels,
                     orientation="h",
+                    marker={"color": _COLORWAY[0], "opacity": 0.88},
                     text=[_fmt_seconds(value) for value in values],
                     textposition="outside",
+                    textfont={"color": _MUTED, "size": 12},
+                    hovertemplate="%{x:.3g} s<extra>%{y}</extra>",
                 )
             ]
         )
-        fig.update_layout(
-            template="plotly_white",
+        _style_figure(
+            fig,
             title="Elapsed time by Palace timer",
-            xaxis_title="seconds",
-            yaxis={"categoryorder": "total ascending"},
-            height=max(240, 48 * len(labels) + 80),
-            margin={"l": 140, "r": 80, "t": 50, "b": 40},
+            height=max(260, 36 * len(labels) + 90),
+            margin={"l": 150, "r": 72, "t": 56, "b": 40},
+            hovermode="closest",
+            showlegend=False,
         )
-        fig.update_xaxes(rangemode="tozero")
+        fig.update_xaxes(title_text="seconds", rangemode="tozero")
+        fig.update_yaxes(categoryorder="total ascending")
         return fig
 
     def pass_cost_records(self) -> tuple[PassCostRecord, ...]:
@@ -416,7 +445,9 @@ class PalaceTrustReport:
     def _benchmark_pass_table_html(self) -> str:
         records = self.pass_cost_records()
         if not records:
-            return "<p style='opacity:0.75'>No AMR pass cost snapshots are available.</p>"
+            return (
+                "<p style='opacity:0.75'>No AMR pass cost snapshots are available.</p>"
+            )
         header = (
             "<tr>"
             + "".join(
@@ -507,7 +538,9 @@ def _show_all_results(
 
     selected = _native_result_families(result.problem, result.tables)
     summaries = {
-        name: NativeTabularSummary(name=table.name, headers=table.headers, rows=table.rows)
+        name: NativeTabularSummary(
+            name=table.name, headers=table.headers, rows=table.rows
+        )
         for name, table in selected.items()
     }
 
@@ -545,8 +578,12 @@ def _show_simulation_benchmark(
             "durations": result.performance.durations,
         },
         "resources": {
-            "requested_resources": result.provenance.resource_record.get("requested_resources", {}),
-            "resolved_resources": result.provenance.resource_record.get("resolved_resources", {}),
+            "requested_resources": result.provenance.resource_record.get(
+                "requested_resources", {}
+            ),
+            "resolved_resources": result.provenance.resource_record.get(
+                "resolved_resources", {}
+            ),
         },
         "performance_metadata": {
             "route": result.route,
@@ -577,28 +614,32 @@ def _build_trust_report(
         raise ValueError(f"unsupported problem {problem!r} for trustworthiness report.")
 
     config = _read_optional_json(root / "config.json")
-    receipt = _read_optional_json(root / "metadata" / "palace_returned_run_receipt.json")
+    receipt = _read_optional_json(
+        root / "metadata" / "palace_returned_run_receipt.json"
+    )
     refinement = _refinement(config)
     passes = _collect_amr_passes(root, problem)
     latest = passes[-1] if passes else None
     parent_complete = _parent_has_physics(root / "results" / "palace", problem)
-    completeness: Literal["complete", "partial"] = "complete" if parent_complete else "partial"
+    completeness: Literal["complete", "partial"] = (
+        "complete" if parent_complete else "partial"
+    )
     latest_source = latest.source if latest is not None else "none"
     palace_payload = _latest_palace_json(passes, resolved)
     durations = _durations(palace_payload)
     cost = _cost_cards(palace_payload, resolved)
     mpi = cost.get("mpi_size")
     omp = cost.get("openmp_threads")
-    resources = f"{mpi} MPI × {omp} OMP" if mpi is not None and omp is not None else None
+    resources = (
+        f"{mpi} MPI × {omp} OMP" if mpi is not None and omp is not None else None
+    )
     receipt_status = None
     if receipt is not None:
         receipt_status = (
             f"{receipt.get('status', 'unknown')} / exit {receipt.get('exit_code', '?')}"
         )
     elif resolved is not None:
-        receipt_status = (
-            f"{resolved.returned_receipt.status} / exit {resolved.returned_receipt.exit_code}"
-        )
+        receipt_status = f"{resolved.returned_receipt.status} / exit {resolved.returned_receipt.exit_code}"
     handoff_id = str(handoff.get("handoff_id") or "")
     identity = {
         "handoff_id": handoff_id,
@@ -634,7 +675,9 @@ def _collect_amr_passes(root: Path, problem: str) -> list[AmrPassSnapshot]:
             iteration_dirs.append((int(match.group(1)), child))
     iteration_dirs.sort()
     snapshots = [
-        _load_snapshot(pass_index=index - 1, source=path.name, path=path, problem=problem)
+        _load_snapshot(
+            pass_index=index - 1, source=path.name, path=path, problem=problem
+        )
         for index, path in iteration_dirs
     ]
     if not _parent_has_physics(results, problem):
@@ -651,12 +694,24 @@ def _collect_amr_passes(root: Path, problem: str) -> list[AmrPassSnapshot]:
     return [*snapshots, parent]
 
 
-def _load_snapshot(*, pass_index: int, source: str, path: Path, problem: str) -> AmrPassSnapshot:
-    eig_columns = _read_numeric_table_columns(path / "eig.csv") if problem == "Eigenmode" else None
-    port_epr = (
-        _read_numeric_table_columns(path / "port-EPR.csv") if problem == "Eigenmode" else None
+def _load_snapshot(
+    *, pass_index: int, source: str, path: Path, problem: str
+) -> AmrPassSnapshot:
+    eig_columns = (
+        _read_numeric_table_columns(path / "eig.csv")
+        if problem == "Eigenmode"
+        else None
     )
-    capacitance = _read_capacitance(path / "terminal-C.csv") if problem == "Electrostatic" else None
+    port_epr = (
+        _read_numeric_table_columns(path / "port-EPR.csv")
+        if problem == "Eigenmode"
+        else None
+    )
+    capacitance = (
+        _read_capacitance(path / "terminal-C.csv")
+        if problem == "Electrostatic"
+        else None
+    )
     error_indicators = _read_error_indicators(path / "error-indicators.csv")
     frequencies = None if eig_columns is None else eig_columns.get(_FREQ_HEADER)
     error_norm = None if error_indicators is None else error_indicators.get("Norm")
@@ -682,10 +737,14 @@ def _load_snapshot(*, pass_index: int, source: str, path: Path, problem: str) ->
         error_indicators=error_indicators,
         error_norm=error_norm,
         degrees_of_freedom=_as_int(
-            problem_block.get("DegreesOfFreedom") if isinstance(problem_block, dict) else None
+            problem_block.get("DegreesOfFreedom")
+            if isinstance(problem_block, dict)
+            else None
         ),
         mesh_elements=_as_int(
-            problem_block.get("MeshElements") if isinstance(problem_block, dict) else None
+            problem_block.get("MeshElements")
+            if isinstance(problem_block, dict)
+            else None
         ),
         elapsed_total_s=elapsed,
         peak_node_memory_mb=_mapping_max(
@@ -720,7 +779,9 @@ def _read_capacitance(path: Path) -> tuple[tuple[float, ...], ...] | None:
         return None
     table = _read_csv_table(path)
     matrix: list[tuple[float, ...]] = []
-    value_headers = [header for header in table.headers if header.startswith(_CAP_HEADER_PREFIX)]
+    value_headers = [
+        header for header in table.headers if header.startswith(_CAP_HEADER_PREFIX)
+    ]
     if not value_headers:
         return None
     for row in table.rows:
@@ -830,7 +891,9 @@ def _cost_cards(
             "mpi_size": resolved.cost.mpi_size,
             "openmp_threads": resolved.cost.openmp_threads,
             "peak_memory_megabytes": _mapping_max(resolved.cost.peak_memory_megabytes),
-            "peak_node_memory_megabytes": _mapping_max(resolved.cost.peak_node_memory_megabytes),
+            "peak_node_memory_megabytes": _mapping_max(
+                resolved.cost.peak_node_memory_megabytes
+            ),
             "git_tag": resolved.cost.git_tag,
         }
     if not palace_payload:
@@ -842,8 +905,12 @@ def _cost_cards(
         "mesh_elements": _as_int(problem_block.get("MeshElements")),
         "mpi_size": _as_int(problem_block.get("MPISize")),
         "openmp_threads": _as_int(problem_block.get("OpenMPThreads")),
-        "peak_memory_megabytes": _mapping_max(palace_payload.get("PeakMemoryMegabytes")),
-        "peak_node_memory_megabytes": _mapping_max(palace_payload.get("PeakNodeMemoryMegabytes")),
+        "peak_memory_megabytes": _mapping_max(
+            palace_payload.get("PeakMemoryMegabytes")
+        ),
+        "peak_node_memory_megabytes": _mapping_max(
+            palace_payload.get("PeakNodeMemoryMegabytes")
+        ),
         "git_tag": palace_payload.get("GitTag")
         if isinstance(palace_payload.get("GitTag"), str)
         else None,
@@ -861,11 +928,19 @@ def _mapping_max(payload: Any) -> float | None:
     return None
 
 
-def _native_result_families(problem: str, tables: dict[str, ParsedTable]) -> dict[str, ParsedTable]:
+def _native_result_families(
+    problem: str, tables: dict[str, ParsedTable]
+) -> dict[str, ParsedTable]:
     if problem == "Electrostatic":
-        return {name: tables[name] for name in _ELECTROSTATIC_RESULT_TABLES if name in tables}
+        return {
+            name: tables[name]
+            for name in _ELECTROSTATIC_RESULT_TABLES
+            if name in tables
+        }
     if problem == "Eigenmode":
-        return {name: tables[name] for name in _EIGENMODE_RESULT_TABLES if name in tables}
+        return {
+            name: tables[name] for name in _EIGENMODE_RESULT_TABLES if name in tables
+        }
     return {name: table for name, table in tables.items() if name != "error-indicators"}
 
 
@@ -875,7 +950,10 @@ def _table_to_plotly(go_module: Any, table: ParsedTable):
             go_module.Table(
                 header={"values": list(table.headers)},
                 cells={
-                    "values": [[row.get(column) for row in table.rows] for column in table.headers]
+                    "values": [
+                        [row.get(column) for row in table.rows]
+                        for column in table.headers
+                    ]
                 },
             )
         ],
@@ -889,7 +967,9 @@ def _read_optional_json(path: Path) -> dict[str, Any] | None:
     return _read_json(path)
 
 
-def _union_mapping_keys(passes: Sequence[AmrPassSnapshot], attribute: str) -> tuple[str, ...]:
+def _union_mapping_keys(
+    passes: Sequence[AmrPassSnapshot], attribute: str
+) -> tuple[str, ...]:
     keys: list[str] = []
     seen: set[str] = set()
     for pass_ in passes:
@@ -953,7 +1033,11 @@ def _capacitance_traces(
     passes: Sequence[AmrPassSnapshot],
 ) -> list[tuple[str, list[tuple[str, list[float | None]]]]]:
     rows = max(
-        (len(pass_.capacitance_matrix_f) for pass_ in passes if pass_.capacitance_matrix_f),
+        (
+            len(pass_.capacitance_matrix_f)
+            for pass_ in passes
+            if pass_.capacitance_matrix_f
+        ),
         default=0,
     )
     cols = max(
@@ -989,7 +1073,10 @@ def _capacitance_traces(
 
 def _yaxis_type(name: str) -> str:
     lowered = name.lower()
-    if any(marker in lowered for marker in ("error", "q", "norm", "minimum", "maximum", "mean")):
+    if any(
+        marker in lowered
+        for marker in ("error", "q", "norm", "minimum", "maximum", "mean")
+    ):
         return "log"
     return "linear"
 
@@ -1007,6 +1094,7 @@ def _line_figure(
 ) -> Any | None:
     go = _plotly()
     fig = go.Figure()
+    _style_figure(fig, title=title)
     plotted = False
     for name, ys in traces:
         plot_ys = _positive_or_none(ys) if yaxis_type == "log" else list(ys)
@@ -1027,33 +1115,104 @@ def _line_figure(
             "y": plot_y,
             "mode": "lines+markers+text" if labels else "lines+markers",
             "name": name,
+            "line": {"width": 2.4},
+            "marker": {"size": 8, "line": {"width": 0}},
+            "hovertemplate": "%{y:.6g}<extra>%{fullData.name}</extra>",
         }
         if labels:
             trace["text"] = labels
             trace["textposition"] = "top center"
+            trace["textfont"] = {"size": 11, "color": _MUTED}
         fig.add_trace(go.Scatter(**trace))
         plotted = True
     if not plotted:
         return None
     if hline is not None:
-        fig.add_hline(y=hline[0], line_dash="dash", annotation_text=hline[1])
+        fig.add_hline(
+            y=hline[0],
+            line_dash="dot",
+            line_color=_MUTED,
+            line_width=1.2,
+            annotation_text=hline[1],
+            annotation_font={"size": 11, "color": _MUTED},
+            annotation_position="top right",
+        )
+    fig.update_xaxes(title_text=xlabel)
+    fig.update_yaxes(title_text=ylabel, type=yaxis_type)
+    _maybe_integer_xticks(fig, xs)
+    return fig
+
+
+def _style_figure(
+    fig: Any,
+    *,
+    title: str,
+    height: int = 380,
+    margin: dict[str, int] | None = None,
+    hovermode: str = "x unified",
+    showlegend: bool = True,
+) -> None:
     fig.update_layout(
-        template="plotly_white",
-        title=title,
-        xaxis_title=xlabel,
-        yaxis_title=ylabel,
-        yaxis_type=yaxis_type,
-        legend={
-            "orientation": "h",
-            "yanchor": "top",
-            "y": -0.28,
+        template="none",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font={
+            "family": "ui-sans-serif, system-ui, sans-serif",
+            "size": 13,
+            "color": _MUTED,
+        },
+        title={
+            "text": title,
+            "font": {"size": 15, "color": _MUTED},
             "x": 0,
             "xanchor": "left",
         },
-        height=380,
-        margin={"l": 70, "r": 30, "t": 50, "b": 90},
+        colorway=list(_COLORWAY),
+        hovermode=hovermode,
+        hoverlabel={
+            "bgcolor": "rgba(22, 27, 34, 0.92)",
+            "bordercolor": "rgba(139, 148, 158, 0.35)",
+            "font": {"color": "#e6edf3", "size": 12},
+        },
+        legend={
+            "orientation": "h",
+            "yanchor": "bottom",
+            "y": 1.02,
+            "x": 0,
+            "xanchor": "left",
+            "bgcolor": "rgba(0,0,0,0)",
+            "borderwidth": 0,
+            "font": {"size": 12, "color": _MUTED},
+        },
+        height=height,
+        margin=margin or {"l": 64, "r": 28, "t": 72, "b": 48},
+        showlegend=showlegend,
     )
-    return fig
+    axis = {
+        "showgrid": True,
+        "gridcolor": "rgba(139, 148, 158, 0.22)",
+        "zeroline": False,
+        "showline": False,
+        "ticks": "",
+        "automargin": True,
+        "title": {"font": {"size": 12, "color": _MUTED}},
+        "tickfont": {"size": 11, "color": _MUTED},
+    }
+    fig.update_xaxes(**axis)
+    fig.update_yaxes(**axis)
+
+
+def _maybe_integer_xticks(fig: Any, xs: Sequence[int | float | None]) -> None:
+    numeric = [float(value) for value in xs if isinstance(value, (int, float))]
+    if not numeric or not all(value.is_integer() for value in numeric):
+        return
+    span = max(numeric) - min(numeric)
+    if span <= 24:
+        fig.update_xaxes(dtick=1)
+
+
+def _show_figure(fig: Any) -> None:
+    fig.show(config=_PLOTLY_CONFIG)
 
 
 def _plotly() -> Any:
