@@ -7,7 +7,11 @@ state without silently changing behavior.
 
 from .eigenmode import EigenmodeSim
 from .electrostatic import ElectrostaticSim
-from .report import NativeTabularSummary
+from .report import (
+    NativeTabularSummary,
+    PalaceTrustReport,
+    inspect_run_trustworthiness,
+)
 from .resolve import (
     PalaceCost,
     PalacePerformance,
@@ -22,6 +26,8 @@ __all__ = [
     "EigenmodeSim",
     "ElectrostaticSim",
     "NativeTabularSummary",
+    "PalaceTrustReport",
+    "inspect_run_trustworthiness",
     "PalaceCost",
     "PalacePerformance",
     "PalaceProvenance",

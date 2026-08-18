@@ -145,6 +145,11 @@ class ResolvedPalaceResult:
     returned_receipt: PalaceReturnedReceipt
     provenance: PalaceProvenance
 
+    def show_run_trustworthiness(self):
+        from .report import _show_run_trustworthiness
+
+        return _show_run_trustworthiness(self)
+
     def show_all_results(self, *, render_plotly: bool = False) -> dict[str, Any]:
         from .report import _show_all_results
 

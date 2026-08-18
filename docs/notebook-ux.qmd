@@ -35,6 +35,14 @@ argument is `direct-local`, `slurm-single-node`, or `slurm-multi-node`.
 Slurm jobs write stdout and stderr only to `logs/palace-%j.log`. Do not keep a
 duplicate `slurm-%j.out`.
 
+`## Analyze Returned Run` first displays run identity, AMR convergence, and
+simulation cost through `show_run_trustworthiness()`. Physics-result figures
+are a later report layer and are not the first notebook view. Notebooks call
+`resolve_palace_result` first; if the parent `results/palace` folder is
+incomplete after time-limit or OOM, they fall back to
+`inspect_run_trustworthiness(run_dir)`, which still reads `iterationNN`
+snapshots.
+
 ## AEDT notebook contract
 
 AEDT examples use the same stage-local rule. Backend-specific setup remains
