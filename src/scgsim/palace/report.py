@@ -36,6 +36,12 @@ _PLOTLY_CONFIG = {
     "responsive": True,
     "modeBarButtonsToRemove": ["lasso2d", "select2d"],
 }
+_PLOT_HEIGHT = 460
+_PLOT_FONT = 16
+_PLOT_TITLE_FONT = 18
+_PLOT_AXIS_FONT = 16
+_PLOT_TICK_FONT = 14
+_PLOT_LEGEND_FONT = 15
 ReportTheme = Literal["light", "dark"]
 
 
@@ -49,8 +55,6 @@ class _PlotTheme:
     hover_bg: str
     hover_border: str
     hover_font: str
-    card_bg: str
-    card_border: str
 
 
 _THEMES = {
@@ -63,8 +67,6 @@ _THEMES = {
         hover_bg="#ffffff",
         hover_border="#d0d7de",
         hover_font="#1f2328",
-        card_bg="#ffffff",
-        card_border="#d0d7de",
     ),
     "dark": _PlotTheme(
         paper_bgcolor="#0d1117",
@@ -75,8 +77,6 @@ _THEMES = {
         hover_bg="#161b22",
         hover_border="#30363d",
         hover_font="#e6edf3",
-        card_bg="#161b22",
-        card_border="#30363d",
     ),
 }
 
@@ -182,12 +182,10 @@ class PalaceTrustReport:
         return _theme_tokens(self.theme)
 
     def _card_html(self, label: str, value: Any) -> str:
-        tokens = self._tokens()
         return (
-            f"<div style='min-width:11rem;flex:1 1 11rem;border:1px solid {tokens.card_border};"
-            f"background:{tokens.card_bg};color:{tokens.font};border-radius:8px;"
-            f"padding:0.6rem 0.75rem;margin:0.25rem'>"
-            f"<div style='font-size:0.75rem;color:{tokens.muted}'>{html.escape(str(label))}</div>"
+            "<div style='min-width:11rem;flex:1 1 11rem;border:1px solid var(--border,#d0d7de);"
+            "border-radius:8px;padding:0.6rem 0.75rem;margin:0.25rem;'>"
+            f"<div style='font-size:0.75rem;opacity:0.7'>{html.escape(str(label))}</div>"
             f"<div style='font-size:0.95rem;font-weight:600'>{html.escape(str(value))}</div>"
             "</div>"
         )
@@ -236,10 +234,9 @@ class PalaceTrustReport:
             for label, value in cards
             if value not in {None, ""}
         )
-        tokens = self._tokens()
         return (
-            f"<section style='color:{tokens.font};background:{tokens.paper_bgcolor};padding:0.35rem 0'><h3>Run Identity</h3>"
-            f"<p style='color:{tokens.muted};margin-top:0'>Package folder and solver identity. "
+            "<section><h3>Run Identity</h3>"
+            "<p style='opacity:0.75;margin-top:0'>Package folder and solver identity. "
             "This is not a physics result.</p>"
             f"<div style='display:flex;flex-wrap:wrap'>{items}</div></section>"
         )
@@ -260,7 +257,7 @@ class PalaceTrustReport:
             )
             if header == "Q" and not _traces_are_finite(traces):
                 items.append(
-                    f"<p style='color:{self._tokens().muted}'>Q is non-finite in this run; "
+                    "<p style='opacity:0.75'>Q is non-finite in this run; "
                     "the loss model may be disabled. The Q convergence plot is omitted.</p>"
                 )
                 continue
@@ -358,10 +355,9 @@ class PalaceTrustReport:
         return items
 
     def _convergence_heading_html(self) -> str:
-        tokens = self._tokens()
         return (
-            f"<section style='color:{tokens.font};background:{tokens.paper_bgcolor};padding:0.35rem 0'><h3>Numerical Evidence</h3>"
-            f"<p style='color:{tokens.muted};margin-top:0'>Each readable AMR scalar is its own "
+            "<section><h3>Numerical Evidence</h3>"
+            "<p style='opacity:0.75;margin-top:0'>Each readable AMR scalar is its own "
             "figure. AMR error Norm, Maximum, and Mean share one log plot because they "
             "are the same local indicator. Minimum is omitted. The dashed line is the "
             "configured Palace AMR Tol, not a newly invented acceptance Gate. "
@@ -395,13 +391,11 @@ class PalaceTrustReport:
             if not self.passes
             else "AMR stopped after the initial solve"
         )
-        tokens = self._tokens()
         return (
-            f"<section style='color:{tokens.font};background:{tokens.paper_bgcolor};padding:0.35rem 0'><h3>Numerical Evidence</h3>"
-            f"<div style='border:1px solid {tokens.card_border};background:{tokens.card_bg};"
-            f"border-radius:8px;padding:0.9rem 1rem'><strong>{html.escape(title)}</strong>"
-            f"{body}</div>"
-            f"<p style='color:{tokens.muted}'>A trend plot is omitted because a single pass "
+            "<section><h3>Numerical Evidence</h3>"
+            "<div style='border:1px solid var(--border,#d0d7de);border-radius:8px;"
+            f"padding:0.9rem 1rem'><strong>{html.escape(title)}</strong>{body}</div>"
+            "<p style='opacity:0.75'>A trend plot is omitted because a single pass "
             "cannot show adaptation.</p></section>"
         )
 
@@ -419,10 +413,9 @@ class PalaceTrustReport:
             for label, value in cards
             if value not in {None, ""}
         )
-        tokens = self._tokens()
         return (
-            f"<section style='color:{tokens.font};background:{tokens.paper_bgcolor};padding:0.35rem 0'><h3>Simulation Benchmark</h3>"
-            f"<p style='color:{tokens.muted};margin-top:0'>Cost and timing. This does not "
+            "<section><h3>Simulation Benchmark</h3>"
+            "<p style='opacity:0.75;margin-top:0'>Cost and timing. This does not "
             "decide whether the physics is correct. Palace timers can overlap; they "
             "are not a partition of wall time.</p>"
             f"<div style='display:flex;flex-wrap:wrap'>{items}</div></section>"
@@ -439,8 +432,8 @@ class PalaceTrustReport:
             values.append(duration)
         if not labels:
             return (
-                f"<p style='color:{self._tokens().muted}'>Palace elapsed-time timers "
-                "are unavailable in this package.</p>"
+                "<p style='opacity:0.75'>Palace elapsed-time timers are unavailable "
+                "in this package.</p>"
             )
         tokens = self._tokens()
         go = _plotly()
@@ -453,7 +446,7 @@ class PalaceTrustReport:
                     marker={"color": _COLORWAY[0], "opacity": 0.88},
                     text=[_fmt_seconds(value) for value in values],
                     textposition="outside",
-                    textfont={"color": tokens.muted, "size": 12},
+                    textfont={"color": tokens.muted, "size": _PLOT_TICK_FONT},
                     hovertemplate="%{x:.3g} s<extra>%{y}</extra>",
                 )
             ]
@@ -461,13 +454,13 @@ class PalaceTrustReport:
         _style_figure(
             fig,
             title="Elapsed time by Palace timer",
-            height=max(260, 36 * len(labels) + 90),
-            margin={"l": 150, "r": 72, "t": 48, "b": 40},
+            height=max(320, 42 * len(labels) + 110),
+            margin={"l": 196, "r": 88, "t": 56, "b": 52},
             hovermode="closest",
             showlegend=False,
             theme=self.theme,
         )
-        fig.update_xaxes(title_text="seconds", rangemode="tozero")
+        fig.update_xaxes(title=_axis_title("seconds", tokens), rangemode="tozero")
         fig.update_yaxes(categoryorder="total ascending")
         return fig
 
@@ -507,14 +500,12 @@ class PalaceTrustReport:
         records = self.pass_cost_records()
         if not records:
             return (
-                f"<p style='color:{self._tokens().muted}'>No AMR pass cost snapshots "
-                "are available.</p>"
+                "<p style='opacity:0.75'>No AMR pass cost snapshots are available.</p>"
             )
-        tokens = self._tokens()
         header = (
             "<tr>"
             + "".join(
-                _html_cell("th", name, tokens)
+                _html_cell("th", name)
                 for name in (
                     "Pass",
                     "Snapshot",
@@ -532,19 +523,19 @@ class PalaceTrustReport:
         for record in records:
             rows.append(
                 "<tr>"
-                + _html_cell("td", str(record.pass_index), tokens)
-                + _html_cell("td", record.source, tokens)
-                + _html_cell("td", _fmt(record.degrees_of_freedom), tokens)
-                + _html_cell("td", _fmt(record.mesh_elements), tokens)
-                + _html_cell("td", _fmt_seconds(record.elapsed_pass_s), tokens)
-                + _html_cell("td", _fmt_seconds(record.elapsed_cumulative_s), tokens)
-                + _html_cell("td", _fmt(record.seconds_per_million_dof), tokens)
-                + _html_cell("td", _fmt_mb(record.peak_node_memory_mb), tokens)
+                + _html_cell("td", str(record.pass_index))
+                + _html_cell("td", record.source)
+                + _html_cell("td", _fmt(record.degrees_of_freedom))
+                + _html_cell("td", _fmt(record.mesh_elements))
+                + _html_cell("td", _fmt_seconds(record.elapsed_pass_s))
+                + _html_cell("td", _fmt_seconds(record.elapsed_cumulative_s))
+                + _html_cell("td", _fmt(record.seconds_per_million_dof))
+                + _html_cell("td", _fmt_mb(record.peak_node_memory_mb))
                 + "</tr>"
             )
         return (
-            f"<section style='color:{tokens.font};background:{tokens.paper_bgcolor};padding:0.35rem 0'><h4>Cost by AMR pass</h4>"
-            f"<p style='color:{tokens.muted};margin-top:0'>Palace <code>ElapsedTime.Total</code> "
+            "<section><h4>Cost by AMR pass</h4>"
+            "<p style='opacity:0.75;margin-top:0'>Palace <code>ElapsedTime.Total</code> "
             "is cumulative; this-pass time is the difference between snapshots. "
             "These rows are the per-run cost records to accumulate later. "
             "They do not decide physics correctness.</p>"
@@ -581,7 +572,8 @@ def inspect_run_trustworthiness(
 
     This path is for complete or incomplete returned runs. It does not replace
     ``resolve_palace_result`` identity verification for a finished package.
-    ``theme`` is ``light`` (default) or ``dark``.
+    ``theme`` is ``light`` (default) or ``dark`` and applies only to Plotly
+    figures.
     """
 
     root = Path(run_dir).expanduser().resolve()
@@ -1190,14 +1182,14 @@ def _line_figure(
             "y": plot_y,
             "mode": "lines+markers+text" if labels else "lines+markers",
             "name": name,
-            "line": {"width": 2.4},
-            "marker": {"size": 8, "line": {"width": 0}},
+            "line": {"width": 3},
+            "marker": {"size": 10, "line": {"width": 0}},
             "hovertemplate": "%{y:.6g}<extra>%{fullData.name}</extra>",
         }
         if labels:
             trace["text"] = labels
             trace["textposition"] = "top center"
-            trace["textfont"] = {"size": 11, "color": tokens.muted}
+            trace["textfont"] = {"size": _PLOT_TICK_FONT, "color": tokens.muted}
         fig.add_trace(go.Scatter(**trace))
         plotted = True
     if not plotted:
@@ -1207,13 +1199,13 @@ def _line_figure(
             y=hline[0],
             line_dash="dot",
             line_color=tokens.muted,
-            line_width=1.2,
+            line_width=1.5,
             annotation_text=hline[1],
-            annotation_font={"size": 11, "color": tokens.muted},
+            annotation_font={"size": _PLOT_TICK_FONT, "color": tokens.muted},
             annotation_position="top right",
         )
-    fig.update_xaxes(title_text=xlabel)
-    fig.update_yaxes(title_text=ylabel, type=yaxis_type)
+    fig.update_xaxes(title=_axis_title(xlabel, tokens))
+    fig.update_yaxes(title=_axis_title(ylabel, tokens), type=yaxis_type)
     _maybe_integer_xticks(fig, xs)
     return fig
 
@@ -1222,7 +1214,7 @@ def _style_figure(
     fig: Any,
     *,
     title: str,
-    height: int = 380,
+    height: int = _PLOT_HEIGHT,
     margin: dict[str, int] | None = None,
     hovermode: str = "x unified",
     showlegend: bool = True,
@@ -1231,9 +1223,9 @@ def _style_figure(
     tokens = _theme_tokens(theme)
     if margin is None:
         margin = (
-            {"l": 64, "r": 128, "t": 48, "b": 48}
+            {"l": 84, "r": 168, "t": 56, "b": 64}
             if showlegend
-            else {"l": 64, "r": 28, "t": 48, "b": 48}
+            else {"l": 72, "r": 36, "t": 56, "b": 64}
         )
     fig.update_layout(
         template="none",
@@ -1241,32 +1233,39 @@ def _style_figure(
         plot_bgcolor=tokens.plot_bgcolor,
         font={
             "family": "ui-sans-serif, system-ui, sans-serif",
-            "size": 13,
+            "size": _PLOT_FONT,
             "color": tokens.font,
         },
         title={
             "text": title,
-            "font": {"size": 15, "color": tokens.font},
+            "font": {"size": _PLOT_TITLE_FONT, "color": tokens.font},
             "x": 0,
             "xanchor": "left",
+            "y": 1,
+            "yanchor": "bottom",
+            "pad": {"t": 0, "b": 10, "l": 0},
         },
         colorway=list(_COLORWAY),
         hovermode=hovermode,
         hoverlabel={
             "bgcolor": tokens.hover_bg,
             "bordercolor": tokens.hover_border,
-            "font": {"color": tokens.hover_font, "size": 12},
+            "font": {"color": tokens.hover_font, "size": _PLOT_TICK_FONT},
         },
         legend={
             "orientation": "v",
+            "xref": "paper",
+            "yref": "paper",
             "yanchor": "top",
             "y": 1,
             "xanchor": "left",
             "x": 1.02,
             "bgcolor": "rgba(0,0,0,0)",
             "borderwidth": 0,
-            "font": {"size": 12, "color": tokens.font},
-            "tracegroupgap": 4,
+            "font": {"size": _PLOT_LEGEND_FONT, "color": tokens.font},
+            "tracegroupgap": 6,
+            "itemsizing": "constant",
+            "itemwidth": 36,
         },
         height=height,
         margin=margin,
@@ -1278,12 +1277,19 @@ def _style_figure(
         "zeroline": False,
         "showline": False,
         "ticks": "",
-        "automargin": True,
-        "title": {"font": {"size": 12, "color": tokens.muted}},
-        "tickfont": {"size": 11, "color": tokens.muted},
+        "automargin": False,
+        "tickfont": {"size": _PLOT_TICK_FONT, "color": tokens.muted},
     }
     fig.update_xaxes(**axis)
     fig.update_yaxes(**axis)
+
+
+def _axis_title(text: str, tokens: _PlotTheme) -> dict[str, Any]:
+    return {
+        "text": text,
+        "font": {"size": _PLOT_AXIS_FONT, "color": tokens.font},
+        "standoff": 8,
+    }
 
 
 def _maybe_integer_xticks(fig: Any, xs: Sequence[int | float | None]) -> None:
@@ -1309,9 +1315,9 @@ def _plotly() -> Any:
     return go
 
 
-def _html_cell(tag: str, text: str, tokens: _PlotTheme) -> str:
+def _html_cell(tag: str, text: str) -> str:
     return (
-        f"<{tag} style='border:1px solid {tokens.card_border};color:{tokens.font};"
+        f"<{tag} style='border:1px solid var(--border,#d0d7de);"
         f"padding:0.35rem 0.65rem;text-align:left'>{html.escape(text)}</{tag}>"
     )
 
