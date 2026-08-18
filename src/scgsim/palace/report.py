@@ -9,7 +9,7 @@ from __future__ import annotations
 import html
 import math
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
@@ -19,6 +19,7 @@ from .resolve import ParsedTable, ResolvedPalaceResult, _read_csv_table, _read_j
 _ITERATION_DIR = re.compile(r"^iteration(\d+)$")
 _FREQ_HEADER = "Re{f} (GHz)"
 _CAP_HEADER_PREFIX = "C[i]["
+_INDEX_COLUMNS = {"m", "i"}
 
 _ELECTROSTATIC_RESULT_TABLES = (
     "terminal-C",
@@ -72,7 +73,10 @@ class AmrPassSnapshot:
     source: str
     path: Path
     frequencies_ghz: tuple[float, ...] | None
+    eig_columns: dict[str, tuple[float, ...]] | None
+    port_epr: dict[str, tuple[float, ...]] | None
     capacitance_matrix_f: tuple[tuple[float, ...], ...] | None
+    error_indicators: dict[str, float] | None
     error_norm: float | None
     degrees_of_freedom: int | None
     mesh_elements: int | None
@@ -115,12 +119,16 @@ class PalaceTrustReport:
         from IPython.display import HTML, display
 
         display(HTML(self._identity_html()))
-        convergence = self._convergence_figure()
-        if isinstance(convergence, str):
-            display(HTML(convergence))
+        items = self._convergence_items()
+        if len(self.passes) < 2:
+            display(HTML(items[0]))
         else:
             display(HTML(self._convergence_heading_html()))
-            display(convergence)
+            for item in items:
+                if isinstance(item, str):
+                    display(HTML(item))
+                else:
+                    display(item)
         display(HTML(self._benchmark_cards_html()))
         benchmark = self._benchmark_time_figure()
         if isinstance(benchmark, str):
@@ -164,163 +172,124 @@ class PalaceTrustReport:
             f"<div style='display:flex;flex-wrap:wrap'>{items}</div></section>"
         )
 
-    def _convergence_figure(self) -> Any:
+    def _convergence_items(self) -> list[Any]:
         if len(self.passes) < 2:
-            return self._convergence_status_html()
-        go = _plotly()
-        from plotly.subplots import make_subplots
-
-        xs = [pass_.pass_index for pass_ in self.passes]
-        physics_traces, physics_title, physics_ylabel = self._physics_series()
-        error_norms = [pass_.error_norm for pass_ in self.passes]
-        deltas = self._physics_deltas()
-        dofs = [pass_.degrees_of_freedom for pass_ in self.passes]
-        elements = [pass_.mesh_elements for pass_ in self.passes]
-
-        fig = make_subplots(
-            rows=3,
-            cols=1,
-            shared_xaxes=True,
-            vertical_spacing=0.08,
-            subplot_titles=(
-                physics_title,
-                "Estimated error / pass-to-pass delta",
-                "Numerical cost",
-            ),
-            specs=[[{"secondary_y": False}], [{"secondary_y": True}], [{"secondary_y": True}]],
-        )
-        for name, ys in physics_traces:
-            fig.add_trace(
-                go.Scatter(x=xs, y=ys, mode="lines+markers", name=name),
-                row=1,
-                col=1,
-            )
-        fig.update_yaxes(title_text=physics_ylabel, row=1, col=1)
-
-        if any(value is not None for value in error_norms):
-            fig.add_trace(
-                go.Scatter(
-                    x=xs,
-                    y=_positive_or_none(error_norms),
-                    mode="lines+markers",
-                    name="error indicator (Norm)",
+            return [self._convergence_status_html()]
+        xs = tuple(pass_.pass_index for pass_ in self.passes)
+        items: list[Any] = []
+        for header in _union_mapping_keys(self.passes, "eig_columns"):
+            traces = _mode_traces(
+                self.passes,
+                lambda pass_, column=header: (
+                    None if pass_.eig_columns is None else pass_.eig_columns.get(column)
                 ),
-                row=2,
-                col=1,
             )
-        if any(value is not None for value in deltas):
-            fig.add_trace(
-                go.Scatter(
-                    x=xs[1:],
-                    y=_positive_or_none(deltas),
-                    mode="lines+markers",
-                    name=self._delta_trace_name(),
-                ),
-                row=2,
-                col=1,
-                secondary_y=True,
-            )
-        if self.amr_tolerance is not None:
-            fig.add_hline(
-                y=self.amr_tolerance,
-                line_dash="dash",
-                row=2,
-                col=1,
-                annotation_text="configured AMR Tol",
-            )
-        fig.update_yaxes(title_text="error indicator", type="log", row=2, col=1)
-        fig.update_yaxes(
-            title_text=self._delta_trace_name(),
-            type="log",
-            row=2,
-            col=1,
-            secondary_y=True,
-        )
-
-        fig.add_trace(
-            go.Scatter(x=xs, y=dofs, mode="lines+markers", name="DOFs"),
-            row=3,
-            col=1,
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=xs,
-                y=elements,
-                mode="lines+markers",
-                name="mesh elements",
-            ),
-            row=3,
-            col=1,
-            secondary_y=True,
-        )
-        fig.update_yaxes(title_text="DOFs", row=3, col=1)
-        fig.update_yaxes(title_text="mesh elements", row=3, col=1, secondary_y=True)
-        fig.update_xaxes(title_text="AMR pass", row=3, col=1)
-        fig.update_layout(
-            template="plotly_white",
-            height=820,
-            legend={"orientation": "h", "y": 1.08},
-            margin={"l": 70, "r": 50, "t": 60, "b": 40},
-        )
-        return fig
-
-    def _physics_series(self) -> tuple[list[tuple[str, list[float | None]]], str, str]:
-        if self.problem == "Eigenmode":
-            mode_count = max(
-                (len(pass_.frequencies_ghz) for pass_ in self.passes if pass_.frequencies_ghz),
-                default=0,
-            )
-            traces = []
-            for mode in range(mode_count):
-                traces.append(
-                    (
-                        f"Mode {mode + 1}",
-                        [
-                            None
-                            if pass_.frequencies_ghz is None or mode >= len(pass_.frequencies_ghz)
-                            else pass_.frequencies_ghz[mode]
-                            for pass_ in self.passes
-                        ],
-                    )
+            if header == "Q" and not _traces_are_finite(traces):
+                items.append(
+                    "<p style='opacity:0.75'>Q is non-finite in this run; "
+                    "the loss model may be disabled. The Q convergence plot is omitted.</p>"
                 )
-            return traces, "Eigenfrequency vs AMR pass", "Re(f) (GHz)"
-        traces = [
-            (
-                "max |C_ii|",
-                [
-                    None
-                    if pass_.capacitance_matrix_f is None
-                    else _max_abs_diagonal(pass_.capacitance_matrix_f) * 1e15
-                    for pass_ in self.passes
-                ],
+                continue
+            figure = _line_figure(
+                title=f"{header} vs AMR pass",
+                xlabel="AMR pass",
+                ylabel=header,
+                xs=xs,
+                traces=traces,
+                yaxis_type=_yaxis_type(header),
             )
-        ]
-        return traces, "Capacitance vs AMR pass", "max |C_ii| (fF)"
-
-    def _delta_trace_name(self) -> str:
-        if self.problem == "Eigenmode":
-            return "|Δ Re(f)| (GHz)"
-        return "|Δ max |C_ii|| (fF)"
-
-    def _physics_deltas(self) -> list[float | None]:
-        scale = 1.0 if self.problem == "Eigenmode" else 1e15
-        values: list[float | None] = []
-        previous: float | None = None
-        for pass_ in self.passes:
-            current = _scalar_physics(pass_, self.problem)
-            if previous is None or current is None:
-                values.append(None)
-            else:
-                values.append(abs(current - previous) * scale)
-            previous = current if current is not None else previous
-        return values[1:]
+            if figure is not None:
+                items.append(figure)
+            if header == _FREQ_HEADER:
+                delta = _line_figure(
+                    title=f"|Δ {header}| vs AMR pass",
+                    xlabel="AMR pass",
+                    ylabel=f"|Δ {header}|",
+                    xs=xs[1:],
+                    traces=_delta_traces(traces),
+                    yaxis_type="log",
+                )
+                if delta is not None:
+                    items.append(delta)
+        for header in _union_mapping_keys(self.passes, "port_epr"):
+            traces = _mode_traces(
+                self.passes,
+                lambda pass_, column=header: (
+                    None if pass_.port_epr is None else pass_.port_epr.get(column)
+                ),
+            )
+            figure = _line_figure(
+                title=f"Port EPR {header} vs AMR pass",
+                xlabel="AMR pass",
+                ylabel=header,
+                xs=xs,
+                traces=traces,
+            )
+            if figure is not None:
+                items.append(figure)
+        for label, traces in _capacitance_traces(self.passes):
+            figure = _line_figure(
+                title=f"{label} vs AMR pass",
+                xlabel="AMR pass",
+                ylabel="fF",
+                xs=xs,
+                traces=traces,
+            )
+            if figure is not None:
+                items.append(figure)
+            if label == "Maxwell C_ij":
+                continue
+            delta = _line_figure(
+                title=f"|Δ {label}| vs AMR pass",
+                xlabel="AMR pass",
+                ylabel="|Δ| (fF)",
+                xs=xs[1:],
+                traces=_delta_traces(traces),
+                yaxis_type="log",
+            )
+            if delta is not None:
+                items.append(delta)
+        for name in ("Norm", "Maximum", "Mean", "Minimum"):
+            ys = [
+                None if pass_.error_indicators is None else pass_.error_indicators.get(name)
+                for pass_ in self.passes
+            ]
+            hline = None
+            if name == "Norm" and self.amr_tolerance is not None:
+                hline = (self.amr_tolerance, "configured AMR Tol")
+            figure = _line_figure(
+                title=f"AMR error indicator ({name}) vs AMR pass",
+                xlabel="AMR pass",
+                ylabel=name,
+                xs=xs,
+                traces=[(name, ys)],
+                yaxis_type="log",
+                hline=hline,
+            )
+            if figure is not None:
+                items.append(figure)
+        for title, ylabel, getter in (
+            ("DOFs vs AMR pass", "DOFs", lambda pass_: pass_.degrees_of_freedom),
+            ("Mesh elements vs AMR pass", "mesh elements", lambda pass_: pass_.mesh_elements),
+        ):
+            figure = _line_figure(
+                title=title,
+                xlabel="AMR pass",
+                ylabel=ylabel,
+                xs=xs,
+                traces=[(ylabel, [getter(pass_) for pass_ in self.passes])],
+            )
+            if figure is not None:
+                items.append(figure)
+        return items
 
     def _convergence_heading_html(self) -> str:
         return (
             "<section><h3>Numerical Evidence</h3>"
-            "<p style='opacity:0.75;margin-top:0'>Physics quantity, estimated error, "
-            "and cost versus AMR pass. The dashed line is the configured Palace AMR Tol, "
-            "not a newly invented acceptance Gate.</p></section>"
+            "<p style='opacity:0.75;margin-top:0'>Each readable AMR scalar is its own "
+            "figure, with the legend under that figure. The dashed line is the configured "
+            "Palace AMR Tol, not a newly invented acceptance Gate. Surface-Q and domain-E "
+            "participation remain the later physics layer.</p></section>"
         )
 
     def _convergence_status_html(self) -> str:
@@ -713,9 +682,14 @@ def _collect_amr_passes(root: Path, problem: str) -> list[AmrPassSnapshot]:
 
 
 def _load_snapshot(*, pass_index: int, source: str, path: Path, problem: str) -> AmrPassSnapshot:
-    frequencies = _read_frequencies(path / "eig.csv") if problem == "Eigenmode" else None
+    eig_columns = _read_numeric_table_columns(path / "eig.csv") if problem == "Eigenmode" else None
+    port_epr = (
+        _read_numeric_table_columns(path / "port-EPR.csv") if problem == "Eigenmode" else None
+    )
     capacitance = _read_capacitance(path / "terminal-C.csv") if problem == "Electrostatic" else None
-    error_norm = _read_error_norm(path / "error-indicators.csv")
+    error_indicators = _read_error_indicators(path / "error-indicators.csv")
+    frequencies = None if eig_columns is None else eig_columns.get(_FREQ_HEADER)
+    error_norm = None if error_indicators is None else error_indicators.get("Norm")
     palace_payload = _read_optional_json(path / "palace.json")
     problem_block = palace_payload.get("Problem") if palace_payload else None
     elapsed = None
@@ -732,7 +706,10 @@ def _load_snapshot(*, pass_index: int, source: str, path: Path, problem: str) ->
         source=source,
         path=path,
         frequencies_ghz=frequencies,
+        eig_columns=eig_columns,
+        port_epr=port_epr,
         capacitance_matrix_f=capacitance,
+        error_indicators=error_indicators,
         error_norm=error_norm,
         degrees_of_freedom=_as_int(
             problem_block.get("DegreesOfFreedom") if isinstance(problem_block, dict) else None
@@ -747,17 +724,25 @@ def _load_snapshot(*, pass_index: int, source: str, path: Path, problem: str) ->
     )
 
 
-def _read_frequencies(path: Path) -> tuple[float, ...] | None:
+def _read_numeric_table_columns(path: Path) -> dict[str, tuple[float, ...]] | None:
     if not path.is_file():
         return None
     table = _read_csv_table(path)
-    values = []
-    for row in table.rows:
-        value = row.get(_FREQ_HEADER)
-        if not isinstance(value, (int, float)) or isinstance(value, bool):
-            return None
-        values.append(float(value))
-    return tuple(values) if values else None
+    columns: dict[str, tuple[float, ...]] = {}
+    for header in table.headers:
+        if header in _INDEX_COLUMNS:
+            continue
+        values: list[float] = []
+        usable = True
+        for row in table.rows:
+            value = row.get(header)
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                usable = False
+                break
+            values.append(float(value))
+        if usable and values:
+            columns[header] = tuple(values)
+    return columns or None
 
 
 def _read_capacitance(path: Path) -> tuple[tuple[float, ...], ...] | None:
@@ -779,16 +764,18 @@ def _read_capacitance(path: Path) -> tuple[tuple[float, ...], ...] | None:
     return tuple(matrix) if matrix else None
 
 
-def _read_error_norm(path: Path) -> float | None:
+def _read_error_indicators(path: Path) -> dict[str, float] | None:
     if not path.is_file():
         return None
     table = _read_csv_table(path)
     if not table.rows:
         return None
-    value = table.rows[0].get("Norm")
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        return None
-    return float(value)
+    payload: dict[str, float] = {}
+    for header in table.headers:
+        value = table.rows[0].get(header)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            payload[header] = float(value)
+    return payload or None
 
 
 def _parent_has_physics(results: Path, problem: str) -> bool:
@@ -932,6 +919,111 @@ def _read_optional_json(path: Path) -> dict[str, Any] | None:
     return _read_json(path)
 
 
+def _union_mapping_keys(passes: Sequence[AmrPassSnapshot], attribute: str) -> tuple[str, ...]:
+    keys: list[str] = []
+    seen: set[str] = set()
+    for pass_ in passes:
+        mapping = getattr(pass_, attribute)
+        if not isinstance(mapping, dict):
+            continue
+        for key in mapping:
+            if key not in seen:
+                seen.add(key)
+                keys.append(key)
+    return tuple(keys)
+
+
+def _mode_traces(
+    passes: Sequence[AmrPassSnapshot],
+    getter: Callable[[AmrPassSnapshot], Sequence[float] | None],
+) -> list[tuple[str, list[float | None]]]:
+    mode_count = max((len(getter(pass_) or ()) for pass_ in passes), default=0)
+    traces: list[tuple[str, list[float | None]]] = []
+    for mode in range(mode_count):
+        values = []
+        for pass_ in passes:
+            column = getter(pass_)
+            if column is None or mode >= len(column):
+                values.append(None)
+            else:
+                values.append(column[mode])
+        traces.append((f"Mode {mode + 1}", values))
+    return traces
+
+
+def _traces_are_finite(traces: Sequence[tuple[str, Sequence[float | None]]]) -> bool:
+    numbers = [
+        value
+        for _name, ys in traces
+        for value in ys
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+    ]
+    return bool(numbers) and all(math.isfinite(value) for value in numbers)
+
+
+def _delta_traces(
+    traces: Sequence[tuple[str, Sequence[float | None]]],
+) -> list[tuple[str, list[float | None]]]:
+    deltas: list[tuple[str, list[float | None]]] = []
+    for name, ys in traces:
+        series: list[float | None] = []
+        previous: float | None = None
+        for value in ys:
+            if previous is None or value is None:
+                series.append(None)
+            else:
+                series.append(abs(value - previous))
+            if value is not None:
+                previous = value
+        deltas.append((name, series[1:]))
+    return deltas
+
+
+def _capacitance_traces(
+    passes: Sequence[AmrPassSnapshot],
+) -> list[tuple[str, list[tuple[str, list[float | None]]]]]:
+    rows = max(
+        (len(pass_.capacitance_matrix_f) for pass_ in passes if pass_.capacitance_matrix_f),
+        default=0,
+    )
+    cols = max(
+        (
+            len(row)
+            for pass_ in passes
+            if pass_.capacitance_matrix_f
+            for row in pass_.capacitance_matrix_f
+        ),
+        default=0,
+    )
+    if rows == 0 or cols == 0:
+        return []
+    all_traces: list[tuple[str, list[float | None]]] = []
+    per_element: list[tuple[str, list[tuple[str, list[float | None]]]]] = []
+    for row in range(rows):
+        for col in range(cols):
+            name = f"C[{row + 1}][{col + 1}]"
+            values = []
+            for pass_ in passes:
+                matrix = pass_.capacitance_matrix_f
+                if matrix is None or row >= len(matrix) or col >= len(matrix[row]):
+                    values.append(None)
+                else:
+                    values.append(matrix[row][col] * 1e15)
+            trace = (name, values)
+            all_traces.append(trace)
+            per_element.append((name, [trace]))
+    if len(all_traces) > 9:
+        return [("Maxwell C_ij", all_traces)]
+    return per_element
+
+
+def _yaxis_type(name: str) -> str:
+    lowered = name.lower()
+    if any(marker in lowered for marker in ("error", "q", "norm", "minimum", "maximum", "mean")):
+        return "log"
+    return "linear"
+
+
 def _line_figure(
     *,
     title: str,
@@ -941,14 +1033,16 @@ def _line_figure(
     traces: Sequence[tuple[str, Sequence[float | None]]],
     point_labels: Sequence[str] | None = None,
     yaxis_type: str = "linear",
+    hline: tuple[float, str] | None = None,
 ) -> Any | None:
     go = _plotly()
     fig = go.Figure()
     plotted = False
     for name, ys in traces:
+        plot_ys = _positive_or_none(ys) if yaxis_type == "log" else list(ys)
         pairs: list[tuple[int | float, float]] = []
         labels: list[str] = []
-        for index, (x_value, y_value) in enumerate(zip(xs, ys, strict=False)):
+        for index, (x_value, y_value) in enumerate(zip(xs, plot_ys, strict=False)):
             if x_value is None or y_value is None:
                 continue
             pairs.append((x_value, y_value))
@@ -971,6 +1065,8 @@ def _line_figure(
         plotted = True
     if not plotted:
         return None
+    if hline is not None:
+        fig.add_hline(y=hline[0], line_dash="dash", annotation_text=hline[1])
     fig.update_layout(
         template="plotly_white",
         title=title,
@@ -988,7 +1084,8 @@ def _line_figure(
         margin={"l": 70, "r": 30, "t": 50, "b": 90},
     )
     fig.update_xaxes(rangemode="tozero")
-    fig.update_yaxes(rangemode="tozero")
+    if yaxis_type != "log":
+        fig.update_yaxes(rangemode="tozero")
     return fig
 
 
