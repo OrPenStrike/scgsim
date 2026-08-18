@@ -20,6 +20,7 @@ _ITERATION_DIR = re.compile(r"^iteration(\d+)$")
 _FREQ_HEADER = "Re{f} (GHz)"
 _CAP_HEADER_PREFIX = "C[i]["
 _INDEX_COLUMNS = {"m", "i"}
+_SKIP_EIG_COLUMNS = {"Error (Bkwd.)", "Error (Abs.)"}
 
 _ELECTROSTATIC_RESULT_TABLES = (
     "terminal-C",
@@ -178,6 +179,8 @@ class PalaceTrustReport:
         xs = tuple(pass_.pass_index for pass_ in self.passes)
         items: list[Any] = []
         for header in _union_mapping_keys(self.passes, "eig_columns"):
+            if header in _SKIP_EIG_COLUMNS:
+                continue
             traces = _mode_traces(
                 self.passes,
                 lambda pass_, column=header: (
@@ -265,19 +268,6 @@ class PalaceTrustReport:
                 traces=[(name, ys)],
                 yaxis_type="log",
                 hline=hline,
-            )
-            if figure is not None:
-                items.append(figure)
-        for title, ylabel, getter in (
-            ("DOFs vs AMR pass", "DOFs", lambda pass_: pass_.degrees_of_freedom),
-            ("Mesh elements vs AMR pass", "mesh elements", lambda pass_: pass_.mesh_elements),
-        ):
-            figure = _line_figure(
-                title=title,
-                xlabel="AMR pass",
-                ylabel=ylabel,
-                xs=xs,
-                traces=[(ylabel, [getter(pass_) for pass_ in self.passes])],
             )
             if figure is not None:
                 items.append(figure)
@@ -473,29 +463,9 @@ class PalaceTrustReport:
         if len(records) < 2:
             return []
         figures: list[Any] = []
-        passes = [record.pass_index for record in records]
-        cumulative = [record.elapsed_cumulative_s for record in records]
         this_pass = [record.elapsed_pass_s for record in records]
         dofs = [record.degrees_of_freedom for record in records]
         labels = [record.source for record in records]
-        growth = _line_figure(
-            title="Cumulative wall time vs AMR pass",
-            xlabel="AMR pass",
-            ylabel="cumulative seconds",
-            xs=passes,
-            traces=[("cumulative wall", cumulative)],
-        )
-        if growth is not None:
-            figures.append(growth)
-        per_pass = _line_figure(
-            title="This-pass wall time vs AMR pass",
-            xlabel="AMR pass",
-            ylabel="seconds this pass",
-            xs=passes,
-            traces=[("this pass", this_pass)],
-        )
-        if per_pass is not None:
-            figures.append(per_pass)
         dof_cost = _line_figure(
             title="This-pass wall time vs DOFs",
             xlabel="DOFs",
@@ -1083,9 +1053,6 @@ def _line_figure(
         height=380,
         margin={"l": 70, "r": 30, "t": 50, "b": 90},
     )
-    fig.update_xaxes(rangemode="tozero")
-    if yaxis_type != "log":
-        fig.update_yaxes(rangemode="tozero")
     return fig
 
 
