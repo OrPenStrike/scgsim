@@ -10,7 +10,7 @@ import html
 import math
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -77,6 +77,21 @@ class AmrPassSnapshot:
     degrees_of_freedom: int | None
     mesh_elements: int | None
     elapsed_total_s: float | None
+    peak_node_memory_mb: float | None
+
+
+@dataclass(frozen=True)
+class PassCostRecord:
+    """One AMR pass worth of solver cost, for this run and later accumulation."""
+
+    pass_index: int
+    source: str
+    degrees_of_freedom: int | None
+    mesh_elements: int | None
+    elapsed_cumulative_s: float | None
+    elapsed_pass_s: float | None
+    seconds_per_million_dof: float | None
+    peak_node_memory_mb: float | None
 
 
 @dataclass(frozen=True)
@@ -112,6 +127,9 @@ class PalaceTrustReport:
             display(HTML(benchmark))
         else:
             display(benchmark)
+        display(HTML(self._benchmark_pass_table_html()))
+        for figure in self._benchmark_pass_figures():
+            display(figure)
 
     def _identity_html(self) -> str:
         cards = (
@@ -404,6 +422,123 @@ class PalaceTrustReport:
         fig.update_xaxes(rangemode="tozero")
         return fig
 
+    def pass_cost_records(self) -> tuple[PassCostRecord, ...]:
+        records: list[PassCostRecord] = []
+        previous_elapsed: float | None = None
+        for pass_ in self.passes:
+            elapsed_pass = None
+            if pass_.elapsed_total_s is not None:
+                if previous_elapsed is None:
+                    elapsed_pass = pass_.elapsed_total_s
+                else:
+                    elapsed_pass = pass_.elapsed_total_s - previous_elapsed
+                previous_elapsed = pass_.elapsed_total_s
+            seconds_per_million = None
+            if (
+                elapsed_pass is not None
+                and pass_.degrees_of_freedom is not None
+                and pass_.degrees_of_freedom > 0
+            ):
+                seconds_per_million = elapsed_pass / (pass_.degrees_of_freedom / 1e6)
+            records.append(
+                PassCostRecord(
+                    pass_index=pass_.pass_index,
+                    source=pass_.source,
+                    degrees_of_freedom=pass_.degrees_of_freedom,
+                    mesh_elements=pass_.mesh_elements,
+                    elapsed_cumulative_s=pass_.elapsed_total_s,
+                    elapsed_pass_s=elapsed_pass,
+                    seconds_per_million_dof=seconds_per_million,
+                    peak_node_memory_mb=pass_.peak_node_memory_mb,
+                )
+            )
+        return tuple(records)
+
+    def _benchmark_pass_table_html(self) -> str:
+        records = self.pass_cost_records()
+        if not records:
+            return "<p style='opacity:0.75'>No AMR pass cost snapshots are available.</p>"
+        header = (
+            "<tr>"
+            + "".join(
+                _html_cell("th", name)
+                for name in (
+                    "Pass",
+                    "Snapshot",
+                    "DOFs",
+                    "Mesh elems",
+                    "This pass",
+                    "Cumulative",
+                    "s / MDoF",
+                    "Peak node mem",
+                )
+            )
+            + "</tr>"
+        )
+        rows = []
+        for record in records:
+            rows.append(
+                "<tr>"
+                + _html_cell("td", str(record.pass_index))
+                + _html_cell("td", record.source)
+                + _html_cell("td", _fmt(record.degrees_of_freedom))
+                + _html_cell("td", _fmt(record.mesh_elements))
+                + _html_cell("td", _fmt_seconds(record.elapsed_pass_s))
+                + _html_cell("td", _fmt_seconds(record.elapsed_cumulative_s))
+                + _html_cell("td", _fmt(record.seconds_per_million_dof))
+                + _html_cell("td", _fmt_mb(record.peak_node_memory_mb))
+                + "</tr>"
+            )
+        return (
+            "<section><h4>Cost by AMR pass</h4>"
+            "<p style='opacity:0.75;margin-top:0'>Palace <code>ElapsedTime.Total</code> "
+            "is cumulative; this-pass time is the difference between snapshots. "
+            "These rows are the per-run cost records to accumulate later. "
+            "They do not decide physics correctness.</p>"
+            "<table style='border-collapse:collapse;font-size:0.9rem'>"
+            f"<thead>{header}</thead><tbody>{''.join(rows)}</tbody></table></section>"
+        )
+
+    def _benchmark_pass_figures(self) -> list[Any]:
+        records = self.pass_cost_records()
+        if len(records) < 2:
+            return []
+        figures: list[Any] = []
+        passes = [record.pass_index for record in records]
+        cumulative = [record.elapsed_cumulative_s for record in records]
+        this_pass = [record.elapsed_pass_s for record in records]
+        dofs = [record.degrees_of_freedom for record in records]
+        labels = [record.source for record in records]
+        growth = _line_figure(
+            title="Cumulative wall time vs AMR pass",
+            xlabel="AMR pass",
+            ylabel="cumulative seconds",
+            xs=passes,
+            traces=[("cumulative wall", cumulative)],
+        )
+        if growth is not None:
+            figures.append(growth)
+        per_pass = _line_figure(
+            title="This-pass wall time vs AMR pass",
+            xlabel="AMR pass",
+            ylabel="seconds this pass",
+            xs=passes,
+            traces=[("this pass", this_pass)],
+        )
+        if per_pass is not None:
+            figures.append(per_pass)
+        dof_cost = _line_figure(
+            title="This-pass wall time vs DOFs",
+            xlabel="DOFs",
+            ylabel="seconds this pass",
+            xs=dofs,
+            traces=[("this pass", this_pass)],
+            point_labels=labels,
+        )
+        if dof_cost is not None:
+            figures.append(dof_cost)
+        return figures
+
 
 def inspect_run_trustworthiness(run_dir: str | Path) -> PalaceTrustReport:
     """Build the trustworthiness report from a package folder.
@@ -572,18 +707,7 @@ def _collect_amr_passes(root: Path, problem: str) -> list[AmrPassSnapshot]:
         problem=problem,
     )
     if snapshots and _same_physics(snapshots[-1], parent):
-        previous = snapshots[-1]
-        snapshots[-1] = AmrPassSnapshot(
-            pass_index=previous.pass_index,
-            source="final",
-            path=parent.path,
-            frequencies_ghz=parent.frequencies_ghz,
-            capacitance_matrix_f=parent.capacitance_matrix_f,
-            error_norm=parent.error_norm,
-            degrees_of_freedom=parent.degrees_of_freedom,
-            mesh_elements=parent.mesh_elements,
-            elapsed_total_s=parent.elapsed_total_s,
-        )
+        snapshots[-1] = replace(parent, pass_index=snapshots[-1].pass_index)
         return snapshots
     return [*snapshots, parent]
 
@@ -617,6 +741,9 @@ def _load_snapshot(*, pass_index: int, source: str, path: Path, problem: str) ->
             problem_block.get("MeshElements") if isinstance(problem_block, dict) else None
         ),
         elapsed_total_s=elapsed,
+        peak_node_memory_mb=_mapping_max(
+            palace_payload.get("PeakNodeMemoryMegabytes") if palace_payload else None
+        ),
     )
 
 
@@ -805,6 +932,66 @@ def _read_optional_json(path: Path) -> dict[str, Any] | None:
     return _read_json(path)
 
 
+def _line_figure(
+    *,
+    title: str,
+    xlabel: str,
+    ylabel: str,
+    xs: Sequence[int | float | None],
+    traces: Sequence[tuple[str, Sequence[float | None]]],
+    point_labels: Sequence[str] | None = None,
+    yaxis_type: str = "linear",
+) -> Any | None:
+    go = _plotly()
+    fig = go.Figure()
+    plotted = False
+    for name, ys in traces:
+        pairs: list[tuple[int | float, float]] = []
+        labels: list[str] = []
+        for index, (x_value, y_value) in enumerate(zip(xs, ys, strict=False)):
+            if x_value is None or y_value is None:
+                continue
+            pairs.append((x_value, y_value))
+            if point_labels is not None and index < len(point_labels):
+                labels.append(point_labels[index])
+        if not pairs:
+            continue
+        plot_x = [item[0] for item in pairs]
+        plot_y = [item[1] for item in pairs]
+        trace: dict[str, Any] = {
+            "x": plot_x,
+            "y": plot_y,
+            "mode": "lines+markers+text" if labels else "lines+markers",
+            "name": name,
+        }
+        if labels:
+            trace["text"] = labels
+            trace["textposition"] = "top center"
+        fig.add_trace(go.Scatter(**trace))
+        plotted = True
+    if not plotted:
+        return None
+    fig.update_layout(
+        template="plotly_white",
+        title=title,
+        xaxis_title=xlabel,
+        yaxis_title=ylabel,
+        yaxis_type=yaxis_type,
+        legend={
+            "orientation": "h",
+            "yanchor": "top",
+            "y": -0.28,
+            "x": 0,
+            "xanchor": "left",
+        },
+        height=380,
+        margin={"l": 70, "r": 30, "t": 50, "b": 90},
+    )
+    fig.update_xaxes(rangemode="tozero")
+    fig.update_yaxes(rangemode="tozero")
+    return fig
+
+
 def _plotly() -> Any:
     try:
         import plotly.graph_objects as go
@@ -813,6 +1000,13 @@ def _plotly() -> Any:
             "plotly is not available; install plotly to render Palace trustworthiness figures."
         ) from exc
     return go
+
+
+def _html_cell(tag: str, text: str) -> str:
+    return (
+        f"<{tag} style='border:1px solid var(--border,#d0d7de);"
+        f"padding:0.35rem 0.65rem;text-align:left'>{html.escape(text)}</{tag}>"
+    )
 
 
 def _as_int(value: Any) -> int | None:
@@ -857,5 +1051,6 @@ __all__ = [
     "AmrPassSnapshot",
     "NativeTabularSummary",
     "PalaceTrustReport",
+    "PassCostRecord",
     "inspect_run_trustworthiness",
 ]

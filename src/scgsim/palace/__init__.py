@@ -10,6 +10,7 @@ from .electrostatic import ElectrostaticSim
 from .report import (
     NativeTabularSummary,
     PalaceTrustReport,
+    PassCostRecord,
     inspect_run_trustworthiness,
 )
 from .resolve import (
@@ -27,6 +28,7 @@ __all__ = [
     "ElectrostaticSim",
     "NativeTabularSummary",
     "PalaceTrustReport",
+    "PassCostRecord",
     "inspect_run_trustworthiness",
     "PalaceCost",
     "PalacePerformance",
