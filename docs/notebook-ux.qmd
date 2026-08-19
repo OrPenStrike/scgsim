@@ -35,6 +35,21 @@ argument is `direct-local`, `slurm-single-node`, or `slurm-multi-node`.
 Slurm jobs write stdout and stderr only to `logs/palace-%j.log`. Do not keep a
 duplicate `slurm-%j.out`.
 
+`## Analyze Returned Run` first displays run identity, AMR convergence, and
+simulation cost through `show_run_trustworthiness()`. Physics-result figures
+are a later report layer and are not the first notebook view. Notebooks call
+`resolve_palace_result` first; if the parent `results/palace` folder is
+incomplete after time-limit or OOM, they fall back to
+`inspect_run_trustworthiness(run_dir)`, which still reads `iterationNN`
+snapshots. Numerical Evidence plots each readable AMR scalar as its own
+figure. AMR error Norm, Maximum, and Mean share one log plot; Minimum is
+omitted. Legends sit to the right of each figure. `show_run_trustworthiness()`
+and `inspect_run_trustworthiness()` accept `theme="light"` (default) or
+`theme="dark"` for Plotly figures only. Identity cards, status cards, and
+tables follow the notebook theme. Simulation Benchmark keeps whole-run totals
+and also records per-AMR-pass wall time, DOFs, and seconds per million DOFs so
+later runs can accumulate cost statistics.
+
 ## AEDT notebook contract
 
 AEDT examples use the same stage-local rule. Backend-specific setup remains

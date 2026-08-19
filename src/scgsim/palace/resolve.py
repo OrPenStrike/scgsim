@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ._archive_layout import logical_tar_member_name, resolve_run_archive_path
+
 _PROBLEM_FAMILIES = {
     "Electrostatic": (
         "terminal-C",
@@ -144,6 +146,11 @@ class ResolvedPalaceResult:
     tables: dict[str, ParsedTable]
     returned_receipt: PalaceReturnedReceipt
     provenance: PalaceProvenance
+
+    def show_run_trustworthiness(self, *, theme: str = "light"):
+        from .report import _show_run_trustworthiness
+
+        return _show_run_trustworthiness(self, theme=theme)
 
     def show_all_results(self, *, render_plotly: bool = False) -> dict[str, Any]:
         from .report import _show_all_results
@@ -620,7 +627,7 @@ def _validate_archive_record(root: Path, resource_record: dict[str, Any]) -> Non
         raise ValueError("resource record archive must be a non-empty mapping.")
     path_name = _expect_scalar(archive, "path", str)
     expected_sha = _expect_scalar(archive, "sha256", str)
-    archive_path = _confined_path(root, path_name)
+    archive_path = resolve_run_archive_path(root, path_name)
     if not archive_path.is_file():
         raise FileNotFoundError(
             f"resource record references missing archive payload {archive_path}"
@@ -697,9 +704,16 @@ def _validate_archive_manifest(
             raise ValueError(
                 f"archive manifest must declare input {path} as an exact regular file."
             )
-    archive_path = _confined_path(root, _expect_scalar(archive, "path", str))
+    archive_path = resolve_run_archive_path(
+        root, _expect_scalar(archive, "path", str)
+    )
     with tarfile.open(archive_path, "r:gz") as bundle:
-        bundled = {member.name.rstrip("/"): member for member in bundle.getmembers()}
+        bundled: dict[str, tarfile.TarInfo] = {}
+        for member in bundle.getmembers():
+            logical = logical_tar_member_name(member.name, root.name)
+            if logical is None:
+                continue
+            bundled[logical.rstrip("/")] = member
         allowed_extra = {
             path.rstrip("/")
             for path in _expect_list(

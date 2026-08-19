@@ -20,6 +20,7 @@ palace = [
     "gdsfactory>=9,<10",
     "gdstk",
     "gmsh",
+    "plotly>=6.0.0",
 ]
 dev = [
     "jupytext",

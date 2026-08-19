@@ -13,6 +13,11 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Literal
 
+from ._archive_layout import (
+    run_archive_arcname,
+    sibling_run_archive_path,
+    sibling_run_archive_relative,
+)
 from ._mesh import (
     GSIM_SHA,
     SGB_DERIVATION_BASE_SHA,
@@ -86,7 +91,8 @@ def prepare_handoff(
     run_metadata_path = run_dir / "metadata" / "palace_run_metadata.json"
     resource_record_path = run_dir / "metadata" / "palace_resource_record.json"
     manifest_path = run_dir / "metadata" / "palace_handoff_archive_manifest.json"
-    archive_path = run_dir / "palace_handoff.tar.gz"
+    archive_path = sibling_run_archive_path(run_dir)
+    archive_relative = sibling_run_archive_relative(run_dir)
     returned_receipt_path = run_dir / "metadata" / "palace_returned_run_receipt.json"
     returned_receipt_recorder_path = run_dir / "metadata" / "record_palace_return.py"
     index_map_path = run_dir / "metadata" / "palace_index_map.json"
@@ -208,14 +214,15 @@ def prepare_handoff(
 
     resource_record_path.unlink(missing_ok=True)
     archive_path.unlink(missing_ok=True)
+    (run_dir / "palace_handoff.tar.gz").unlink(missing_ok=True)
 
-    excluded = {archive_path, resource_record_path}
+    excluded = {resource_record_path, run_dir / "palace_handoff.tar.gz"}
     members = _members(run_dir, exclude=excluded | {manifest_path})
     _write_json(
         manifest_path,
         {
             "schema_version": 1,
-            "archive": archive_path.name,
+            "archive": archive_relative,
             "input_hashes": hashes,
             "members": members,
             "archive_members_excluded_from_self_listing": [
@@ -231,7 +238,9 @@ def prepare_handoff(
             if path in excluded:
                 continue
             archive.add(
-                path, arcname=path.relative_to(run_dir).as_posix(), recursive=False
+                path,
+                arcname=run_archive_arcname(run_dir, path),
+                recursive=False,
             )
     _write_json(
         resource_record_path,
@@ -248,7 +257,10 @@ def prepare_handoff(
             "execution_identity": execution_identity,
             "requested_resources": resource_map,
             "resolved_resources": resource_map,
-            "archive": {"path": archive_path.name, "sha256": _sha256(archive_path)},
+            "archive": {
+                "path": archive_relative,
+                "sha256": _sha256(archive_path),
+            },
         },
     )
 
