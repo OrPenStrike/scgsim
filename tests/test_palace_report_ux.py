@@ -78,7 +78,9 @@ def _surface_snapshot(pass_index: int, source: str) -> SurfaceEprSeriesSnapshot:
     )
 
 
-def _trust_report() -> PalaceTrustReport:
+def _trust_report(
+    *, completeness: str = "complete", latest_source: str = "final"
+) -> PalaceTrustReport:
     passes = tuple(
         AmrPassSnapshot(
             pass_index=index,
@@ -103,8 +105,8 @@ def _trust_report() -> PalaceTrustReport:
         problem="Eigenmode",
         route="A",
         profile="ltlab-slurm",
-        completeness="complete",
-        latest_source="final",
+        completeness=completeness,
+        latest_source=latest_source,
         identity={},
         passes=passes,
         amr_tolerance=0.02,
@@ -179,7 +181,7 @@ class PalaceReportUxTests(unittest.TestCase):
     def test_public_methods_and_aggregate_order(self) -> None:
         result = _resolved_result()
         original_tables = result.tables
-        trust = _trust_report()
+        trust = _trust_report().with_theme("dark")
         benchmark = {"cost": {}, "performance": {}, "resources": {}}
         with (
             patch(
@@ -211,6 +213,55 @@ class PalaceReportUxTests(unittest.TestCase):
         self.assertEqual(tuple(parameters), ("theme", "ranking_limit"))
         self.assertFalse(hasattr(result, "show_surface_epr_physics"))
         self.assertFalse(hasattr(palace, "NativeTabularSummary"))
+
+    def test_partial_report_supports_the_same_display_surface(self) -> None:
+        partial = _trust_report(
+            completeness="partial",
+            latest_source="iteration01",
+        )
+        trust = partial.with_theme("dark")
+        benchmark = {"performance_metadata": {"completeness": "partial"}}
+        physics = PhysicsQuantitiesReport(trust, 5)
+        with (
+            patch.object(
+                PalaceTrustReport,
+                "show_run_trustworthiness",
+                return_value=trust,
+            ) as show_trust,
+            patch.object(
+                PalaceTrustReport,
+                "show_simulation_benchmark",
+                return_value=benchmark,
+            ) as show_benchmark,
+            patch.object(
+                PalaceTrustReport,
+                "show_physics_quantities",
+                return_value=physics,
+            ) as show_physics,
+            _captured_notebook_display() as displayed,
+        ):
+            returned = partial.show_all_results(theme="dark", ranking_limit=5)
+
+        self.assertIsNone(returned)
+        self.assertEqual(displayed, [trust, benchmark, physics])
+        show_trust.assert_called_once_with(theme="dark")
+        show_benchmark.assert_called_once_with()
+        show_physics.assert_called_once_with(theme="dark", ranking_limit=5)
+        self.assertEqual(
+            tuple(inspect.signature(partial.show_all_results).parameters),
+            ("theme", "ranking_limit"),
+        )
+        self.assertEqual(
+            tuple(inspect.signature(partial.show_run_trustworthiness).parameters),
+            ("theme",),
+        )
+        self.assertEqual(
+            tuple(inspect.signature(partial.show_physics_quantities).parameters),
+            ("theme", "ranking_limit"),
+        )
+        metadata = partial.show_simulation_benchmark()["performance_metadata"]
+        self.assertEqual(metadata["completeness"], "partial")
+        self.assertEqual(metadata["latest_source"], "iteration01")
 
     def test_trust_and_physics_render_separate_families(self) -> None:
         trust = _trust_report()
@@ -291,6 +342,12 @@ class PalaceReportUxTests(unittest.TestCase):
         self.assertEqual(trust.latest_source, "iteration01")
         self.assertEqual(len(trust.passes), 1)
         self.assertEqual(trust.passes[0].frequencies_ghz, (5.0,))
+        self.assertIsInstance(trust.show_run_trustworthiness(), PalaceTrustReport)
+        self.assertIsInstance(trust.show_physics_quantities(), PhysicsQuantitiesReport)
+        self.assertEqual(
+            trust.show_simulation_benchmark()["performance_metadata"]["completeness"],
+            "partial",
+        )
 
     def test_zero_loss_tangent_keeps_participation_and_marks_loss_unavailable(
         self,
