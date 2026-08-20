@@ -8,9 +8,9 @@ state without silently changing behavior.
 from .eigenmode import EigenmodeSim
 from .electrostatic import ElectrostaticSim
 from .report import (
-    NativeTabularSummary,
     PalaceTrustReport,
     PassCostRecord,
+    PhysicsQuantitiesReport,
     inspect_run_trustworthiness,
 )
 from .resolve import (
@@ -26,15 +26,15 @@ from .resolve import (
 __all__ = [
     "EigenmodeSim",
     "ElectrostaticSim",
-    "NativeTabularSummary",
-    "PalaceTrustReport",
-    "PassCostRecord",
-    "inspect_run_trustworthiness",
     "PalaceCost",
     "PalacePerformance",
     "PalaceProvenance",
     "PalaceReturnedReceipt",
+    "PalaceTrustReport",
     "ParsedTable",
+    "PassCostRecord",
+    "PhysicsQuantitiesReport",
     "ResolvedPalaceResult",
+    "inspect_run_trustworthiness",
     "resolve_palace_result",
 ]

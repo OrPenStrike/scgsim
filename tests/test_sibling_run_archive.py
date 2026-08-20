@@ -18,7 +18,7 @@ from scgsim.palace._archive_layout import (
 
 class SiblingRunArchiveTests(unittest.TestCase):
     def test_archive_sits_beside_run_folder_with_the_same_name(self) -> None:
-        run_dir = Path("/tmp/runs/2026-08-19-scgsim-f1-ct448-Eigenmode01")
+        run_dir = Path("/tmp/runs/ExampleRun01")
         archive = sibling_run_archive_path(run_dir)
         self.assertEqual(archive.parent, run_dir.parent)
         self.assertEqual(archive.name, f"{run_dir.name}.tar.gz")
