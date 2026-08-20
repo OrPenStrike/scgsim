@@ -4,11 +4,10 @@
 and result-production authority. The SCGSim Development Lead is the sole owner
 of tracked source in this repository.
 
-Work only in the `scgsim-physical-checkout` physical checkout
-`/home/ili/Githubs/SCQ_Design/scgsim`, targeting `develop`; do not create an
-SCGSim worktree. Route collaboration, lifecycle, ownership, and delivery policy through
-`$scq-collaboration-roles`, which composes the V1 lifecycle and model-routing
-policies. This adapter does not duplicate those policies.
+Use the `scgsim-physical-checkout` delivery profile. Route collaboration,
+lifecycle, ownership, and delivery policy through `$scq-collaboration-roles`,
+which composes the V1 lifecycle and model-routing policies. This adapter does
+not duplicate those policies.
 
 Read first: `README.md`, `docs/goals-and-upstream.qmd`,
 `docs/architecture.qmd`, `docs/geometry-sgb.qmd`, and `docs/ownership.qmd`.
