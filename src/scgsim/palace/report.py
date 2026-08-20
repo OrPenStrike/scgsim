@@ -191,7 +191,51 @@ class PalaceTrustReport:
     theme: ReportTheme = "light"
 
     def with_theme(self, theme: ReportTheme) -> PalaceTrustReport:
-        return replace(self, theme=_checked_theme(theme))
+        checked = _checked_theme(theme)
+        return self if self.theme == checked else replace(self, theme=checked)
+
+    def show_run_trustworthiness(
+        self, *, theme: ReportTheme = "light"
+    ) -> PalaceTrustReport:
+        """Return this complete or partial trust report with the selected theme."""
+
+        return self.with_theme(theme)
+
+    def show_simulation_benchmark(self) -> dict[str, dict[str, Any]]:
+        """Return every available cost, timing, resource, and run-state field."""
+
+        return {
+            "cost": dict(self.cost),
+            "performance": {"counts": {}, "durations": dict(self.durations)},
+            "resources": {
+                "requested_resources": self.provenance.get("requested_resources", {}),
+                "resolved_resources": self.provenance.get("resolved_resources", {}),
+            },
+            "performance_metadata": {
+                "route": self.route,
+                "problem": self.problem,
+                "status": self.identity.get("receipt"),
+                "completeness": self.completeness,
+                "latest_source": self.latest_source,
+            },
+        }
+
+    def show_all_results(
+        self, *, theme: ReportTheme = "light", ranking_limit: int | None = 20
+    ) -> None:
+        """Display trust, benchmark, and available physics in the shared order."""
+
+        from IPython.display import display
+
+        trust = self.show_run_trustworthiness(theme=theme)
+        display(trust)
+        display(trust.show_simulation_benchmark())
+        display(
+            trust.show_physics_quantities(
+                theme=theme,
+                ranking_limit=ranking_limit,
+            )
+        )
 
     def _tokens(self) -> _PlotTheme:
         return _theme_tokens(self.theme)
@@ -227,11 +271,17 @@ class PalaceTrustReport:
         display(HTML(self._provenance_html()))
 
     def show_physics_quantities(
-        self, *, ranking_limit: int | None = 20
+        self,
+        *,
+        theme: ReportTheme = "light",
+        ranking_limit: int | None = 20,
     ) -> PhysicsQuantitiesReport:
         """Return latest readable physics without redrawing convergence."""
 
-        return PhysicsQuantitiesReport(self, _checked_ranking_limit(ranking_limit))
+        return PhysicsQuantitiesReport(
+            self.with_theme(theme),
+            _checked_ranking_limit(ranking_limit),
+        )
 
     def _identity_html(self) -> str:
         cards = (
@@ -717,7 +767,10 @@ def _show_physics_quantities(
     ranking_limit: int | None = 20,
 ) -> PhysicsQuantitiesReport:
     report = _show_run_trustworthiness(result, theme=theme)
-    return report.show_physics_quantities(ranking_limit=ranking_limit)
+    return report.show_physics_quantities(
+        theme=theme,
+        ranking_limit=ranking_limit,
+    )
 
 
 def _show_all_results(
@@ -736,7 +789,12 @@ def _show_all_results(
     trust = _show_run_trustworthiness(result, theme=theme)
     display(trust)
     display(_show_simulation_benchmark(result))
-    display(trust.show_physics_quantities(ranking_limit=ranking_limit))
+    display(
+        trust.show_physics_quantities(
+            theme=theme,
+            ranking_limit=ranking_limit,
+        )
+    )
 
 
 def _show_simulation_benchmark(
@@ -843,7 +901,13 @@ def _build_trust_report(
     }
     provenance = {
         key: handoff.get(key)
-        for key in ("source_revisions", "palace_identity", "hashes")
+        for key in (
+            "source_revisions",
+            "palace_identity",
+            "hashes",
+            "requested_resources",
+            "resolved_resources",
+        )
         if handoff.get(key) is not None
     }
     return PalaceTrustReport(
