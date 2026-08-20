@@ -10,6 +10,12 @@ simulation workflows. It prioritizes reproducible research behavior and stable
 consumer contracts. It is **not official gsim**, does not erase or replace
 upstream work, and does not promise Human review of Agent-driven code changes.
 
+Within SCQ_Design, SCGSim is the sole current reusable solver, runtime, and
+result-production authority. External gsim and historical SGB remain derivation
+provenance only: new SCGSim work must not consume them directly or use them as a
+fallback; the in-tree `scgsim.sgb` Core is the current geometry and topology
+authority.
+
 The current `CONVERGING` package provides the in-tree `scgsim.sgb` Core,
 Palace Electrostatic/Eigenmode geometry-to-report workflows, and version-locked
 AEDT handoff/run/resolve workflows for HFSS Driven Terminal/Modal, HFSS
