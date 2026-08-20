@@ -33,10 +33,11 @@ The integrated starting lane is:
 | Authority | Exact identity | Meaning |
 |---|---|---|
 | gsim downstream source | `0.2.0+scq.1`, `main@8f5dc6c05255d003a9c6d8959537bcf8068379d3`, tree `505a53741953666da17d81b7036eba3ac296cd1a` | Source input for selective downstream integration; not automatic SCGSim API acceptance. |
-| Semantic Geometry Builder | `e74a343154c6b19b6ba32d6fb297e700cfe08ff2` | Geometry and topology authority consumed by SCGSim. |
+| Semantic Geometry Builder | `e74a343154c6b19b6ba32d6fb297e700cfe08ff2` | Derivation provenance only; the in-tree `scgsim.sgb` Core is the current geometry and topology authority consumed by SCGSim. |
 
 These identities establish provenance only. They imply neither a numerical
-Surface-EPR result nor a live Palace solve.
+Surface-EPR result nor a live Palace solve, a new direct external consumer, or
+a fallback path.
 
 ## Upstream feedback
 
