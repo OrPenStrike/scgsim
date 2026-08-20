@@ -1,12 +1,13 @@
-"""Trustworthiness and optional Plotly summaries for Palace runs.
+"""Trust, physics-quantity, and benchmark surfaces for Palace runs.
 
-The first report layer answers whether a run is usable: identity, AMR
-convergence, and cost. Physics-result figures are a later layer.
+Trust answers whether a run is usable from identity and AMR evidence. Latest
+physical interpretation and simulation cost remain explicit separate calls.
 """
 
 from __future__ import annotations
 
 import html
+import json
 import math
 import re
 from collections.abc import Callable, Sequence
@@ -14,7 +15,13 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
-from .resolve import ParsedTable, ResolvedPalaceResult, _read_csv_table, _read_json
+from .resolve import (
+    ResolvedPalaceResult,
+    _read_csv_table,
+    _read_json,
+    _validate_index_entries,
+    _validate_surface_table,
+)
 
 _ITERATION_DIR = re.compile(r"^iteration(\d+)$")
 _FREQ_HEADER = "Re{f} (GHz)"
@@ -22,6 +29,7 @@ _CAP_HEADER_PREFIX = "C[i]["
 _INDEX_COLUMNS = {"m", "i"}
 _SKIP_EIG_COLUMNS = {"Error (Bkwd.)", "Error (Abs.)"}
 _ERROR_INDICATOR_TRACES = ("Norm", "Maximum", "Mean")
+_SURFACE_TYPES = ("MA", "MS", "SA")
 _COLORWAY = (
     "#56B4E9",
     "#E69F00",
@@ -80,23 +88,6 @@ _THEMES = {
     ),
 }
 
-_ELECTROSTATIC_RESULT_TABLES = (
-    "terminal-C",
-    "terminal-Cm",
-    "terminal-Cinv",
-    "terminal-V",
-    "domain-E",
-    "surface-Q",
-)
-_EIGENMODE_RESULT_TABLES = (
-    "eig",
-    "port-EPR",
-    "port-I",
-    "port-V",
-    "domain-E",
-    "surface-Q",
-)
-
 _DURATION_BARS = (
     "MeshPreprocessing",
     "Setup",
@@ -116,12 +107,34 @@ _DURATION_BARS = (
 
 
 @dataclass(frozen=True)
-class NativeTabularSummary:
-    """Compact native view of a resolved tabular result."""
+class SurfaceEprRecord:
+    """One solver-native surface result bound to structured SGB provenance."""
 
-    name: str
-    headers: tuple[str, ...]
-    rows: tuple[dict[str, Any], ...]
+    index: int
+    interface_type: str
+    surface_id: str
+    face_kind: str
+    owner_semantic_ids: tuple[str, ...]
+    net_id: str | None
+    equipotential_id: str | None
+    source_provenance: dict[str, Any]
+    participation: float
+    quality_factor: float
+    loss_tangent: float | None
+
+
+@dataclass(frozen=True)
+class SurfaceEprSeriesSnapshot:
+    """Surface-EPR values for one mode or excitation at one solver snapshot."""
+
+    pass_index: int
+    source: str
+    series_index: int
+    series_kind: Literal["mode", "excitation"]
+    records: tuple[SurfaceEprRecord, ...]
+    quality_factor_total: float | None
+    t1_seconds: float | None
+    loss_status: Literal["available", "unavailable_missing", "unavailable_nonfinite"]
 
 
 @dataclass(frozen=True)
@@ -135,6 +148,7 @@ class AmrPassSnapshot:
     eig_columns: dict[str, tuple[float, ...]] | None
     port_epr: dict[str, tuple[float, ...]] | None
     capacitance_matrix_f: tuple[tuple[float, ...], ...] | None
+    surface_epr: tuple[SurfaceEprSeriesSnapshot, ...] | None
     error_indicators: dict[str, float] | None
     error_norm: float | None
     degrees_of_freedom: int | None
@@ -173,6 +187,7 @@ class PalaceTrustReport:
     amr_max_passes: int | None
     durations: dict[str, float]
     cost: dict[str, Any]
+    provenance: dict[str, Any]
     theme: ReportTheme = "light"
 
     def with_theme(self, theme: ReportTheme) -> PalaceTrustReport:
@@ -204,15 +219,19 @@ class PalaceTrustReport:
                     display(HTML(item))
                 else:
                     _show_figure(item)
-        display(HTML(self._benchmark_cards_html()))
-        benchmark = self._benchmark_time_figure()
-        if isinstance(benchmark, str):
-            display(HTML(benchmark))
-        else:
-            _show_figure(benchmark)
-        display(HTML(self._benchmark_pass_table_html()))
-        for figure in self._benchmark_pass_figures():
-            _show_figure(figure)
+        for item in self._surface_convergence_items():
+            if isinstance(item, str):
+                display(HTML(item))
+            else:
+                _show_figure(item)
+        display(HTML(self._provenance_html()))
+
+    def show_physics_quantities(
+        self, *, ranking_limit: int | None = 20
+    ) -> PhysicsQuantitiesReport:
+        """Return latest readable physics without redrawing convergence."""
+
+        return PhysicsQuantitiesReport(self, _checked_ranking_limit(ranking_limit))
 
     def _identity_html(self) -> str:
         cards = (
@@ -361,7 +380,8 @@ class PalaceTrustReport:
             "figure. AMR error Norm, Maximum, and Mean share one log plot because they "
             "are the same local indicator. Minimum is omitted. The dashed line is the "
             "configured Palace AMR Tol, not a newly invented acceptance Gate. "
-            "Surface-Q and domain-E participation remain the later physics layer.</p>"
+            "Surface participation convergence follows below; latest ranking and "
+            "loss interpretation remain a separate physics call.</p>"
             "</section>"
         )
 
@@ -398,6 +418,36 @@ class PalaceTrustReport:
             "<p style='opacity:0.75'>A trend plot is omitted because a single pass "
             "cannot show adaptation.</p></section>"
         )
+
+    def _surface_convergence_items(self) -> list[Any]:
+        snapshots = _surface_snapshots(self.passes)
+        if not snapshots:
+            return [
+                (
+                    "<section><h3>Surface-EPR Numerical Convergence</h3>"
+                    "<p style='opacity:0.75'>MA/MS/SA participation convergence is "
+                    "unavailable because no readable structured surface-Q snapshot "
+                    "was returned.</p></section>"
+                )
+            ]
+        items: list[Any] = [
+            (
+                "<section><h3>Surface-EPR Numerical Convergence</h3>"
+                "<p style='opacity:0.75;margin-top:0'>Each mode or excitation is kept "
+                "separate. Percentages use the MA+MS+SA sum from the same source and "
+                "AMR pass.</p></section>"
+            )
+        ]
+        for series_index in sorted({item.series_index for item in snapshots}):
+            series = tuple(
+                item for item in snapshots if item.series_index == series_index
+            )
+            items.append(f"<h4>{html.escape(_series_label(series[-1]))}</h4>")
+            total = _surface_total_figure(series, self.theme)
+            if total is not None:
+                items.append(total)
+            items.append(_surface_percentage_figure(series, self.theme))
+        return items
 
     def _benchmark_cards_html(self) -> str:
         cards = (
@@ -564,6 +614,77 @@ class PalaceTrustReport:
             figures.append(dof_cost)
         return figures
 
+    def _provenance_html(self) -> str:
+        payload = html.escape(json.dumps(self.provenance, indent=2, sort_keys=True))
+        return (
+            "<section><h3>Provenance</h3>"
+            "<p style='opacity:0.75;margin-top:0'>Exact source, Palace, and input "
+            "identities recorded by the handoff package.</p>"
+            f"<pre style='white-space:pre-wrap'>{payload}</pre></section>"
+        )
+
+
+@dataclass(frozen=True)
+class PhysicsQuantitiesReport:
+    """Latest readable physical quantities built from structured solver data."""
+
+    trust: PalaceTrustReport
+    ranking_limit: int | None = 20
+
+    @property
+    def snapshots(self) -> tuple[SurfaceEprSeriesSnapshot, ...]:
+        return _surface_snapshots(self.trust.passes)
+
+    def _ipython_display_(self) -> None:
+        from IPython.display import HTML, display
+
+        display(HTML(self._heading_html()))
+        snapshots = self.snapshots
+        if not snapshots:
+            display(
+                HTML(
+                    "<p style='opacity:0.75'>Surface-EPR physics is unavailable: "
+                    "no readable surface-Q snapshot could be bound to structured "
+                    "index-map semantics.</p>"
+                )
+            )
+            return
+        for series_index in sorted({item.series_index for item in snapshots}):
+            series = tuple(
+                item for item in snapshots if item.series_index == series_index
+            )
+            latest = series[-1]
+            label = _series_label(latest)
+            display(HTML(f"<h4>{html.escape(label)}</h4>"))
+            ranking = _surface_ranking_figure(
+                latest, self.ranking_limit, self.trust.theme
+            )
+            if ranking is not None:
+                _show_figure(ranking)
+            display(HTML(_surface_loss_html(latest, self.trust.problem)))
+
+    def _heading_html(self) -> str:
+        state = (
+            "complete returned run"
+            if self.trust.completeness == "complete"
+            else "partial / convergence not established"
+        )
+        limit = (
+            "all surfaces" if self.ranking_limit is None else str(self.ranking_limit)
+        )
+        snapshots = self.snapshots
+        latest_source = snapshots[-1].source if snapshots else "unavailable"
+        return (
+            "<section><h3>Physics Quantities</h3>"
+            "<p style='opacity:0.75;margin-top:0'>Latest-readable individual-surface "
+            "participation and loss interpretation are shown only after run identity "
+            "and numerical evidence. Modes and excitations remain separate. "
+            f"Run state: {html.escape(state)}; latest readable snapshot: "
+            f"{html.escape(latest_source)}; ranking limit: "
+            f"{html.escape(limit)}. Complete bound records remain available through "
+            "<code>snapshots</code>.</p></section>"
+        )
+
 
 def inspect_run_trustworthiness(
     run_dir: str | Path, *, theme: ReportTheme = "light"
@@ -589,30 +710,33 @@ def _show_run_trustworthiness(
     return report
 
 
+def _show_physics_quantities(
+    result: ResolvedPalaceResult,
+    *,
+    theme: ReportTheme = "light",
+    ranking_limit: int | None = 20,
+) -> PhysicsQuantitiesReport:
+    report = _show_run_trustworthiness(result, theme=theme)
+    return report.show_physics_quantities(ranking_limit=ranking_limit)
+
+
 def _show_all_results(
-    result: ResolvedPalaceResult, *, render_plotly: bool = False
-) -> dict[str, Any]:
-    """Return selected parsed result families as native summaries."""
+    result: ResolvedPalaceResult,
+    *,
+    theme: ReportTheme = "light",
+    ranking_limit: int | None = 20,
+) -> None:
+    """Display trust, benchmark, and physics in the Human-defined order."""
 
     if not isinstance(result, ResolvedPalaceResult):
         raise TypeError("resolved result report requires ResolvedPalaceResult.")
 
-    selected = _native_result_families(result.problem, result.tables)
-    summaries = {
-        name: NativeTabularSummary(
-            name=table.name, headers=table.headers, rows=table.rows
-        )
-        for name, table in selected.items()
-    }
+    from IPython.display import display
 
-    if not render_plotly:
-        return summaries
-
-    go = _plotly()
-    rendered: dict[str, Any] = {}
-    for name, table in selected.items():
-        rendered[name] = _table_to_plotly(go, table)
-    return rendered
+    trust = _show_run_trustworthiness(result, theme=theme)
+    display(trust)
+    display(_show_simulation_benchmark(result))
+    display(trust.show_physics_quantities(ranking_limit=ranking_limit))
 
 
 def _show_simulation_benchmark(
@@ -682,9 +806,14 @@ def _build_trust_report(
         root / "metadata" / "palace_returned_run_receipt.json"
     )
     refinement = _refinement(config)
-    passes = _collect_amr_passes(root, problem)
+    surface_bindings = _read_surface_bindings(
+        resolved.provenance.index_map
+        if resolved is not None
+        else _read_optional_json(root / "metadata" / "palace_index_map.json")
+    )
+    passes = _collect_amr_passes(root, problem, surface_bindings)
     latest = passes[-1] if passes else None
-    parent_complete = _parent_has_physics(root / "results" / "palace", problem)
+    parent_complete = latest is not None and latest.source == "final"
     completeness: Literal["complete", "partial"] = (
         "complete" if parent_complete else "partial"
     )
@@ -712,6 +841,11 @@ def _build_trust_report(
         "receipt": receipt_status,
         "git_tag": cost.get("git_tag"),
     }
+    provenance = {
+        key: handoff.get(key)
+        for key in ("source_revisions", "palace_identity", "hashes")
+        if handoff.get(key) is not None
+    }
     return PalaceTrustReport(
         run_dir=root,
         problem=problem,
@@ -725,11 +859,16 @@ def _build_trust_report(
         amr_max_passes=_as_int(refinement.get("MaxIts")),
         durations=durations,
         cost=cost,
+        provenance=provenance,
         theme=_checked_theme(theme),
     )
 
 
-def _collect_amr_passes(root: Path, problem: str) -> list[AmrPassSnapshot]:
+def _collect_amr_passes(
+    root: Path,
+    problem: str,
+    surface_bindings: tuple[dict[str, Any], ...] | None,
+) -> list[AmrPassSnapshot]:
     results = root / "results" / "palace"
     if not results.is_dir():
         return []
@@ -739,28 +878,61 @@ def _collect_amr_passes(root: Path, problem: str) -> list[AmrPassSnapshot]:
         if match and child.is_dir():
             iteration_dirs.append((int(match.group(1)), child))
     iteration_dirs.sort()
-    snapshots = [
-        _load_snapshot(
-            pass_index=index - 1, source=path.name, path=path, problem=problem
+    snapshots = []
+    for index, path in iteration_dirs:
+        snapshot = _load_optional_snapshot(
+            pass_index=index - 1,
+            source=path.name,
+            path=path,
+            problem=problem,
+            surface_bindings=surface_bindings,
         )
-        for index, path in iteration_dirs
-    ]
+        if snapshot is not None:
+            snapshots.append(snapshot)
     if not _parent_has_physics(results, problem):
         return snapshots
-    parent = _load_snapshot(
-        pass_index=len(snapshots),
+    parent = _load_optional_snapshot(
+        pass_index=max((index for index, _path in iteration_dirs), default=0),
         source="final",
         path=results,
         problem=problem,
+        surface_bindings=surface_bindings,
     )
+    if parent is None:
+        return snapshots
     if snapshots and _same_physics(snapshots[-1], parent):
         snapshots[-1] = replace(parent, pass_index=snapshots[-1].pass_index)
         return snapshots
     return [*snapshots, parent]
 
 
+def _load_optional_snapshot(
+    *,
+    pass_index: int,
+    source: str,
+    path: Path,
+    problem: str,
+    surface_bindings: tuple[dict[str, Any], ...] | None,
+) -> AmrPassSnapshot | None:
+    try:
+        return _load_snapshot(
+            pass_index=pass_index,
+            source=source,
+            path=path,
+            problem=problem,
+            surface_bindings=surface_bindings,
+        )
+    except (OSError, TypeError, ValueError):
+        return None
+
+
 def _load_snapshot(
-    *, pass_index: int, source: str, path: Path, problem: str
+    *,
+    pass_index: int,
+    source: str,
+    path: Path,
+    problem: str,
+    surface_bindings: tuple[dict[str, Any], ...] | None,
 ) -> AmrPassSnapshot:
     eig_columns = (
         _read_numeric_table_columns(path / "eig.csv")
@@ -779,6 +951,22 @@ def _load_snapshot(
     )
     error_indicators = _read_error_indicators(path / "error-indicators.csv")
     frequencies = None if eig_columns is None else eig_columns.get(_FREQ_HEADER)
+    expected_rows = (
+        len(frequencies)
+        if frequencies is not None
+        else len(capacitance)
+        if capacitance is not None
+        else 0
+    )
+    surface_epr = _read_surface_epr(
+        path / "surface-Q.csv",
+        problem=problem,
+        pass_index=pass_index,
+        source=source,
+        frequencies_ghz=frequencies,
+        expected_rows=expected_rows,
+        bindings=surface_bindings,
+    )
     error_norm = None if error_indicators is None else error_indicators.get("Norm")
     palace_payload = _read_optional_json(path / "palace.json")
     problem_block = palace_payload.get("Problem") if palace_payload else None
@@ -799,6 +987,7 @@ def _load_snapshot(
         eig_columns=eig_columns,
         port_epr=port_epr,
         capacitance_matrix_f=capacitance,
+        surface_epr=surface_epr,
         error_indicators=error_indicators,
         error_norm=error_norm,
         degrees_of_freedom=_as_int(
@@ -858,6 +1047,346 @@ def _read_capacitance(path: Path) -> tuple[tuple[float, ...], ...] | None:
             values.append(float(value))
         matrix.append(tuple(values))
     return tuple(matrix) if matrix else None
+
+
+def _read_surface_bindings(
+    index_map: dict[str, Any] | None,
+) -> tuple[dict[str, Any], ...] | None:
+    if index_map is None:
+        return None
+    try:
+        _validate_index_entries(index_map)
+        entries = [
+            entry
+            for entry in index_map["entries"]
+            if entry["section"] == "Boundaries.Postprocessing.Dielectric"
+        ]
+        entries.sort(key=lambda entry: entry["index"])
+        bindings: list[dict[str, Any]] = []
+        for entry in entries:
+            metadata = entry["metadata"]
+            interface_type = metadata.get("interface_type")
+            surface_id = metadata.get("surface_id")
+            face_kind = metadata.get("face_kind")
+            owners = metadata.get("owner_semantic_ids")
+            provenance = metadata.get("source_provenance")
+            if interface_type not in _SURFACE_TYPES:
+                raise ValueError("surface interface_type must be MA, MS, or SA.")
+            if not isinstance(surface_id, str) or not surface_id:
+                raise ValueError("surface_id must be a non-empty string.")
+            if not isinstance(face_kind, str) or not face_kind:
+                raise ValueError("face_kind must be a non-empty string.")
+            if (
+                not isinstance(owners, list)
+                or not owners
+                or not all(isinstance(owner, str) and owner for owner in owners)
+            ):
+                raise ValueError("owner_semantic_ids must be non-empty strings.")
+            if not isinstance(provenance, dict):
+                raise TypeError("source_provenance must be a mapping.")
+            epr_spec = entry.get("epr_spec")
+            loss_tangent = (
+                epr_spec.get("loss_tangent") if isinstance(epr_spec, dict) else None
+            )
+            if loss_tangent is not None and (
+                isinstance(loss_tangent, bool)
+                or not isinstance(loss_tangent, (int, float))
+                or not math.isfinite(float(loss_tangent))
+                or loss_tangent < 0
+            ):
+                raise ValueError(
+                    "surface loss_tangent must be finite and non-negative."
+                )
+            bindings.append(
+                {
+                    "index": entry["index"],
+                    "interface_type": interface_type,
+                    "surface_id": surface_id,
+                    "face_kind": face_kind,
+                    "owner_semantic_ids": tuple(owners),
+                    "net_id": _optional_string(metadata.get("net_id")),
+                    "equipotential_id": _optional_string(
+                        metadata.get("equipotential_id")
+                    ),
+                    "source_provenance": provenance,
+                    "loss_tangent": (
+                        None if loss_tangent is None else float(loss_tangent)
+                    ),
+                }
+            )
+        return tuple(bindings) or None
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _read_surface_epr(
+    path: Path,
+    *,
+    problem: str,
+    pass_index: int,
+    source: str,
+    frequencies_ghz: tuple[float, ...] | None,
+    expected_rows: int,
+    bindings: tuple[dict[str, Any], ...] | None,
+) -> tuple[SurfaceEprSeriesSnapshot, ...] | None:
+    if not path.is_file() or not bindings or expected_rows <= 0:
+        return None
+    try:
+        table = _read_csv_table(path)
+        _validate_surface_table(table, len(bindings), expected_rows)
+        snapshots: list[SurfaceEprSeriesSnapshot] = []
+        index_name = "m" if problem == "Eigenmode" else "i"
+        for row in table.rows:
+            series_index = int(row[index_name])
+            records = tuple(
+                SurfaceEprRecord(
+                    **binding,
+                    participation=float(row[f"p_surf[{binding['index']}]"]),
+                    quality_factor=float(row[f"Q_surf[{binding['index']}]"]),
+                )
+                for binding in bindings
+            )
+            inverse_loss = _surface_inverse_loss(records)
+            quality_factor = (
+                1.0 / inverse_loss
+                if inverse_loss is not None and inverse_loss > 0
+                else None
+            )
+            frequency_hz = None
+            if frequencies_ghz is not None and 0 < series_index <= len(frequencies_ghz):
+                frequency_hz = frequencies_ghz[series_index - 1] * 1e9
+            t1_seconds = (
+                quality_factor / (2.0 * math.pi * frequency_hz)
+                if quality_factor is not None
+                and frequency_hz is not None
+                and frequency_hz > 0
+                else None
+            )
+            snapshots.append(
+                SurfaceEprSeriesSnapshot(
+                    pass_index=pass_index,
+                    source=source,
+                    series_index=series_index,
+                    series_kind="mode" if problem == "Eigenmode" else "excitation",
+                    records=records,
+                    quality_factor_total=quality_factor,
+                    t1_seconds=t1_seconds,
+                    loss_status=(
+                        "unavailable_missing"
+                        if inverse_loss is None
+                        else "unavailable_nonfinite"
+                        if quality_factor is None
+                        else "available"
+                    ),
+                )
+            )
+        return tuple(snapshots)
+    except (KeyError, OSError, TypeError, ValueError):
+        return None
+
+
+def _surface_inverse_loss(records: Sequence[SurfaceEprRecord]) -> float | None:
+    if any(record.loss_tangent is None for record in records):
+        return None
+    inverse_loss = sum(
+        record.participation * float(record.loss_tangent) for record in records
+    )
+    return inverse_loss if math.isfinite(inverse_loss) and inverse_loss >= 0 else None
+
+
+def _surface_totals(snapshot: SurfaceEprSeriesSnapshot) -> dict[str, float]:
+    return {
+        interface_type: sum(
+            record.participation
+            for record in snapshot.records
+            if record.interface_type == interface_type
+        )
+        for interface_type in _SURFACE_TYPES
+    }
+
+
+def _surface_total_figure(
+    snapshots: Sequence[SurfaceEprSeriesSnapshot], theme: ReportTheme
+) -> Any | None:
+    return _line_figure(
+        title=f"{_series_label(snapshots[-1])}: MA/MS/SA participation vs AMR pass",
+        xlabel="AMR pass",
+        ylabel="total participation",
+        xs=[snapshot.pass_index for snapshot in snapshots],
+        traces=[
+            (
+                interface_type,
+                [_surface_totals(snapshot)[interface_type] for snapshot in snapshots],
+            )
+            for interface_type in _SURFACE_TYPES
+        ],
+        theme=theme,
+    )
+
+
+def _surface_snapshots(
+    passes: Sequence[AmrPassSnapshot],
+) -> tuple[SurfaceEprSeriesSnapshot, ...]:
+    return tuple(snapshot for pass_ in passes for snapshot in (pass_.surface_epr or ()))
+
+
+def _surface_percentage_figure(
+    snapshots: Sequence[SurfaceEprSeriesSnapshot], theme: ReportTheme
+) -> Any | str:
+    totals = [_surface_totals(snapshot) for snapshot in snapshots]
+    denominators = [sum(values.values()) for values in totals]
+    figure = _line_figure(
+        title=f"{_series_label(snapshots[-1])}: normalized MA/MS/SA participation",
+        xlabel="AMR pass",
+        ylabel="share of MA+MS+SA (%)",
+        xs=[snapshot.pass_index for snapshot in snapshots],
+        traces=[
+            (
+                interface_type,
+                [
+                    None
+                    if denominator <= 0
+                    else 100.0 * values[interface_type] / denominator
+                    for values, denominator in zip(totals, denominators, strict=True)
+                ],
+            )
+            for interface_type in _SURFACE_TYPES
+        ],
+        theme=theme,
+    )
+    if figure is None:
+        return (
+            "<p style='opacity:0.75'>Normalized MA/MS/SA percentages are unavailable "
+            "because their same-snapshot denominator is zero.</p>"
+        )
+    figure.update_yaxes(range=[0, 100])
+    return figure
+
+
+def _surface_ranking_figure(
+    snapshot: SurfaceEprSeriesSnapshot,
+    ranking_limit: int | None,
+    theme: ReportTheme,
+) -> Any | None:
+    records = sorted(
+        snapshot.records, key=lambda record: (-record.participation, record.index)
+    )
+    visible = records if ranking_limit is None else records[:ranking_limit]
+    if not visible:
+        return None
+    tokens = _theme_tokens(theme)
+    go = _plotly()
+    labels = [
+        f"#{record.index} {record.interface_type} · {record.face_kind}"
+        f"<br>{record.owner_semantic_ids[0]}"
+        for record in visible
+    ]
+    custom = [
+        [
+            record.surface_id,
+            ", ".join(record.owner_semantic_ids),
+            record.face_kind,
+            record.net_id or "unassigned",
+            record.equipotential_id or "unassigned",
+            _source_provenance_label(record.source_provenance),
+        ]
+        for record in visible
+    ]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=[record.participation for record in visible],
+                y=labels,
+                orientation="h",
+                marker={
+                    "color": [
+                        _COLORWAY[_SURFACE_TYPES.index(record.interface_type)]
+                        for record in visible
+                    ]
+                },
+                customdata=custom,
+                hovertemplate=(
+                    "%{x:.6g}<br>surface=%{customdata[0]}"
+                    "<br>owners=%{customdata[1]}<br>face=%{customdata[2]}"
+                    "<br>net=%{customdata[3]}<br>equipotential=%{customdata[4]}"
+                    "<br>source=%{customdata[5]}<extra>%{y}</extra>"
+                ),
+            )
+        ]
+    )
+    count = len(snapshot.records)
+    shown = len(visible)
+    _style_figure(
+        fig,
+        title=(
+            f"{_series_label(snapshot)}: latest surface participation ranking "
+            f"({snapshot.source}; {shown} of {count})"
+        ),
+        height=max(360, 29 * shown + 130),
+        margin={"l": 240, "r": 52, "t": 72, "b": 64},
+        hovermode="closest",
+        showlegend=False,
+        theme=theme,
+    )
+    fig.update_xaxes(title=_axis_title("participation", tokens), rangemode="tozero")
+    fig.update_yaxes(autorange="reversed", automargin=True)
+    return fig
+
+
+def _surface_loss_html(snapshot: SurfaceEprSeriesSnapshot, problem: str) -> str:
+    if snapshot.loss_status == "available":
+        q_value = _fmt(snapshot.quality_factor_total)
+        detail = "Q_total uses 1 / Σ(p_i tanδ_i); individual Q values are never summed."
+    elif snapshot.loss_status == "unavailable_missing":
+        q_value = "unavailable"
+        detail = "At least one structured surface loss tangent is unavailable."
+    else:
+        q_value = "unavailable / non-finite"
+        detail = (
+            "The configured surface-loss sum is zero, so native +inf Q is not "
+            "converted to zero. Participation remains available."
+        )
+    cards = [
+        ("Latest source", snapshot.source),
+        ("Surface-loss Q_total", q_value),
+    ]
+    if problem == "Eigenmode":
+        cards.append(
+            (
+                "Surface-loss T1",
+                _fmt_seconds(snapshot.t1_seconds)
+                if snapshot.t1_seconds is not None
+                else "unavailable / non-finite",
+            )
+        )
+    items = "".join(
+        "<div style='min-width:11rem;flex:1 1 11rem;border:1px solid "
+        "var(--border,#d0d7de);border-radius:8px;padding:0.6rem 0.75rem;margin:0.25rem'>"
+        f"<div style='font-size:0.75rem;opacity:0.7'>{html.escape(label)}</div>"
+        f"<div style='font-size:0.95rem;font-weight:600'>{html.escape(value)}</div></div>"
+        for label, value in cards
+    )
+    return (
+        f"<div style='display:flex;flex-wrap:wrap'>{items}</div>"
+        f"<p style='opacity:0.75'>{html.escape(detail)}</p>"
+    )
+
+
+def _series_label(snapshot: SurfaceEprSeriesSnapshot) -> str:
+    noun = "Mode" if snapshot.series_kind == "mode" else "Excitation"
+    return f"{noun} {snapshot.series_index}"
+
+
+def _source_provenance_label(provenance: dict[str, Any]) -> str:
+    record_ids = provenance.get("source_record_ids")
+    if (
+        isinstance(record_ids, list)
+        and record_ids
+        and all(isinstance(record_id, str) for record_id in record_ids)
+    ):
+        suffix = f" (+{len(record_ids) - 1})" if len(record_ids) > 1 else ""
+        return f"{record_ids[0]}{suffix}"
+    return "structured provenance retained"
 
 
 def _read_error_indicators(path: Path) -> dict[str, float] | None:
@@ -991,39 +1520,6 @@ def _mapping_max(payload: Any) -> float | None:
     if isinstance(payload, (int, float)) and not isinstance(payload, bool):
         return float(payload)
     return None
-
-
-def _native_result_families(
-    problem: str, tables: dict[str, ParsedTable]
-) -> dict[str, ParsedTable]:
-    if problem == "Electrostatic":
-        return {
-            name: tables[name]
-            for name in _ELECTROSTATIC_RESULT_TABLES
-            if name in tables
-        }
-    if problem == "Eigenmode":
-        return {
-            name: tables[name] for name in _EIGENMODE_RESULT_TABLES if name in tables
-        }
-    return {name: table for name, table in tables.items() if name != "error-indicators"}
-
-
-def _table_to_plotly(go_module: Any, table: ParsedTable):
-    return go_module.Figure(
-        data=[
-            go_module.Table(
-                header={"values": list(table.headers)},
-                cells={
-                    "values": [
-                        [row.get(column) for row in table.rows]
-                        for column in table.headers
-                    ]
-                },
-            )
-        ],
-        layout={"title_text": table.name},
-    )
 
 
 def _read_optional_json(path: Path) -> dict[str, Any] | None:
@@ -1223,9 +1719,9 @@ def _style_figure(
     tokens = _theme_tokens(theme)
     if margin is None:
         margin = (
-            {"l": 84, "r": 168, "t": 56, "b": 64}
+            {"l": 84, "r": 168, "t": 72, "b": 64}
             if showlegend
-            else {"l": 72, "r": 36, "t": 56, "b": 64}
+            else {"l": 72, "r": 36, "t": 72, "b": 64}
         )
     fig.update_layout(
         template="none",
@@ -1241,8 +1737,8 @@ def _style_figure(
             "font": {"size": _PLOT_TITLE_FONT, "color": tokens.font},
             "x": 0,
             "xanchor": "left",
-            "y": 1,
-            "yanchor": "bottom",
+            "y": 0.98,
+            "yanchor": "top",
             "pad": {"t": 0, "b": 10, "l": 0},
         },
         colorway=list(_COLORWAY),
@@ -1328,6 +1824,22 @@ def _checked_theme(theme: str) -> ReportTheme:
     raise ValueError("theme must be 'light' or 'dark'.")
 
 
+def _checked_ranking_limit(value: int | None) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError("ranking_limit must be a positive integer or None.")
+    return value
+
+
+def _optional_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ValueError("optional semantic identity must be a non-empty string.")
+    return value
+
+
 def _theme_tokens(theme: str) -> _PlotTheme:
     return _THEMES[_checked_theme(theme)]
 
@@ -1372,8 +1884,8 @@ def _fmt_mb(value: Any) -> str:
 
 __all__ = [
     "AmrPassSnapshot",
-    "NativeTabularSummary",
     "PalaceTrustReport",
     "PassCostRecord",
+    "PhysicsQuantitiesReport",
     "inspect_run_trustworthiness",
 ]

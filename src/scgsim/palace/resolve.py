@@ -152,10 +152,19 @@ class ResolvedPalaceResult:
 
         return _show_run_trustworthiness(self, theme=theme)
 
-    def show_all_results(self, *, render_plotly: bool = False) -> dict[str, Any]:
+    def show_all_results(
+        self, *, theme: str = "light", ranking_limit: int | None = 20
+    ) -> None:
         from .report import _show_all_results
 
-        return _show_all_results(self, render_plotly=render_plotly)
+        _show_all_results(self, theme=theme, ranking_limit=ranking_limit)
+
+    def show_physics_quantities(
+        self, *, theme: str = "light", ranking_limit: int | None = 20
+    ):
+        from .report import _show_physics_quantities
+
+        return _show_physics_quantities(self, theme=theme, ranking_limit=ranking_limit)
 
     def show_simulation_benchmark(self) -> dict[str, dict[str, Any]]:
         from .report import _show_simulation_benchmark
@@ -704,9 +713,7 @@ def _validate_archive_manifest(
             raise ValueError(
                 f"archive manifest must declare input {path} as an exact regular file."
             )
-    archive_path = resolve_run_archive_path(
-        root, _expect_scalar(archive, "path", str)
-    )
+    archive_path = resolve_run_archive_path(root, _expect_scalar(archive, "path", str))
     with tarfile.open(archive_path, "r:gz") as bundle:
         bundled: dict[str, tarfile.TarInfo] = {}
         for member in bundle.getmembers():
