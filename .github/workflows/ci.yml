@@ -5,8 +5,18 @@ permissions:
 on:
   push:
     branches:
-      - "**"
+      - develop
+      - main
   pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-and-import:
@@ -22,6 +32,17 @@ jobs:
 
       - name: Sync editable environment
         run: uv sync --locked
+
+      - name: Verify package version contract
+        env:
+          TARGET_LINE: ${{ github.event_name == 'pull_request' && github.base_ref || github.ref_name }}
+        run: |
+          case "$TARGET_LINE" in
+            develop|main) line="$TARGET_LINE" ;;
+            *) line=any ;;
+          esac
+          uv run --locked python scripts/check_version.py --line "$line"
+          uv run --locked python -m unittest discover -s tests -p 'test_version_policy.py'
 
       - name: Verify editable import from src
         run: |
@@ -43,9 +64,11 @@ jobs:
           PY
 
       - name: Build distribution artifacts
+        if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
         run: uv build --no-sources
 
       - name: Inspect wheel contents
+        if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
         run: |
           python - <<'PY'
           import glob
@@ -60,6 +83,7 @@ jobs:
                       print(name)
 
       - name: Verify wheel import in isolated environment
+        if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
         run: |
           uv venv --clear --python 3.12 .venv-wheel
           uv pip install --python .venv-wheel/bin/python dist/*.whl
