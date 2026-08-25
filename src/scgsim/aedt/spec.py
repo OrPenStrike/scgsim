@@ -731,6 +731,7 @@ class MatrixRunControl:
     setup_name: str
     frequency_ghz: float
     maximum_passes: int
+    convergence_percent: float = 1.0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "setup_name", _text(self.setup_name, "setup_name"))
@@ -739,13 +740,18 @@ class MatrixRunControl:
             raise ValueError("matrix frequency_ghz must be > 0")
         if not isinstance(self.maximum_passes, int) or self.maximum_passes <= 0:
             raise ValueError("matrix maximum_passes must be a positive integer")
+        convergence = _number(self.convergence_percent, "convergence_percent")
+        if convergence <= 0:
+            raise ValueError("matrix convergence_percent must be > 0")
         object.__setattr__(self, "frequency_ghz", frequency)
+        object.__setattr__(self, "convergence_percent", convergence)
 
     def to_payload(self) -> dict[str, Any]:
         return {
             "setup_name": self.setup_name,
             "frequency_ghz": self.frequency_ghz,
             "maximum_passes": self.maximum_passes,
+            "convergence_percent": self.convergence_percent,
         }
 
 
