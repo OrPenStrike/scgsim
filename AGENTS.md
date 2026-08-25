@@ -4,7 +4,7 @@
 and result-production authority. The SCGSim Development Lead is the sole owner
 of tracked source in this repository.
 
-Use the `scgsim-physical-checkout` delivery profile. Route collaboration,
+Use the `develop-main` delivery profile. Route collaboration,
 lifecycle, ownership, and delivery policy through `$scq-collaboration-roles`,
 which composes the V1 lifecycle and model-routing policies. This adapter does
 not duplicate those policies.

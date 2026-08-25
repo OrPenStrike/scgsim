@@ -1483,7 +1483,7 @@ wheels = [
 
 [[package]]
 name = "scgsim"
-version = "0.1.0.dev0"
+version = "1.0.0.dev1"
 source = { editable = "." }
 
 [package.optional-dependencies]
