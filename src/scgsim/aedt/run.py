@@ -15,6 +15,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
+from ._q2d_convergence import read_q2d_convergence
 from .spec import (
     LOCKED_PYAEDT,
     POINT_COUNT,
@@ -149,6 +150,8 @@ def _execute(metadata_path: Path) -> int:
             receipt["region"] = result["region"]
             receipt["result_readback"] = result["result_readback"]
             receipt["setup"] = result.get("setup")
+            if "convergence" in result:
+                receipt["convergence"] = result["convergence"]
         receipt["diagnostics"] = _read_physics_warnings(run_dir)
         receipt["status"] = status
         receipt["finished_at_utc"] = _utc_now()
@@ -275,6 +278,7 @@ def _solve_q2d(Q2d: Any, run_dir: Path, spec: Q2dSpec) -> dict[str, Any]:
     outputs, result_readback = _export_q2d(app, run_dir, spec)
     if not app.save_project() or not project_path.is_file():
         raise RuntimeError("Q2D project was not saved")
+    convergence = read_q2d_convergence(run_dir, spec)
     project_relative = project_path.relative_to(run_dir).as_posix()
     outputs[project_relative] = file_sha256(project_path)
     return {
@@ -288,6 +292,7 @@ def _solve_q2d(Q2d: Any, run_dir: Path, spec: Q2dSpec) -> dict[str, Any]:
         "materials": materials,
         "region": region,
         "setup": setup,
+        "convergence": convergence,
         "result_readback": result_readback,
         "save": {"ok": True, "project_sha256": outputs[project_relative]},
     }
@@ -511,7 +516,9 @@ def _setup_q3d(app: Any, spec: Q3dSpec) -> dict[str, Any]:
     setup.dc_enabled = False
     setup.props["AdaptiveFreq"] = f"{spec.run_control.frequency_ghz:g}GHz"
     setup.props["Cap"]["MaxPass"] = spec.run_control.maximum_passes
+    setup.props["Cap"]["PerError"] = spec.run_control.convergence_percent
     setup.props["AC"]["MaxPass"] = spec.run_control.maximum_passes
+    setup.props["AC"]["PerError"] = spec.run_control.convergence_percent
     if not setup.update():
         raise RuntimeError("Q3D setup update failed")
     analysis = app.get_oo_object(app.odesign, "Analysis")
@@ -524,15 +531,23 @@ def _setup_q3d(app: Any, spec: Q3dSpec) -> dict[str, Any]:
         "capacitance_maximum_passes": app.get_oo_property_value(
             analysis, setup.name, "CG[Max. Number of Passes]"
         ),
+        "capacitance_convergence_percent": app.get_oo_property_value(
+            analysis, setup.name, "CG[Percent Error]"
+        ),
         "ac_rl_maximum_passes": app.get_oo_property_value(
             analysis, setup.name, "AC[Max. Number of Passes]"
+        ),
+        "ac_rl_convergence_percent": app.get_oo_property_value(
+            analysis, setup.name, "AC[Percent Error]"
         ),
         "dc_enabled": "DC[Max. Number of Passes]" in properties,
     }
     expected = {
         "adaptive_frequency": f"{spec.run_control.frequency_ghz:g}GHz",
         "capacitance_maximum_passes": str(spec.run_control.maximum_passes),
+        "capacitance_convergence_percent": f"{spec.run_control.convergence_percent:g}",
         "ac_rl_maximum_passes": str(spec.run_control.maximum_passes),
+        "ac_rl_convergence_percent": f"{spec.run_control.convergence_percent:g}",
         "dc_enabled": False,
     }
     if names != [setup.name] or native != expected:
@@ -775,7 +790,9 @@ def _setup_q2d(app: Any, spec: Q2dSpec) -> dict[str, Any]:
     setup = app.create_setup(spec.run_control.setup_name)
     setup.props["AdaptiveFreq"] = f"{spec.run_control.frequency_ghz:g}GHz"
     setup.props["CGDataBlock"]["MaxPass"] = spec.run_control.maximum_passes
+    setup.props["CGDataBlock"]["PerError"] = spec.run_control.convergence_percent
     setup.props["RLDataBlock"]["MaxPass"] = spec.run_control.maximum_passes
+    setup.props["RLDataBlock"]["PerError"] = spec.run_control.convergence_percent
     if not setup.update():
         raise RuntimeError("Q2D setup update failed")
     analysis = app.get_oo_object(app.odesign, "Analysis")
@@ -786,14 +803,22 @@ def _setup_q2d(app: Any, spec: Q2dSpec) -> dict[str, Any]:
         "cg_maximum_passes": app.get_oo_property_value(
             analysis, setup.name, "CG[Max. Number of Passes]"
         ),
+        "cg_convergence_percent": app.get_oo_property_value(
+            analysis, setup.name, "CG[Percent Error]"
+        ),
         "rl_maximum_passes": app.get_oo_property_value(
             analysis, setup.name, "RL[Max. Number of Passes]"
+        ),
+        "rl_convergence_percent": app.get_oo_property_value(
+            analysis, setup.name, "RL[Percent Error]"
         ),
     }
     expected = {
         "adaptive_frequency": f"{spec.run_control.frequency_ghz:g}GHz",
         "cg_maximum_passes": str(spec.run_control.maximum_passes),
+        "cg_convergence_percent": f"{spec.run_control.convergence_percent:g}",
         "rl_maximum_passes": str(spec.run_control.maximum_passes),
+        "rl_convergence_percent": f"{spec.run_control.convergence_percent:g}",
     }
     if app.get_oo_name(app.odesign, "Analysis") != [setup.name] or native != expected:
         raise RuntimeError(f"Q2D native setup readback mismatch: {native!r}")
@@ -1798,6 +1823,9 @@ def _runtime_source_identity() -> dict[str, str]:
         "revision": revision,
         "run_py_sha256": file_sha256(Path(__file__).resolve()),
         "spec_py_sha256": file_sha256(Path(__file__).with_name("spec.py")),
+        "q2d_convergence_py_sha256": file_sha256(
+            Path(__file__).with_name("_q2d_convergence.py")
+        ),
     }
 
 
