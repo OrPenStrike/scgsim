@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from ._matrix_export import parse_matrix_export, read_q2d_rlgc_matrix
-from ._q2d_convergence import read_q2d_convergence
+from ._q2d_convergence import read_q2d_convergence, read_q3d_convergence
 from .spec import (
     LOCKED_PYAEDT,
     POINT_COUNT,
@@ -236,6 +236,7 @@ def _solve_q3d(Q3d: Any, run_dir: Path, spec: Q3dSpec) -> dict[str, Any]:
     outputs, result_readback = _export_q3d(app, run_dir, spec)
     if not app.save_project() or not project_path.is_file():
         raise RuntimeError("Q3D project was not saved")
+    convergence = read_q3d_convergence(run_dir, spec)
     project_relative = project_path.relative_to(run_dir).as_posix()
     outputs[project_relative] = file_sha256(project_path)
     return {
@@ -249,6 +250,7 @@ def _solve_q3d(Q3d: Any, run_dir: Path, spec: Q3dSpec) -> dict[str, Any]:
         "materials": materials,
         "region": region,
         "setup": setup,
+        "convergence": convergence,
         "result_readback": result_readback,
         "save": {"ok": True, "project_sha256": outputs[project_relative]},
     }
@@ -1746,6 +1748,9 @@ def _runtime_source_identity() -> dict[str, str]:
         "run_py_sha256": file_sha256(Path(__file__).resolve()),
         "spec_py_sha256": file_sha256(Path(__file__).with_name("spec.py")),
         "q2d_convergence_py_sha256": file_sha256(
+            Path(__file__).with_name("_q2d_convergence.py")
+        ),
+        "q3d_convergence_py_sha256": file_sha256(
             Path(__file__).with_name("_q2d_convergence.py")
         ),
         "matrix_export_py_sha256": file_sha256(

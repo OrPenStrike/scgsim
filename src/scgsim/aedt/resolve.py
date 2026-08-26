@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from ._matrix_export import read_q2d_rlgc_matrix
-from ._q2d_convergence import read_q2d_convergence
+from ._q2d_convergence import read_q2d_convergence, read_q3d_convergence
 from .spec import (
     HfssDrivenSpec,
     HfssEigenmodeSpec,
@@ -151,6 +151,7 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
             None,
             None,
             receipt_path,
+            convergence=receipt["convergence"],
         )
     if mode == "eigenmode":
         expected = {
@@ -362,6 +363,8 @@ def _validate_q3d_readback(root: Path, receipt: dict[str, Any], spec: Q3dSpec) -
     }
     if receipt.get("setup") != expected_setup:
         raise RuntimeError("Q3D native setup evidence is invalid")
+    if receipt.get("convergence") != read_q3d_convergence(root, spec):
+        raise RuntimeError("Q3D native convergence evidence is invalid")
     readback = receipt.get("result_readback")
     matrices = readback.get("matrices") if isinstance(readback, dict) else None
     if (
