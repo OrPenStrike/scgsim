@@ -5,6 +5,6 @@ alwaysApply: true
 
 Read `AGENTS.md` before search, edits, validation, or Git work. This is
 `OrPenStrike/scgsim`, whose tracked source is solely owned by the SCGSim
-Development Lead. Its delivery profile is `scgsim-physical-checkout`. Shared
+Development Lead. Its delivery profile is `develop-main`. Shared
 lifecycle, ownership, collaboration, and model-routing policy comes from
 `$scq-collaboration-roles`; this adapter adds no parallel policy.
