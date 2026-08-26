@@ -14,6 +14,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
+from ._hfss_convergence import read_hfss_convergence
 from ._matrix_export import parse_matrix_export, read_q2d_rlgc_matrix
 from ._q2d_convergence import read_q2d_convergence, read_q3d_convergence
 from .spec import (
@@ -183,6 +184,7 @@ def _solve(Hfss: Any, run_dir: Path, spec: HfssSpec) -> dict[str, Any]:
     _setup(hfss, spec)
     if not hfss.save_project() or not project_path.is_file():
         raise RuntimeError("HFSS project was not saved before native port readback")
+    setup = _read_hfss_setup(hfss, spec)
     ports = _bind_port_evidence(hfss, spec, ports)
     if not hfss.analyze_setup(name=spec.run_control.setup_name, blocking=True):
         raise RuntimeError(
@@ -192,6 +194,7 @@ def _solve(Hfss: Any, run_dir: Path, spec: HfssSpec) -> dict[str, Any]:
     saved = bool(hfss.save_project())
     if not saved or not project_path.is_file():
         raise RuntimeError("HFSS project was not saved")
+    convergence = read_hfss_convergence(run_dir, spec)
     outputs[project_path.relative_to(run_dir).as_posix()] = file_sha256(project_path)
     return {
         "outputs": outputs,
@@ -204,6 +207,8 @@ def _solve(Hfss: Any, run_dir: Path, spec: HfssSpec) -> dict[str, Any]:
         "mesh": mesh,
         "materials": materials,
         "region": region,
+        "setup": setup,
+        "convergence": convergence,
         "result_readback": result_readback,
         "save": {
             "ok": True,
@@ -226,9 +231,10 @@ def _solve_q3d(Q3d: Any, run_dir: Path, spec: Q3dSpec) -> dict[str, Any]:
     materials = _import_and_bind(app, spec)
     region = _create_region(app, spec)
     nets = _assign_q3d_nets(app, spec)
-    setup = _setup_q3d(app, spec)
+    _setup_q3d(app, spec)
     if not app.save_project() or not project_path.is_file():
         raise RuntimeError("Q3D project was not saved before solve")
+    setup = _read_q3d_setup(app, spec)
     if not app.analyze_setup(name=spec.run_control.setup_name, blocking=True):
         raise RuntimeError(
             f"Q3D failed to analyze setup {spec.run_control.setup_name!r}"
@@ -270,9 +276,10 @@ def _solve_q2d(Q2d: Any, run_dir: Path, spec: Q2dSpec) -> dict[str, Any]:
     materials, objects = _create_q2d_geometry(app, spec)
     region = _create_q2d_region(app, spec)
     conductors = _assign_q2d_conductors(app, spec, objects)
-    setup = _setup_q2d(app, spec)
+    _setup_q2d(app, spec)
     if not app.save_project() or not project_path.is_file():
         raise RuntimeError("Q2D project was not saved before solve")
+    setup = _read_q2d_setup(app, spec)
     if not app.analyze_setup(name=spec.run_control.setup_name, blocking=True):
         raise RuntimeError(
             f"Q2D failed to analyze setup {spec.run_control.setup_name!r}"
@@ -511,50 +518,65 @@ def _assign_q3d_nets(app: Any, spec: Q3dSpec) -> list[dict[str, Any]]:
     return records
 
 
-def _setup_q3d(app: Any, spec: Q3dSpec) -> dict[str, Any]:
+def _setup_q3d(app: Any, spec: Q3dSpec) -> None:
     if app.setup_names:
         raise RuntimeError("new Q3D design must not inherit a setup")
     setup = app.create_setup(spec.run_control.setup_name)
     setup.dc_enabled = False
     setup.props["AdaptiveFreq"] = f"{spec.run_control.frequency_ghz:g}GHz"
     setup.props["Cap"]["MaxPass"] = spec.run_control.maximum_passes
+    setup.props["Cap"]["MinPass"] = spec.run_control.minimum_passes
+    setup.props["Cap"]["MinConvPass"] = spec.run_control.minimum_converged_passes
     setup.props["Cap"]["PerError"] = spec.run_control.convergence_percent
+    setup.props["Cap"]["PerRefine"] = spec.run_control.percent_refinement
     setup.props["AC"]["MaxPass"] = spec.run_control.maximum_passes
+    setup.props["AC"]["MinPass"] = spec.run_control.minimum_passes
+    setup.props["AC"]["MinConvPass"] = spec.run_control.minimum_converged_passes
     setup.props["AC"]["PerError"] = spec.run_control.convergence_percent
+    setup.props["AC"]["PerRefine"] = spec.run_control.percent_refinement
     if not setup.update():
         raise RuntimeError("Q3D setup update failed")
-    analysis = app.get_oo_object(app.odesign, "Analysis")
-    names = app.get_oo_name(app.odesign, "Analysis")
-    properties = app.get_oo_properties(analysis, setup.name)
+
+
+def _read_q3d_setup(app: Any, spec: Q3dSpec) -> dict[str, Any]:
+    raw = _saved_setup_properties(app, spec.run_control.setup_name)
+    cap = raw.get("Cap")
+    ac = raw.get("AC")
+    if not isinstance(cap, dict) or not isinstance(ac, dict):
+        raise TypeError("Q3D saved setup lacks capacitance or AC-RL controls")
     native = {
-        "adaptive_frequency": app.get_oo_property_value(
-            analysis, setup.name, "Adaptive Freq"
-        ),
-        "capacitance_maximum_passes": app.get_oo_property_value(
-            analysis, setup.name, "CG[Max. Number of Passes]"
-        ),
-        "capacitance_convergence_percent": app.get_oo_property_value(
-            analysis, setup.name, "CG[Percent Error]"
-        ),
-        "ac_rl_maximum_passes": app.get_oo_property_value(
-            analysis, setup.name, "AC[Max. Number of Passes]"
-        ),
-        "ac_rl_convergence_percent": app.get_oo_property_value(
-            analysis, setup.name, "AC[Percent Error]"
-        ),
-        "dc_enabled": "DC[Max. Number of Passes]" in properties,
+        "adaptive_frequency": raw.get("AdaptiveFreq"),
+        "capacitance_maximum_passes": cap.get("MaxPass"),
+        "capacitance_minimum_passes": cap.get("MinPass"),
+        "capacitance_minimum_converged_passes": cap.get("MinConvPass"),
+        "capacitance_convergence_percent": cap.get("PerError"),
+        "capacitance_percent_refinement": cap.get("PerRefine"),
+        "ac_rl_maximum_passes": ac.get("MaxPass"),
+        "ac_rl_minimum_passes": ac.get("MinPass"),
+        "ac_rl_minimum_converged_passes": ac.get("MinConvPass"),
+        "ac_rl_convergence_percent": ac.get("PerError"),
+        "ac_rl_percent_refinement": ac.get("PerRefine"),
+        "dc_enabled": "DC" in raw,
     }
     expected = {
         "adaptive_frequency": f"{spec.run_control.frequency_ghz:g}GHz",
-        "capacitance_maximum_passes": str(spec.run_control.maximum_passes),
-        "capacitance_convergence_percent": f"{spec.run_control.convergence_percent:g}",
-        "ac_rl_maximum_passes": str(spec.run_control.maximum_passes),
-        "ac_rl_convergence_percent": f"{spec.run_control.convergence_percent:g}",
+        "capacitance_maximum_passes": spec.run_control.maximum_passes,
+        "capacitance_minimum_passes": spec.run_control.minimum_passes,
+        "capacitance_minimum_converged_passes": (
+            spec.run_control.minimum_converged_passes
+        ),
+        "capacitance_convergence_percent": spec.run_control.convergence_percent,
+        "capacitance_percent_refinement": spec.run_control.percent_refinement,
+        "ac_rl_maximum_passes": spec.run_control.maximum_passes,
+        "ac_rl_minimum_passes": spec.run_control.minimum_passes,
+        "ac_rl_minimum_converged_passes": spec.run_control.minimum_converged_passes,
+        "ac_rl_convergence_percent": spec.run_control.convergence_percent,
+        "ac_rl_percent_refinement": spec.run_control.percent_refinement,
         "dc_enabled": False,
     }
-    if names != [setup.name] or native != expected:
-        raise RuntimeError(f"Q3D native setup readback mismatch: {native!r}")
-    return {"name": setup.name, "native": native}
+    if native != expected:
+        raise RuntimeError(f"Q3D saved setup readback mismatch: {native!r}")
+    return {"name": spec.run_control.setup_name, "native": native}
 
 
 def _export_q3d(
@@ -724,45 +746,64 @@ def _assign_q2d_conductors(
     return records
 
 
-def _setup_q2d(app: Any, spec: Q2dSpec) -> dict[str, Any]:
+def _setup_q2d(app: Any, spec: Q2dSpec) -> None:
     if app.setup_names:
         raise RuntimeError("new Q2D design must not inherit a setup")
     setup = app.create_setup(spec.run_control.setup_name)
     setup.props["AdaptiveFreq"] = f"{spec.run_control.frequency_ghz:g}GHz"
     setup.props["CGDataBlock"]["MaxPass"] = spec.run_control.maximum_passes
+    setup.props["CGDataBlock"]["MinPass"] = spec.run_control.minimum_passes
+    setup.props["CGDataBlock"]["MinConvPass"] = (
+        spec.run_control.minimum_converged_passes
+    )
     setup.props["CGDataBlock"]["PerError"] = spec.run_control.convergence_percent
+    setup.props["CGDataBlock"]["PerRefine"] = spec.run_control.percent_refinement
     setup.props["RLDataBlock"]["MaxPass"] = spec.run_control.maximum_passes
+    setup.props["RLDataBlock"]["MinPass"] = spec.run_control.minimum_passes
+    setup.props["RLDataBlock"]["MinConvPass"] = (
+        spec.run_control.minimum_converged_passes
+    )
     setup.props["RLDataBlock"]["PerError"] = spec.run_control.convergence_percent
+    setup.props["RLDataBlock"]["PerRefine"] = spec.run_control.percent_refinement
     if not setup.update():
         raise RuntimeError("Q2D setup update failed")
-    analysis = app.get_oo_object(app.odesign, "Analysis")
+
+
+def _read_q2d_setup(app: Any, spec: Q2dSpec) -> dict[str, Any]:
+    raw = _saved_setup_properties(app, spec.run_control.setup_name)
+    cg = raw.get("CGDataBlock")
+    rl = raw.get("RLDataBlock")
+    if not isinstance(cg, dict) or not isinstance(rl, dict):
+        raise TypeError("Q2D saved setup lacks CG or RL controls")
     native = {
-        "adaptive_frequency": app.get_oo_property_value(
-            analysis, setup.name, "Adaptive Freq"
-        ),
-        "cg_maximum_passes": app.get_oo_property_value(
-            analysis, setup.name, "CG[Max. Number of Passes]"
-        ),
-        "cg_convergence_percent": app.get_oo_property_value(
-            analysis, setup.name, "CG[Percent Error]"
-        ),
-        "rl_maximum_passes": app.get_oo_property_value(
-            analysis, setup.name, "RL[Max. Number of Passes]"
-        ),
-        "rl_convergence_percent": app.get_oo_property_value(
-            analysis, setup.name, "RL[Percent Error]"
-        ),
+        "adaptive_frequency": raw.get("AdaptiveFreq"),
+        "cg_maximum_passes": cg.get("MaxPass"),
+        "cg_minimum_passes": cg.get("MinPass"),
+        "cg_minimum_converged_passes": cg.get("MinConvPass"),
+        "cg_convergence_percent": cg.get("PerError"),
+        "cg_percent_refinement": cg.get("PerRefine"),
+        "rl_maximum_passes": rl.get("MaxPass"),
+        "rl_minimum_passes": rl.get("MinPass"),
+        "rl_minimum_converged_passes": rl.get("MinConvPass"),
+        "rl_convergence_percent": rl.get("PerError"),
+        "rl_percent_refinement": rl.get("PerRefine"),
     }
     expected = {
         "adaptive_frequency": f"{spec.run_control.frequency_ghz:g}GHz",
-        "cg_maximum_passes": str(spec.run_control.maximum_passes),
-        "cg_convergence_percent": f"{spec.run_control.convergence_percent:g}",
-        "rl_maximum_passes": str(spec.run_control.maximum_passes),
-        "rl_convergence_percent": f"{spec.run_control.convergence_percent:g}",
+        "cg_maximum_passes": spec.run_control.maximum_passes,
+        "cg_minimum_passes": spec.run_control.minimum_passes,
+        "cg_minimum_converged_passes": spec.run_control.minimum_converged_passes,
+        "cg_convergence_percent": spec.run_control.convergence_percent,
+        "cg_percent_refinement": spec.run_control.percent_refinement,
+        "rl_maximum_passes": spec.run_control.maximum_passes,
+        "rl_minimum_passes": spec.run_control.minimum_passes,
+        "rl_minimum_converged_passes": spec.run_control.minimum_converged_passes,
+        "rl_convergence_percent": spec.run_control.convergence_percent,
+        "rl_percent_refinement": spec.run_control.percent_refinement,
     }
-    if app.get_oo_name(app.odesign, "Analysis") != [setup.name] or native != expected:
-        raise RuntimeError(f"Q2D native setup readback mismatch: {native!r}")
-    return {"name": setup.name, "native": native}
+    if native != expected:
+        raise RuntimeError(f"Q2D saved setup readback mismatch: {native!r}")
+    return {"name": spec.run_control.setup_name, "native": native}
 
 
 def _export_q2d(
@@ -1019,25 +1060,13 @@ def _setup(hfss: Any, spec: HfssSpec) -> None:
         setup.props["NumModes"] = spec.run_control.num_modes
         setup.props["MaxDeltaFreq"] = spec.run_control.maximum_delta_frequency_percent
         setup.props["MaximumPasses"] = spec.run_control.maximum_passes
+        setup.props["MinimumPasses"] = spec.run_control.minimum_passes
+        setup.props["MinimumConvergedPasses"] = (
+            spec.run_control.minimum_converged_passes
+        )
+        setup.props["PercentRefinement"] = spec.run_control.percent_refinement
         if not setup.update():
             raise RuntimeError("HFSS Eigenmode setup update failed")
-        observed = {
-            key: setup.props.get(key)
-            for key in (
-                "MinimumFrequency",
-                "NumModes",
-                "MaxDeltaFreq",
-                "MaximumPasses",
-            )
-        }
-        expected = {
-            "MinimumFrequency": f"{spec.run_control.minimum_frequency_ghz:g}GHz",
-            "NumModes": spec.run_control.num_modes,
-            "MaxDeltaFreq": spec.run_control.maximum_delta_frequency_percent,
-            "MaximumPasses": spec.run_control.maximum_passes,
-        }
-        if observed != expected:
-            raise RuntimeError(f"HFSS Eigenmode setup readback mismatch: {observed!r}")
         return
     setup.props["SolveType"] = (
         "DrivenTerminal" if spec.mode == "terminal" else "DrivenModal"
@@ -1045,10 +1074,15 @@ def _setup(hfss: Any, spec: HfssSpec) -> None:
     if not setup.enable_adaptive_setup_broadband(
         f"{spec.run_control.sweep.start_ghz}GHz",
         f"{spec.run_control.sweep.stop_ghz}GHz",
-        max_passes=99,
-        max_delta_s=0.02,
+        max_passes=spec.run_control.maximum_passes,
+        max_delta_s=spec.run_control.maximum_delta_s,
     ):
         raise RuntimeError("adaptive setup initialization failed")
+    setup.props["MinimumPasses"] = spec.run_control.minimum_passes
+    setup.props["MinimumConvergedPasses"] = spec.run_control.minimum_converged_passes
+    setup.props["PercentRefinement"] = spec.run_control.percent_refinement
+    if not setup.update():
+        raise RuntimeError("HFSS Driven adaptive setup update failed")
     sweep = hfss.create_linear_count_sweep(
         spec.run_control.setup_name,
         "GHz",
@@ -1075,6 +1109,74 @@ def _setup(hfss: Any, spec: HfssSpec) -> None:
     )
     if actual != expected:
         raise RuntimeError(f"Fast sweep readback mismatch: {actual!r} != {expected!r}")
+
+
+def _read_hfss_setup(hfss: Any, spec: HfssSpec) -> dict[str, Any]:
+    raw = _saved_setup_properties(hfss, spec.run_control.setup_name)
+    if isinstance(spec, HfssEigenmodeSpec):
+        native = {
+            "minimum_frequency": raw.get("MinimumFrequency"),
+            "num_modes": raw.get("NumModes"),
+            "maximum_delta_frequency_percent": raw.get("MaxDeltaFreq"),
+            "maximum_passes": raw.get("MaximumPasses"),
+            "minimum_passes": raw.get("MinimumPasses"),
+            "minimum_converged_passes": raw.get("MinimumConvergedPasses"),
+            "percent_refinement": raw.get("PercentRefinement"),
+        }
+        expected = {
+            "minimum_frequency": f"{spec.run_control.minimum_frequency_ghz:g}GHz",
+            "num_modes": spec.run_control.num_modes,
+            "maximum_delta_frequency_percent": (
+                spec.run_control.maximum_delta_frequency_percent
+            ),
+            "maximum_passes": spec.run_control.maximum_passes,
+            "minimum_passes": spec.run_control.minimum_passes,
+            "minimum_converged_passes": spec.run_control.minimum_converged_passes,
+            "percent_refinement": spec.run_control.percent_refinement,
+        }
+    else:
+        frequencies = raw.get("MultipleAdaptiveFreqsSetup")
+        if not isinstance(frequencies, dict):
+            raise TypeError("HFSS Driven saved setup lacks broadband frequencies")
+        native = {
+            "solve_type": raw.get("SolveType"),
+            "low_frequency": frequencies.get("Low"),
+            "high_frequency": frequencies.get("High"),
+            "maximum_delta_s": raw.get("MaxDeltaS"),
+            "maximum_passes": raw.get("MaximumPasses"),
+            "minimum_passes": raw.get("MinimumPasses"),
+            "minimum_converged_passes": raw.get("MinimumConvergedPasses"),
+            "percent_refinement": raw.get("PercentRefinement"),
+        }
+        expected = {
+            "solve_type": "Broadband",
+            "low_frequency": f"{spec.run_control.sweep.start_ghz:g}GHz",
+            "high_frequency": f"{spec.run_control.sweep.stop_ghz:g}GHz",
+            "maximum_delta_s": spec.run_control.maximum_delta_s,
+            "maximum_passes": spec.run_control.maximum_passes,
+            "minimum_passes": spec.run_control.minimum_passes,
+            "minimum_converged_passes": spec.run_control.minimum_converged_passes,
+            "percent_refinement": spec.run_control.percent_refinement,
+        }
+    if native != expected:
+        raise RuntimeError(f"HFSS saved setup readback mismatch: {native!r}")
+    return {"name": spec.run_control.setup_name, "native": native}
+
+
+def _saved_setup_properties(app: Any, setup_name: str) -> dict[str, Any]:
+    analysis = app.design_properties.get("AnalysisSetup")
+    setups = analysis.get("SolveSetups") if isinstance(analysis, dict) else None
+    setup_names = (
+        [name for name, value in setups.items() if isinstance(value, dict)]
+        if isinstance(setups, dict)
+        else []
+    )
+    if setup_names != [setup_name]:
+        raise RuntimeError("saved AEDT project does not contain one exact setup")
+    setup = setups[setup_name]
+    if not isinstance(setup, dict):
+        raise TypeError("saved AEDT setup properties are invalid")
+    return setup
 
 
 def _export(
@@ -1747,6 +1849,9 @@ def _runtime_source_identity() -> dict[str, str]:
         "revision": revision,
         "run_py_sha256": file_sha256(Path(__file__).resolve()),
         "spec_py_sha256": file_sha256(Path(__file__).with_name("spec.py")),
+        "hfss_convergence_py_sha256": file_sha256(
+            Path(__file__).with_name("_hfss_convergence.py")
+        ),
         "q2d_convergence_py_sha256": file_sha256(
             Path(__file__).with_name("_q2d_convergence.py")
         ),

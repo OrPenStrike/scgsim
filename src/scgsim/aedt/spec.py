@@ -48,6 +48,27 @@ def _nonnegative_int(value: Any, field: str) -> int:
     return value
 
 
+def _adaptive_controls(
+    maximum_passes: Any,
+    minimum_passes: Any,
+    minimum_converged_passes: Any,
+    percent_refinement: Any,
+) -> float:
+    for field, value in (
+        ("maximum_passes", maximum_passes),
+        ("minimum_passes", minimum_passes),
+        ("minimum_converged_passes", minimum_converged_passes),
+    ):
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            raise ValueError(f"{field} must be a positive integer")
+        if field != "maximum_passes" and value > maximum_passes:
+            raise ValueError(f"{field} must not exceed maximum_passes")
+    refinement = _number(percent_refinement, "percent_refinement")
+    if not 0 < refinement <= 100:
+        raise ValueError("percent_refinement must be in (0, 100]")
+    return refinement
+
+
 @dataclass(frozen=True)
 class FrequencySweepSpec:
     """One HFSS Fast sweep with the Human-fixed output count."""
@@ -76,21 +97,42 @@ class FrequencySweepSpec:
 
 @dataclass(frozen=True)
 class HfssRunControl:
-    """The only setup and sweep identity created by one V1 invocation."""
+    """One Driven setup, adaptive convergence policy, and Fast sweep."""
 
     setup_name: str
     sweep_name: str
     sweep: FrequencySweepSpec
+    maximum_passes: int = 99
+    minimum_passes: int = 1
+    minimum_converged_passes: int = 1
+    percent_refinement: float = 30.0
+    maximum_delta_s: float = 0.02
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "setup_name", _text(self.setup_name, "setup_name"))
         object.__setattr__(self, "sweep_name", _text(self.sweep_name, "sweep_name"))
+        refinement = _adaptive_controls(
+            self.maximum_passes,
+            self.minimum_passes,
+            self.minimum_converged_passes,
+            self.percent_refinement,
+        )
+        delta = _number(self.maximum_delta_s, "maximum_delta_s")
+        if delta <= 0:
+            raise ValueError("maximum_delta_s must be > 0")
+        object.__setattr__(self, "percent_refinement", refinement)
+        object.__setattr__(self, "maximum_delta_s", delta)
 
     def to_payload(self) -> dict[str, Any]:
         return {
             "setup_name": self.setup_name,
             "sweep_name": self.sweep_name,
             "sweep": self.sweep.to_payload(),
+            "maximum_passes": self.maximum_passes,
+            "minimum_passes": self.minimum_passes,
+            "minimum_converged_passes": self.minimum_converged_passes,
+            "percent_refinement": self.percent_refinement,
+            "maximum_delta_s": self.maximum_delta_s,
         }
 
 
@@ -568,6 +610,11 @@ class HfssDrivenSpec:
                 _text(run.get("setup_name"), "setup_name"),
                 _text(run.get("sweep_name"), "sweep_name"),
                 sweep,
+                maximum_passes=run.get("maximum_passes", 99),
+                minimum_passes=run.get("minimum_passes", 1),
+                minimum_converged_passes=run.get("minimum_converged_passes", 1),
+                percent_refinement=run.get("percent_refinement", 30.0),
+                maximum_delta_s=run.get("maximum_delta_s", 0.02),
             ),
             region_padding_um=tuple(payload.get("region_padding_um", ())),  # type: ignore[arg-type]
             length_mesh=LengthMeshSpec(**length) if length is not None else None,
@@ -590,6 +637,9 @@ class EigenmodeRunControl:
     num_modes: int
     maximum_passes: int
     maximum_delta_frequency_percent: float
+    minimum_passes: int = 1
+    minimum_converged_passes: int = 1
+    percent_refinement: float = 30.0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "setup_name", _text(self.setup_name, "setup_name"))
@@ -602,10 +652,15 @@ class EigenmodeRunControl:
             raise ValueError("Eigenmode frequency and convergence percent must be > 0")
         if not isinstance(self.num_modes, int) or self.num_modes <= 0:
             raise ValueError("num_modes must be a positive integer")
-        if not isinstance(self.maximum_passes, int) or self.maximum_passes <= 0:
-            raise ValueError("maximum_passes must be a positive integer")
+        refinement = _adaptive_controls(
+            self.maximum_passes,
+            self.minimum_passes,
+            self.minimum_converged_passes,
+            self.percent_refinement,
+        )
         object.__setattr__(self, "minimum_frequency_ghz", minimum)
         object.__setattr__(self, "maximum_delta_frequency_percent", delta)
+        object.__setattr__(self, "percent_refinement", refinement)
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -614,6 +669,9 @@ class EigenmodeRunControl:
             "num_modes": self.num_modes,
             "maximum_passes": self.maximum_passes,
             "maximum_delta_frequency_percent": self.maximum_delta_frequency_percent,
+            "minimum_passes": self.minimum_passes,
+            "minimum_converged_passes": self.minimum_converged_passes,
+            "percent_refinement": self.percent_refinement,
         }
 
 
@@ -726,25 +784,33 @@ HfssSpec = HfssDrivenSpec | HfssEigenmodeSpec
 
 @dataclass(frozen=True)
 class MatrixRunControl:
-    """One Q3D/Q2D matrix setup at one frequency."""
+    """One Q3D/Q2D matrix setup and shared adaptive convergence policy."""
 
     setup_name: str
     frequency_ghz: float
     maximum_passes: int
     convergence_percent: float = 1.0
+    minimum_passes: int = 1
+    minimum_converged_passes: int = 1
+    percent_refinement: float = 30.0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "setup_name", _text(self.setup_name, "setup_name"))
         frequency = _number(self.frequency_ghz, "frequency_ghz")
         if frequency <= 0:
             raise ValueError("matrix frequency_ghz must be > 0")
-        if not isinstance(self.maximum_passes, int) or self.maximum_passes <= 0:
-            raise ValueError("matrix maximum_passes must be a positive integer")
+        refinement = _adaptive_controls(
+            self.maximum_passes,
+            self.minimum_passes,
+            self.minimum_converged_passes,
+            self.percent_refinement,
+        )
         convergence = _number(self.convergence_percent, "convergence_percent")
         if convergence <= 0:
             raise ValueError("matrix convergence_percent must be > 0")
         object.__setattr__(self, "frequency_ghz", frequency)
         object.__setattr__(self, "convergence_percent", convergence)
+        object.__setattr__(self, "percent_refinement", refinement)
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -752,6 +818,9 @@ class MatrixRunControl:
             "frequency_ghz": self.frequency_ghz,
             "maximum_passes": self.maximum_passes,
             "convergence_percent": self.convergence_percent,
+            "minimum_passes": self.minimum_passes,
+            "minimum_converged_passes": self.minimum_converged_passes,
+            "percent_refinement": self.percent_refinement,
         }
 
 

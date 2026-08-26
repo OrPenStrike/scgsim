@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from ._hfss_convergence import read_hfss_convergence
 from ._matrix_export import read_q2d_rlgc_matrix
 from ._q2d_convergence import read_q2d_convergence, read_q3d_convergence
 from .spec import (
@@ -168,6 +169,7 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
             None,
             _verified(root, "results/eigenmode/eigenmodes.eig", outputs),
             receipt_path,
+            convergence=receipt["convergence"],
         )
     result_stem = "terminal_st" if mode == "terminal" else "modal_s"
     expected = {
@@ -184,6 +186,7 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
         _verified(root, f"results/{mode}/{mode}.s2p", outputs),
         None,
         receipt_path,
+        convergence=receipt["convergence"],
     )
 
 
@@ -215,6 +218,7 @@ def _validate_readback(root: Path, receipt: dict[str, Any], spec: Any) -> None:
         return
     if isinstance(spec, HfssEigenmodeSpec):
         _validate_eigenmode_readback(receipt, spec)
+        _validate_hfss_setup_and_convergence(root, receipt, spec)
         _validate_diagnostics(root, receipt.get("diagnostics"))
         return
     key = "terminal_st" if spec.mode == "terminal" else "modal_s"
@@ -262,7 +266,40 @@ def _validate_readback(root: Path, receipt: dict[str, Any], spec: Any) -> None:
         _validate_terminal_native_evidence(ports, spec)
     else:
         _validate_modal_native_evidence(ports, spec)
+    _validate_hfss_setup_and_convergence(root, receipt, spec)
     _validate_diagnostics(root, receipt.get("diagnostics"))
+
+
+def _validate_hfss_setup_and_convergence(
+    root: Path, receipt: dict[str, Any], spec: HfssDrivenSpec | HfssEigenmodeSpec
+) -> None:
+    if isinstance(spec, HfssEigenmodeSpec):
+        native = {
+            "minimum_frequency": f"{spec.run_control.minimum_frequency_ghz:g}GHz",
+            "num_modes": spec.run_control.num_modes,
+            "maximum_delta_frequency_percent": (
+                spec.run_control.maximum_delta_frequency_percent
+            ),
+            "maximum_passes": spec.run_control.maximum_passes,
+            "minimum_passes": spec.run_control.minimum_passes,
+            "minimum_converged_passes": spec.run_control.minimum_converged_passes,
+            "percent_refinement": spec.run_control.percent_refinement,
+        }
+    else:
+        native = {
+            "solve_type": "Broadband",
+            "low_frequency": f"{spec.run_control.sweep.start_ghz:g}GHz",
+            "high_frequency": f"{spec.run_control.sweep.stop_ghz:g}GHz",
+            "maximum_delta_s": spec.run_control.maximum_delta_s,
+            "maximum_passes": spec.run_control.maximum_passes,
+            "minimum_passes": spec.run_control.minimum_passes,
+            "minimum_converged_passes": spec.run_control.minimum_converged_passes,
+            "percent_refinement": spec.run_control.percent_refinement,
+        }
+    if receipt.get("setup") != {"name": spec.run_control.setup_name, "native": native}:
+        raise RuntimeError("HFSS native setup evidence is invalid")
+    if receipt.get("convergence") != read_hfss_convergence(root, spec):
+        raise RuntimeError("HFSS native convergence evidence is invalid")
 
 
 def _validate_q2d_readback(root: Path, receipt: dict[str, Any], spec: Q2dSpec) -> None:
@@ -288,10 +325,16 @@ def _validate_q2d_readback(root: Path, receipt: dict[str, Any], spec: Q2dSpec) -
         "name": spec.run_control.setup_name,
         "native": {
             "adaptive_frequency": f"{spec.run_control.frequency_ghz:g}GHz",
-            "cg_maximum_passes": str(spec.run_control.maximum_passes),
-            "cg_convergence_percent": f"{spec.run_control.convergence_percent:g}",
-            "rl_maximum_passes": str(spec.run_control.maximum_passes),
-            "rl_convergence_percent": f"{spec.run_control.convergence_percent:g}",
+            "cg_maximum_passes": spec.run_control.maximum_passes,
+            "cg_minimum_passes": spec.run_control.minimum_passes,
+            "cg_minimum_converged_passes": spec.run_control.minimum_converged_passes,
+            "cg_convergence_percent": spec.run_control.convergence_percent,
+            "cg_percent_refinement": spec.run_control.percent_refinement,
+            "rl_maximum_passes": spec.run_control.maximum_passes,
+            "rl_minimum_passes": spec.run_control.minimum_passes,
+            "rl_minimum_converged_passes": spec.run_control.minimum_converged_passes,
+            "rl_convergence_percent": spec.run_control.convergence_percent,
+            "rl_percent_refinement": spec.run_control.percent_refinement,
         },
     }
     if receipt.get("setup") != expected_setup:
@@ -354,10 +397,20 @@ def _validate_q3d_readback(root: Path, receipt: dict[str, Any], spec: Q3dSpec) -
         "name": spec.run_control.setup_name,
         "native": {
             "adaptive_frequency": f"{spec.run_control.frequency_ghz:g}GHz",
-            "capacitance_maximum_passes": str(spec.run_control.maximum_passes),
-            "capacitance_convergence_percent": f"{spec.run_control.convergence_percent:g}",
-            "ac_rl_maximum_passes": str(spec.run_control.maximum_passes),
-            "ac_rl_convergence_percent": f"{spec.run_control.convergence_percent:g}",
+            "capacitance_maximum_passes": spec.run_control.maximum_passes,
+            "capacitance_minimum_passes": spec.run_control.minimum_passes,
+            "capacitance_minimum_converged_passes": (
+                spec.run_control.minimum_converged_passes
+            ),
+            "capacitance_convergence_percent": spec.run_control.convergence_percent,
+            "capacitance_percent_refinement": spec.run_control.percent_refinement,
+            "ac_rl_maximum_passes": spec.run_control.maximum_passes,
+            "ac_rl_minimum_passes": spec.run_control.minimum_passes,
+            "ac_rl_minimum_converged_passes": (
+                spec.run_control.minimum_converged_passes
+            ),
+            "ac_rl_convergence_percent": spec.run_control.convergence_percent,
+            "ac_rl_percent_refinement": spec.run_control.percent_refinement,
             "dc_enabled": False,
         },
     }
