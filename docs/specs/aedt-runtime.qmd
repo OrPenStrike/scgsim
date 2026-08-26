@@ -64,8 +64,8 @@ creating a second artifact.
 Resolution fails closed unless the connected AEDT/PyAEDT versions, declared
 setup and `LastAdaptive` solution, frequency, per-unit-length units, conductor
 order, and every primary matrix value match the sealed run and are finite.
-This Q2D contract remains `CONVERGING`; it does not make the broader AEDT
-surface V1 stable.
+This Q2D contract is accepted V1 behavior; the broader AEDT surface remains
+`CONVERGING` and is not V1 stable.
 
 ## Current exclusions
 
