@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import math
 import sys
 import tempfile
@@ -315,16 +316,54 @@ class PalaceReportUxTests(unittest.TestCase):
         )
         self.assertIn("unavailable / non-finite", html_output)
 
-    def test_header_only_parent_keeps_readable_eigenmode_iteration(self) -> None:
+    def test_failed_parent_keeps_last_complete_iteration_and_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             metadata = root / "metadata"
             results = root / "results" / "palace"
-            iteration = results / "iteration01"
+            iteration = results / "iteration07"
             metadata.mkdir()
             iteration.mkdir(parents=True)
+            handoff_id = "generic-handoff-id"
+            input_hashes = [{"path": "config.json", "bytes": 2, "sha256": "a" * 64}]
             (metadata / "palace_handoff_metadata.json").write_text(
-                '{"problem":"Eigenmode","route":"A","profile":"ltlab-slurm"}\n',
+                json.dumps(
+                    {
+                        "problem": "Eigenmode",
+                        "route": "A",
+                        "profile": "direct-local",
+                        "handoff_id": handoff_id,
+                        "hashes": input_hashes,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            output_files = [
+                {
+                    "path": f"results/palace/output-{index}.csv",
+                    "bytes": index,
+                    "sha256": f"{index:x}" * 64,
+                    "present": True,
+                }
+                for index in range(1, 10)
+            ]
+            receipt = {
+                "schema": "palace-returned-run-receipt.v1",
+                "schema_version": 1,
+                "handoff_id": handoff_id,
+                "route": "A",
+                "problem": "Eigenmode",
+                "status": "failed",
+                "exit_code": 137,
+                "solver_exit_code": 137,
+                "tee_exit_code": 0,
+                "identity_verified": False,
+                "input_hashes": input_hashes,
+                "output_files": output_files,
+            }
+            (metadata / "palace_returned_run_receipt.json").write_text(
+                json.dumps(receipt) + "\n",
                 encoding="utf-8",
             )
             (iteration / "eig.csv").write_text(
@@ -339,9 +378,15 @@ class PalaceReportUxTests(unittest.TestCase):
             trust = inspect_run_trustworthiness(root)
 
         self.assertEqual(trust.completeness, "partial")
-        self.assertEqual(trust.latest_source, "iteration01")
+        self.assertEqual(trust.latest_source, "iteration07")
         self.assertEqual(len(trust.passes), 1)
+        self.assertEqual(trust.passes[0].source, "iteration07")
+        self.assertEqual(trust.passes[0].path, iteration)
         self.assertEqual(trust.passes[0].frequencies_ghz, (5.0,))
+        self.assertEqual(trust.identity["handoff_id"], handoff_id)
+        self.assertEqual(trust.identity["receipt"], "failed / exit 137")
+        self.assertEqual(trust.provenance["hashes"], input_hashes)
+        self.assertEqual(trust.provenance["returned_receipt"], receipt)
         self.assertIsInstance(trust.show_run_trustworthiness(), PalaceTrustReport)
         self.assertIsInstance(trust.show_physics_quantities(), PhysicsQuantitiesReport)
         self.assertEqual(

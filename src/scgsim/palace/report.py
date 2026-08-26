@@ -668,8 +668,8 @@ class PalaceTrustReport:
         payload = html.escape(json.dumps(self.provenance, indent=2, sort_keys=True))
         return (
             "<section><h3>Provenance</h3>"
-            "<p style='opacity:0.75;margin-top:0'>Exact source, Palace, and input "
-            "identities recorded by the handoff package.</p>"
+            "<p style='opacity:0.75;margin-top:0'>Exact source, Palace, input, and "
+            "returned-run identities recorded by the handoff package.</p>"
             f"<pre style='white-space:pre-wrap'>{payload}</pre></section>"
         )
 
@@ -910,6 +910,8 @@ def _build_trust_report(
         )
         if handoff.get(key) is not None
     }
+    if receipt is not None:
+        provenance["returned_receipt"] = receipt
     return PalaceTrustReport(
         run_dir=root,
         problem=problem,
