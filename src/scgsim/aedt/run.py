@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import math
 import os
@@ -15,6 +14,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
+from ._matrix_export import parse_matrix_export, read_q2d_rlgc_matrix
 from ._q2d_convergence import read_q2d_convergence
 from .spec import (
     LOCKED_PYAEDT,
@@ -588,7 +588,7 @@ def _export_q3d(
             "C": {"Capacitance Matrix": "C", "Conductance Matrix": "G"},
             "AC RL": {"AC Inductance Matrix": "L", "AC Resistance Matrix": "R"},
         }[problem]
-        rows, summary = _parse_matrix_export(
+        rows, summary = parse_matrix_export(
             path, "Q3D", problem, spec.run_control.frequency_ghz, titles
         )
         normalized.extend(rows)
@@ -609,68 +609,6 @@ def _export_q3d(
             "native": summaries,
             "normalized_rows": len(normalized),
         }
-    }
-
-
-def _parse_matrix_export(
-    path: Path,
-    solver: str,
-    problem: str,
-    frequency_ghz: float,
-    titles: dict[str, str],
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    if not path.is_file() or path.stat().st_size == 0:
-        raise RuntimeError(f"{solver} {problem} matrix export is missing or empty")
-    lines = path.read_text(encoding="utf-8", errors="strict").splitlines()
-    if (
-        f"Problem Type:  {problem}" not in lines
-        or f"Frequency:  {frequency_ghz:g}GHz" not in lines
-    ):
-        raise RuntimeError(f"{solver} {problem} matrix header is invalid")
-    unit_line = next((line for line in lines if " Units:" in line), None)
-    if unit_line is None:
-        raise RuntimeError(f"{solver} {problem} matrix units are missing")
-    units = dict(re.findall(r"([CGRL]) Units:([^,]+)", unit_line))
-    result: list[dict[str, Any]] = []
-    labels_by_quantity: dict[str, list[str]] = {}
-    for title, quantity in titles.items():
-        try:
-            title_index = lines.index(title)
-        except ValueError as exc:
-            raise RuntimeError(f"{solver} export is missing {title!r}") from exc
-        header_index = title_index + 1
-        while header_index < len(lines) and not lines[header_index].strip():
-            header_index += 1
-        header = next(csv.reader([lines[header_index]]))
-        labels = [value.strip() for value in header[1:] if value.strip()]
-        if not labels or len(set(labels)) != len(labels):
-            raise RuntimeError(f"{solver} {title} labels are invalid")
-        labels_by_quantity[quantity] = labels
-        for row_index, row_name in enumerate(labels, start=header_index + 1):
-            values = next(csv.reader([lines[row_index]]))
-            if values[0].strip() != row_name or len(values[1:]) != len(labels):
-                raise RuntimeError(f"{solver} {title} matrix is not square")
-            for column, raw in zip(labels, values[1:], strict=True):
-                value = float(raw)
-                if not math.isfinite(value):
-                    raise RuntimeError(f"{solver} {title} contains a non-finite value")
-                result.append(
-                    {
-                        "problem_type": problem,
-                        "quantity": quantity,
-                        "row": row_name,
-                        "column": column,
-                        "value": value,
-                        "unit": units[quantity],
-                    }
-                )
-    return result, {
-        "problem_type": problem,
-        "frequency_ghz": frequency_ghz,
-        "quantities": list(titles.values()),
-        "labels": labels_by_quantity,
-        "rows": len(result),
-        "bytes": path.stat().st_size,
     }
 
 
@@ -830,57 +768,41 @@ def _export_q2d(
 ) -> tuple[dict[str, str], dict[str, Any]]:
     output_dir = run_dir / "results" / "q2d"
     output_dir.mkdir(parents=True, exist_ok=True)
-    hashes: dict[str, str] = {}
-    summaries: dict[str, Any] = {}
-    normalized: list[dict[str, Any]] = []
+    path = output_dir / "rlgc_matrix.csv"
     frequency_hz = spec.run_control.frequency_ghz * 1e9
-    for problem in ("CG", "RL"):
-        path = output_dir / f"{problem.casefold()}_matrix.csv"
-        app.odesign.ExportMatrixData(
-            str(path),
-            problem,
-            "",
-            f"{spec.run_control.setup_name} : LastAdaptive",
-            "Original",
-            "ohm",
-            "nH",
-            "pF",
-            "mho",
-            frequency_hz,
-            "Distributed",
-            "1meter",
-            "Maxwell",
-            0,
-            15,
-            20,
-            1,
-        )
-        titles = {
-            "CG": {"Capacitance Matrix": "C", "Conductance Matrix": "G"},
-            "RL": {"Inductance Matrix": "L", "Resistance Matrix": "R"},
-        }[problem]
-        rows, summary = _parse_matrix_export(
-            path, "Q2D", problem, spec.run_control.frequency_ghz, titles
-        )
-        normalized.extend(rows)
-        summaries[problem.casefold()] = summary
-        hashes[path.relative_to(run_dir).as_posix()] = file_sha256(path)
-    normalized_path = output_dir / "matrices.csv"
-    write_csv(
-        normalized_path,
-        normalized,
-        fieldnames=["problem_type", "quantity", "row", "column", "value", "unit"],
+    exported = app.export_matrix_data(
+        file_name=str(path),
+        problem_type="CG, RL",
+        variations="",
+        setup=spec.run_control.setup_name,
+        sweep="LastAdaptive",
+        reduce_matrix="Original",
+        r_unit="ohm",
+        l_unit="nH",
+        c_unit="pF",
+        g_unit="mho",
+        freq=f"{frequency_hz:g}",
+        matrix_type="Maxwell, Spice, Couple",
+        export_ac_dc_res=False,
+        precision=15,
+        field_width=20,
+        use_sci_notation=True,
+        length_setting="Distributed",
+        length="1meter",
     )
-    hashes[normalized_path.relative_to(run_dir).as_posix()] = file_sha256(
-        normalized_path
-    )
-    return hashes, {
+    if exported is not True:
+        raise RuntimeError("Q2D combined CG/RL matrix export failed")
+    rows, summary = read_q2d_rlgc_matrix(path, spec)
+    relative = path.relative_to(run_dir).as_posix()
+    return {relative: file_sha256(path)}, {
         "matrices": {
+            "path": relative,
             "frequency_ghz": spec.run_control.frequency_ghz,
             "length_setting": "Distributed",
             "length": "1meter",
-            "native": summaries,
-            "normalized_rows": len(normalized),
+            "matrix_type": "Maxwell, Spice, Couple",
+            "native": summary,
+            "primary_rows": len(rows),
         }
     }
 
@@ -1825,6 +1747,9 @@ def _runtime_source_identity() -> dict[str, str]:
         "spec_py_sha256": file_sha256(Path(__file__).with_name("spec.py")),
         "q2d_convergence_py_sha256": file_sha256(
             Path(__file__).with_name("_q2d_convergence.py")
+        ),
+        "matrix_export_py_sha256": file_sha256(
+            Path(__file__).with_name("_matrix_export.py")
         ),
     }
 

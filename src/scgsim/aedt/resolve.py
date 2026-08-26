@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from ._matrix_export import read_q2d_rlgc_matrix
 from ._q2d_convergence import read_q2d_convergence
 from .spec import (
     HfssDrivenSpec,
@@ -33,7 +34,17 @@ class ResolvedRun:
     convergence: dict[str, Any] | None = None
 
     def physics_results(self) -> tuple[dict[str, str], ...]:
-        """Return the verified primary CSV as solver-native string rows."""
+        """Return the verified primary result as string-valued rows."""
+
+        if self.mode == "q2d":
+            root = self.receipt_path.parent.parent
+            spec = parse_aedt_spec(read_json(root / "aedt_spec.json"), base_dir=root)
+            if not isinstance(spec, Q2dSpec):
+                raise RuntimeError("resolved Q2D result has a non-Q2D spec")
+            rows, _ = read_q2d_rlgc_matrix(self.primary_csv, spec)
+            return tuple(
+                {key: str(value) for key, value in row.items()} for row in rows
+            )
 
         with self.primary_csv.open(newline="", encoding="utf-8-sig") as stream:
             return tuple(dict(row) for row in csv.DictReader(stream))
@@ -102,18 +113,23 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
     if save["project_sha256"] != outputs.get(project_relative):
         raise RuntimeError("saved project hash does not match output manifest")
     if mode == "q2d":
-        expected = {
-            project_relative,
+        superseded = (
             "results/q2d/cg_matrix.csv",
             "results/q2d/rl_matrix.csv",
             "results/q2d/matrices.csv",
+        )
+        if any(_contained(root, relative).exists() for relative in superseded):
+            raise RuntimeError("Q2D run contains superseded matrix artifacts")
+        expected = {
+            project_relative,
+            "results/q2d/rlgc_matrix.csv",
         }
         if set(outputs) != expected:
             raise RuntimeError("Q2D output manifest is not canonical")
         return ResolvedRun(
             "q2d",
             project,
-            _verified(root, "results/q2d/matrices.csv", outputs),
+            _verified(root, "results/q2d/rlgc_matrix.csv", outputs),
             None,
             None,
             receipt_path,
@@ -283,21 +299,20 @@ def _validate_q2d_readback(root: Path, receipt: dict[str, Any], spec: Q2dSpec) -
         raise RuntimeError("Q2D native convergence evidence is invalid")
     readback = receipt.get("result_readback")
     matrices = readback.get("matrices") if isinstance(readback, dict) else None
-    if (
-        not isinstance(matrices, dict)
-        or matrices.get("frequency_ghz") != spec.run_control.frequency_ghz
-        or matrices.get("length_setting") != "Distributed"
-        or matrices.get("length") != "1meter"
-        or set(matrices.get("native", {})) != {"cg", "rl"}
-        or not isinstance(matrices.get("normalized_rows"), int)
-        or matrices["normalized_rows"] <= 0
-    ):
-        raise RuntimeError("Q2D matrix readback is invalid")
-    _validate_normalized_matrices(
-        _contained(root, "results/q2d/matrices.csv"),
-        matrices["normalized_rows"],
-        {"CG", "RL"},
+    rows, summary = read_q2d_rlgc_matrix(
+        _contained(root, "results/q2d/rlgc_matrix.csv"), spec
     )
+    expected_matrices = {
+        "path": "results/q2d/rlgc_matrix.csv",
+        "frequency_ghz": spec.run_control.frequency_ghz,
+        "length_setting": "Distributed",
+        "length": "1meter",
+        "matrix_type": "Maxwell, Spice, Couple",
+        "native": summary,
+        "primary_rows": len(rows),
+    }
+    if matrices != expected_matrices:
+        raise RuntimeError("Q2D matrix readback is invalid")
 
 
 def _validate_q3d_readback(root: Path, receipt: dict[str, Any], spec: Q3dSpec) -> None:

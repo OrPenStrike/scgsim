@@ -44,6 +44,29 @@ The receipt records direct AEDT state and hashes every resolved output. A
 resolver rejects unsupported families, partial output, mixed run identity,
 unresolved native assignments, and path/hash mismatches.
 
+## Q2D native combined matrix export
+
+For new Q2D runs, the canonical result set contains exactly one matrix
+artifact: `results/q2d/rlgc_matrix.csv`. AEDT 2024.2 produces this native file
+through PyAEDT 1.3.0
+`Q2d.export_matrix_data(problem_type="CG, RL")`. Its primary result blocks are
+the capacitance (C), conductance (G), inductance (L), and resistance (R)
+matrices. Native coupling or Spice blocks may coexist in the same export, but
+they are not additional primary result matrices.
+
+The former `results/q2d/cg_matrix.csv`, `results/q2d/rl_matrix.csv`, and
+normalized `results/q2d/matrices.csv` outputs are superseded and absent from
+new-run manifests; SCGSim does not emit compatibility copies. `resolve_results()`
+binds the single native artifact, `result.primary_csv` points to it, and
+`result.physics_results()` exposes its parsed primary C/G/L/R rows without
+creating a second artifact.
+
+Resolution fails closed unless the connected AEDT/PyAEDT versions, declared
+setup and `LastAdaptive` solution, frequency, per-unit-length units, conductor
+order, and every primary matrix value match the sealed run and are finite.
+This Q2D contract is accepted V1 behavior; the broader AEDT surface remains
+`CONVERGING` and is not V1 stable.
+
 ## Current exclusions
 
 This candidate does not provide S-parameter circuit models, automatic solver
