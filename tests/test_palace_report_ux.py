@@ -186,6 +186,7 @@ def _failed_eigenmode_run(
                 "route": "A",
                 "profile": "direct-local",
                 "handoff_id": handoff_id,
+                "status": "prepared",
                 "hashes": input_hashes,
             }
         )

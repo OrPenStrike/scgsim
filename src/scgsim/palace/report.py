@@ -1053,7 +1053,7 @@ def _validate_inspection_receipt(
 ) -> frozenset[str]:
     if receipt is None:
         return frozenset()
-    for field in ("handoff_id", "route", "problem", "status"):
+    for field in ("handoff_id", "route", "problem"):
         value = receipt.get(field)
         if not isinstance(value, str) or not value:
             raise ValueError(f"returned receipt {field} must be a non-empty string.")
@@ -1061,6 +1061,8 @@ def _validate_inspection_receipt(
             raise ValueError(
                 f"returned receipt {field} does not match handoff metadata."
             )
+    if not isinstance(receipt.get("status"), str) or not receipt["status"]:
+        raise ValueError("returned receipt status must be a non-empty string.")
     for field in ("exit_code", "solver_exit_code", "tee_exit_code"):
         _receipt_exit_code(receipt, field)
 
