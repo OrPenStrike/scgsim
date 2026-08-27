@@ -37,18 +37,22 @@ duplicate `slurm-%j.out`.
 
 `## Analyze Returned Run` first displays run identity, AMR convergence, and
 simulation cost through `show_run_trustworthiness()`. Physics-result figures
-are a later report layer and are not the first notebook view. Notebooks call
-`resolve_palace_result` first; if the parent `results/palace` folder is
-incomplete after time-limit or OOM, they fall back to
-`inspect_run_trustworthiness(run_dir)`, which still reads `iterationNN`
-snapshots. Numerical Evidence plots each readable AMR scalar as its own
+are a later report layer and are not the first notebook view.
+`resolve_palace_result()` remains strict and accepts completed runs only;
+`inspect_run_trustworthiness()` represents failed or partial runs without
+changing their receipt status. When the final primary table is missing or
+unreadable, inspection selects the latest readable `iterationNN`, records its
+source and receipt integrity, and lets the same `show_*` surfaces display it as
+partial evidence. Failure diagnosis is independent: a hash-verified Slurm OOM
+marker confirms out-of-memory, while exit 137 alone is reported only as a
+signal kill. Numerical Evidence plots each readable AMR scalar as its own
 figure. AMR error Norm, Maximum, and Mean share one log plot; Minimum is
 omitted. Legends sit to the right of each figure. `show_run_trustworthiness()`
 and `inspect_run_trustworthiness()` accept `theme="light"` (default) or
 `theme="dark"` for Plotly figures only. Identity cards, status cards, and
-tables follow the notebook theme. Simulation Benchmark keeps whole-run totals
-and also records per-AMR-pass wall time, DOFs, and seconds per million DOFs so
-later runs can accumulate cost statistics.
+tables follow the notebook theme. Simulation Benchmark keeps attempted-run
+and selected-snapshot cost data and also records per-AMR-pass wall time, DOFs,
+and seconds per million DOFs so later runs can accumulate cost statistics.
 
 ## AEDT notebook contract
 
