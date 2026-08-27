@@ -20,8 +20,11 @@ from ._config import (
 from ._epr import normalize_surface_epr_specs
 from ._mesh import MeshBuildResult, build_route_mesh
 from ._staged import (
+    RouteAThinFilm,
     apply_airbox_to_stack,
+    apply_route_a_thin_film_to_stack,
     apply_vacuum_region_to_stack,
+    normalize_route_a_thin_film,
     validate_non_negative_int,
     validate_nonempty_string,
     validate_positive_number,
@@ -38,6 +41,7 @@ class ElectrostaticSim:
     output_dir: Path | None = None
     airbox: dict[str, float] = field(default_factory=dict)
     route: Literal["A", "B"] = "B"
+    route_a_thin_film: RouteAThinFilm | None = None
     terminals: list[TerminalBinding] = field(default_factory=list)
     surface_epr_specs: dict[str, dict[str, Any]] | None = None
     save_fields: int = 0
@@ -150,8 +154,13 @@ class ElectrostaticSim:
         self._invalidate_config()
 
     def set_surface_epr(
-        self, *, representation: str, specs: Mapping[str, Mapping[str, Any]]
+        self,
+        *,
+        representation: str,
+        specs: Mapping[str, Mapping[str, Any]],
+        route_a_thin_film: RouteAThinFilm | None = None,
     ) -> None:
+        """Configure Surface EPR and the required Route-A thin-film lowering."""
         route = (
             representation.strip().upper() if isinstance(representation, str) else ""
         )
@@ -159,7 +168,9 @@ class ElectrostaticSim:
             raise ValueError("Surface EPR representation must be 'A' or 'B'.")
         if self._materials is None:
             raise ValueError("set_stack() must run before set_surface_epr().")
+        normalized_thin_film = normalize_route_a_thin_film(route, route_a_thin_film)
         self.route = route  # type: ignore[assignment]
+        self.route_a_thin_film = normalized_thin_film
         self.surface_epr_specs = normalize_surface_epr_specs(
             specs, materials=self._materials
         )
@@ -283,6 +294,12 @@ class ElectrostaticSim:
             prepared_stack = apply_vacuum_region_to_stack(
                 self.stack,
                 self.vacuum_region,
+            )
+        if self.route == "A":
+            prepared_stack = apply_route_a_thin_film_to_stack(
+                prepared_stack,
+                source_stack=self.stack,
+                variant=self.route_a_thin_film,
             )
         indium_fill = None
         mesh_component = self.component

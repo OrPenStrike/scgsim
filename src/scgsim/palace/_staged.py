@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import math
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Mapping, Sequence
+from typing import Any, Literal
 
 from scgsim.sgb.models import VacuumRegionSpec
 
 RUNTIME_VERSION = "v0.16.1"
 SCHEMA_VERSION = "v0.16.0"
+
+RouteAThinFilm = Literal["substrate_face", "metal_gap_equivalent"]
+_Z_TOLERANCE_UM = 1e-9
 
 
 def validate_nonempty_string(value: Any, field: str) -> str:
@@ -43,6 +48,347 @@ def validate_non_negative_int(value: Any, field: str) -> int:
     if value < 0:
         raise ValueError(f"{field} must be >= 0.")
     return int(value)
+
+
+def normalize_route_a_thin_film(route: str, value: str | None) -> RouteAThinFilm | None:
+    """Validate the explicit Route-A thin-film lowering choice."""
+    if route == "B":
+        if value is not None:
+            raise ValueError("Route B does not accept route_a_thin_film.")
+        return None
+    if route != "A":
+        raise ValueError("route must be either 'A' or 'B'.")
+    if value == "substrate_face":
+        return "substrate_face"
+    if value == "metal_gap_equivalent":
+        return "metal_gap_equivalent"
+    raise ValueError(
+        "Route A requires route_a_thin_film='substrate_face' or 'metal_gap_equivalent'."
+    )
+
+
+def apply_route_a_thin_film_to_stack(
+    stack: Mapping[str, Any],
+    *,
+    source_stack: Mapping[str, Any],
+    variant: str | None,
+) -> Mapping[str, Any]:
+    """Return a Route-A stack with one explicit thin-film coordinate contract.
+
+    ``substrate_face`` preserves physical coordinates and lets Route A lower
+    face metal to the adjacent substrate faces. ``metal_gap_equivalent``
+    collapses both face-metal intervals and applies the same monotone Z map to
+    every solution and conductor range. The source mappings are never mutated.
+    """
+    normalized = normalize_route_a_thin_film("A", variant)
+    if not isinstance(stack, Mapping) or not isinstance(source_stack, Mapping):
+        raise TypeError("Route-A thin-film lowering requires mapping stacks.")
+    facts = _route_a_thin_film_facts(stack)
+    work = copy.deepcopy(dict(stack))
+    collapsed = 0.0
+    if normalized == "metal_gap_equivalent":
+        collapsed = (
+            facts["lower_metal_thickness_um"] + facts["upper_metal_thickness_um"]
+        )
+        _map_stack_z_ranges(work, facts)
+
+    effective_gap = facts["physical_substrate_face_gap_um"] - collapsed
+    source_hash = _canonical_mapping_sha256(source_stack)
+    provenance = {
+        "schema_version": 1,
+        "variant": normalized,
+        "display_label": "A_PRIME" if normalized == "substrate_face" else "A",
+        "source_stack": {
+            "revision": f"sha256:{source_hash}",
+            "sha256": source_hash,
+        },
+        "host_solution_volume_id": facts["host_solution_volume_id"],
+        "physical_substrate_z_ranges_um": facts["physical_substrate_z_ranges_um"],
+        "physical_face_metal_z_ranges_um": facts["physical_face_metal_z_ranges_um"],
+        "physical_substrate_face_gap_um": facts["physical_substrate_face_gap_um"],
+        "physical_metal_gap_um": facts["physical_metal_gap_um"],
+        "effective_sheet_z_um": {
+            "lower": facts["lower_substrate_face_z_um"],
+            "upper": facts["lower_substrate_face_z_um"] + effective_gap,
+        },
+        "effective_gap_um": effective_gap,
+        "collapsed_thickness_um": collapsed,
+        "mapping": (
+            {
+                "kind": "identity_thin_sheet",
+                "summary": "Physical Z coordinates are preserved; face films lower to sheets at their substrate faces.",
+            }
+            if normalized == "substrate_face"
+            else {
+                "kind": "piecewise_coordinate_normalization",
+                "summary": "Both face-metal intervals collapse to sheets; the inter-metal cavity becomes the effective gap and all upper material shifts by the collapsed thickness.",
+                "source_breakpoints_um": [
+                    facts["lower_substrate_face_z_um"],
+                    facts["lower_metal_outer_z_um"],
+                    facts["upper_metal_outer_z_um"],
+                    facts["upper_substrate_face_z_um"],
+                ],
+                "target_breakpoints_um": [
+                    facts["lower_substrate_face_z_um"],
+                    facts["lower_substrate_face_z_um"],
+                    facts["lower_substrate_face_z_um"] + effective_gap,
+                    facts["lower_substrate_face_z_um"] + effective_gap,
+                ],
+                "exposed_opening_statement": "The exposed opening silicon gap is coordinate-normalized with the same map.",
+                "model_scope": "Sensitivity model; not full physical finite-thickness geometry.",
+            }
+        ),
+    }
+    metadata = work.get("metadata", {})
+    if not isinstance(metadata, Mapping):
+        raise TypeError("stack metadata must be a mapping.")
+    if "route_a_thin_film" in metadata:
+        raise ValueError("stack already defines route_a_thin_film provenance.")
+    work["metadata"] = {**dict(metadata), "route_a_thin_film": provenance}
+    return work
+
+
+def _route_a_thin_film_facts(stack: Mapping[str, Any]) -> dict[str, Any]:
+    layers = stack.get("layers")
+    regions = stack.get("solution_regions")
+    materials = stack.get("materials")
+    if (
+        isinstance(layers, str | bytes)
+        or not isinstance(layers, Sequence)
+        or not isinstance(regions, Mapping)
+        or not isinstance(materials, Mapping)
+    ):
+        raise TypeError(
+            "Route-A thin-film lowering requires layers, solution_regions, and materials."
+        )
+    faces: list[tuple[str, str, float, float]] = []
+    for record in layers:
+        if not isinstance(record, Mapping):
+            raise TypeError("stack layers must contain mappings.")
+        if record.get("part_role") != "face_metal":
+            continue
+        semantic_id = validate_nonempty_string(
+            record.get("semantic_id"), "face semantic_id"
+        )
+        host_id = validate_nonempty_string(
+            record.get("host_void_semantic_id"),
+            f"{semantic_id} host_void_semantic_id",
+        )
+        z_min, z_max = _geometry_z_range(record.get("geometry"), semantic_id)
+        if z_max <= z_min:
+            raise ValueError(
+                f"{semantic_id} physical face-metal thickness must be > 0."
+            )
+        faces.append((semantic_id, host_id, z_min, z_max))
+    if not faces:
+        raise ValueError("Route A requires typed face_metal layers.")
+    host_ids = {record[1] for record in faces}
+    if len(host_ids) != 1:
+        raise ValueError(
+            "Route A face_metal layers must share one explicit host solution."
+        )
+    host_id = next(iter(host_ids))
+    face_ranges = _group_z_ranges(faces)
+    if len(face_ranges) != 2:
+        raise ValueError("Route A requires exactly two physical face-metal Z ranges.")
+    lower, upper = face_ranges
+    if lower[1] >= upper[0] - _Z_TOLERANCE_UM:
+        raise ValueError("Route A face-metal intervals must enclose a positive cavity.")
+
+    host = regions.get(host_id)
+    if host is None:
+        raise ValueError(f"Route A host solution {host_id!r} is missing.")
+    if not isinstance(host, Mapping):
+        raise TypeError(f"Route A host solution {host_id!r} must be a mapping.")
+    host_min, host_max = _geometry_z_range(host.get("geometry"), host_id)
+    if not _same_z(host_min, lower[0]) or not _same_z(host_max, upper[1]):
+        raise ValueError(
+            "Route A host solution boundaries must equal the two substrate faces."
+        )
+    lower_substrate = _adjacent_dielectric_region(
+        regions, materials, host_id=host_id, z_um=host_min, side="lower"
+    )
+    upper_substrate = _adjacent_dielectric_region(
+        regions, materials, host_id=host_id, z_um=host_max, side="upper"
+    )
+    return {
+        "host_solution_volume_id": host_id,
+        "lower_substrate_face_z_um": host_min,
+        "upper_substrate_face_z_um": host_max,
+        "lower_metal_outer_z_um": lower[1],
+        "upper_metal_outer_z_um": upper[0],
+        "lower_metal_thickness_um": lower[1] - lower[0],
+        "upper_metal_thickness_um": upper[1] - upper[0],
+        "physical_substrate_face_gap_um": host_max - host_min,
+        "physical_metal_gap_um": upper[0] - lower[1],
+        "physical_substrate_z_ranges_um": {
+            "lower": lower_substrate,
+            "upper": upper_substrate,
+        },
+        "physical_face_metal_z_ranges_um": {
+            "lower": {
+                "semantic_ids": lower[2],
+                "z_min_um": lower[0],
+                "z_max_um": lower[1],
+            },
+            "upper": {
+                "semantic_ids": upper[2],
+                "z_min_um": upper[0],
+                "z_max_um": upper[1],
+            },
+        },
+    }
+
+
+def _group_z_ranges(
+    faces: Sequence[tuple[str, str, float, float]],
+) -> list[tuple[float, float, list[str]]]:
+    result: list[tuple[float, float, list[str]]] = []
+    for semantic_id, _, z_min, z_max in sorted(faces, key=lambda item: item[0]):
+        match = next(
+            (
+                index
+                for index, (left, right, _) in enumerate(result)
+                if _same_z(left, z_min) and _same_z(right, z_max)
+            ),
+            None,
+        )
+        if match is None:
+            result.append((z_min, z_max, [semantic_id]))
+        else:
+            result[match][2].append(semantic_id)
+    return sorted(result, key=lambda item: (item[0], item[1]))
+
+
+def _adjacent_dielectric_region(
+    regions: Mapping[str, Any],
+    materials: Mapping[str, Any],
+    *,
+    host_id: str,
+    z_um: float,
+    side: Literal["lower", "upper"],
+) -> dict[str, Any]:
+    matches: list[dict[str, Any]] = []
+    for semantic_id, region in regions.items():
+        if semantic_id == host_id or not isinstance(region, Mapping):
+            continue
+        material = materials.get(region.get("material_id"))
+        if not isinstance(material, Mapping) or material.get("kind") != "dielectric":
+            continue
+        z_min, z_max = _geometry_z_range(region.get("geometry"), str(semantic_id))
+        boundary = z_max if side == "lower" else z_min
+        if _same_z(boundary, z_um):
+            matches.append(
+                {
+                    "semantic_id": str(semantic_id),
+                    "z_min_um": z_min,
+                    "z_max_um": z_max,
+                }
+            )
+    if len(matches) != 1:
+        raise ValueError(
+            f"Route A requires exactly one typed dielectric {side} substrate adjacent to its host."
+        )
+    return matches[0]
+
+
+def _map_stack_z_ranges(stack: dict[str, Any], facts: Mapping[str, Any]) -> None:
+    for section in ("solution_regions", "layers"):
+        records = stack.get(section)
+        if isinstance(records, Mapping):
+            rewritten_records: dict[Any, Any] | list[Any] = dict(records)
+        elif isinstance(records, list):
+            rewritten_records = list(records)
+        else:
+            raise TypeError(f"stack {section} must contain structured records.")
+        items = (
+            rewritten_records.items()
+            if isinstance(rewritten_records, dict)
+            else enumerate(rewritten_records)
+        )
+        for key, record in items:
+            if not isinstance(record, Mapping):
+                raise TypeError(f"stack {section} record {key!r} must be a mapping.")
+            geometry = record.get("geometry")
+            if not isinstance(geometry, Mapping):
+                raise TypeError(f"stack {section} record {key!r} requires geometry.")
+            rewritten = dict(record)
+            rewritten["geometry"] = _mapped_geometry(geometry, facts, str(key))
+            if isinstance(rewritten_records, dict):
+                rewritten_records[key] = rewritten
+            else:
+                rewritten_records[int(key)] = rewritten
+        stack[section] = rewritten_records
+
+
+def _mapped_geometry(
+    geometry: Mapping[str, Any], facts: Mapping[str, Any], context: str
+) -> dict[str, Any]:
+    result = copy.deepcopy(dict(geometry))
+    if "z_min_um" in result or "z_max_um" in result:
+        if "z_min_um" not in result or "z_max_um" not in result:
+            raise ValueError(f"{context} must define both z_min_um and z_max_um.")
+        z_min, z_max = _geometry_z_range(result, context)
+        result["z_min_um"] = _map_z(z_min, facts)
+        result["z_max_um"] = _map_z(z_max, facts)
+    elif "z_um" in result or "thickness_um" in result:
+        if "z_um" not in result or "thickness_um" not in result:
+            raise ValueError(f"{context} must define both z_um and thickness_um.")
+        z_min, z_max = _geometry_z_range(result, context)
+        mapped_min, mapped_max = _map_z(z_min, facts), _map_z(z_max, facts)
+        result["z_um"] = mapped_min
+        result["thickness_um"] = mapped_max - mapped_min
+    return result
+
+
+def _map_z(z_um: float, facts: Mapping[str, Any]) -> float:
+    lower_face = float(facts["lower_substrate_face_z_um"])
+    lower_outer = float(facts["lower_metal_outer_z_um"])
+    upper_outer = float(facts["upper_metal_outer_z_um"])
+    upper_face = float(facts["upper_substrate_face_z_um"])
+    lower_thickness = float(facts["lower_metal_thickness_um"])
+    collapsed = lower_thickness + float(facts["upper_metal_thickness_um"])
+    if z_um <= lower_face + _Z_TOLERANCE_UM:
+        return z_um
+    if z_um <= lower_outer + _Z_TOLERANCE_UM:
+        return lower_face
+    if z_um <= upper_outer + _Z_TOLERANCE_UM:
+        return z_um - lower_thickness
+    if z_um <= upper_face + _Z_TOLERANCE_UM:
+        return upper_outer - lower_thickness
+    return z_um - collapsed
+
+
+def _geometry_z_range(geometry: Any, context: str) -> tuple[float, float]:
+    if not isinstance(geometry, Mapping):
+        raise TypeError(f"{context} geometry must be a mapping.")
+    if "z_min_um" in geometry or "z_max_um" in geometry:
+        z_min = _finite_z(geometry.get("z_min_um"), f"{context} z_min_um")
+        z_max = _finite_z(geometry.get("z_max_um"), f"{context} z_max_um")
+    else:
+        z_min = _finite_z(geometry.get("z_um"), f"{context} z_um")
+        thickness = _finite_z(geometry.get("thickness_um"), f"{context} thickness_um")
+        z_max = z_min + thickness
+    if z_max < z_min:
+        raise ValueError(f"{context} has a negative Z extent.")
+    return z_min, z_max
+
+
+def _finite_z(value: Any, field: str) -> float:
+    if not _is_finite_float(value):
+        raise ValueError(f"{field} must be a finite number.")
+    return float(value)
+
+
+def _same_z(left: float, right: float) -> bool:
+    return math.isclose(left, right, rel_tol=0.0, abs_tol=_Z_TOLERANCE_UM)
+
+
+def _canonical_mapping_sha256(payload: Mapping[str, Any]) -> str:
+    canonical = json.dumps(
+        dict(payload), sort_keys=True, separators=(",", ":"), allow_nan=False
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def apply_airbox_to_stack(

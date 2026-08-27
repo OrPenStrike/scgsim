@@ -84,7 +84,8 @@ def prepare_handoff(
         "run_palace.sh" if profile == "direct-local" else "run_palace.sbatch"
     )
     (
-        run_dir / ("run_palace.sbatch" if profile == "direct-local" else "run_palace.sh")
+        run_dir
+        / ("run_palace.sbatch" if profile == "direct-local" else "run_palace.sh")
     ).unlink(missing_ok=True)
 
     metadata_path = run_dir / "metadata" / "palace_handoff_metadata.json"
@@ -105,6 +106,7 @@ def prepare_handoff(
         raise FileNotFoundError("handoff requires metadata/palace_index_map.json.")
 
     route = _route(mesh_result)
+    thin_film = _route_a_thin_film(mesh_result, route)
     hashes = _hashes(
         run_dir,
         (
@@ -159,6 +161,7 @@ def prepare_handoff(
         palace_identity=palace_identity,
         hashes=hashes,
         execution_identity=execution_identity,
+        route_a_thin_film=thin_film,
     )
 
     _write_json(
@@ -170,6 +173,7 @@ def prepare_handoff(
             "manual_intent": True,
             "profile": profile,
             "route": route,
+            **({"route_a_thin_film": thin_film} if thin_film is not None else {}),
             "problem": problem,
             "handoff_id": handoff_id,
             "returned_receipt_path": returned_receipt_path.relative_to(
@@ -200,6 +204,7 @@ def prepare_handoff(
             "status": "not_run",
             "kind": "manual_handoff",
             "route": route,
+            **({"route_a_thin_film": thin_film} if thin_film is not None else {}),
             "problem": problem,
             "handoff_id": handoff_id,
             "returned_receipt_path": returned_receipt_path.relative_to(
@@ -250,6 +255,7 @@ def prepare_handoff(
             "kind": "manual_handoff",
             "profile": profile,
             "route": route,
+            **({"route_a_thin_film": thin_film} if thin_film is not None else {}),
             "problem": problem,
             "handoff_id": handoff_id,
             "source_revisions": identity,
@@ -523,6 +529,7 @@ def _compute_handoff_id(
     palace_identity: Mapping[str, Any],
     hashes: Sequence[Mapping[str, Any]],
     execution_identity: Mapping[str, Any],
+    route_a_thin_film: Mapping[str, Any] | None = None,
 ) -> str:
     payload = {
         "route": route,
@@ -532,6 +539,11 @@ def _compute_handoff_id(
         "palace_identity": palace_identity,
         "hashes": list(hashes),
         "execution_identity": execution_identity,
+        **(
+            {"route_a_thin_film": route_a_thin_film}
+            if route_a_thin_film is not None
+            else {}
+        ),
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -633,6 +645,24 @@ def _route(mesh_result: MeshBuildResult) -> str:
     if route not in {"A", "B"}:
         raise ValueError("mesh provenance must carry Route A or B.")
     return route
+
+
+def _route_a_thin_film(
+    mesh_result: MeshBuildResult, route: str
+) -> dict[str, Any] | None:
+    provenance = json.loads(mesh_result.provenance_path.read_text(encoding="utf-8"))
+    manifest = json.loads(mesh_result.mesh_manifest_path.read_text(encoding="utf-8"))
+    provenance_value = provenance.get("route_a_thin_film")
+    manifest_value = manifest.get("route_a_thin_film")
+    if route == "B":
+        if provenance_value is not None or manifest_value is not None:
+            raise ValueError("Route B mesh metadata must not define route_a_thin_film.")
+        return None
+    if not isinstance(provenance_value, Mapping) or provenance_value != manifest_value:
+        raise ValueError(
+            "Route A mesh provenance and manifest require identical thin-film identity."
+        )
+    return dict(provenance_value)
 
 
 def _positive_int(value: Any, field: str) -> int:

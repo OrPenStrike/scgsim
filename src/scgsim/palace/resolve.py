@@ -462,6 +462,12 @@ def _validate_scalar_identity(
         raise ValueError("run metadata must include handoff_id.")
     if handoff_id != run_id:
         raise ValueError("handoff id mismatch between handoff and run metadata.")
+    if handoff_metadata.get("route_a_thin_film") != run_metadata.get(
+        "route_a_thin_film"
+    ):
+        raise ValueError(
+            "Route-A thin-film identity mismatch between handoff and run metadata."
+        )
 
 
 def _validate_handoff_id(
@@ -482,6 +488,14 @@ def _validate_handoff_id(
         hashes=_expect_list(handoff_metadata.get("hashes"), "handoff metadata hashes"),
         execution_identity=_expect_mapping(
             handoff_metadata.get("execution_identity"), "handoff execution_identity"
+        ),
+        route_a_thin_film=(
+            _expect_mapping(
+                handoff_metadata.get("route_a_thin_film"),
+                "handoff route_a_thin_film",
+            )
+            if handoff_metadata.get("route_a_thin_film") is not None
+            else None
         ),
     )
     recorded = _expect_scalar(handoff_metadata, "handoff_id", str)
@@ -547,6 +561,7 @@ def _validate_resource_identity(
         "execution_identity",
         "requested_resources",
         "resolved_resources",
+        "route_a_thin_film",
     ):
         if resource_record.get(field) != handoff_metadata.get(field):
             raise ValueError(
@@ -567,6 +582,7 @@ def _compute_handoff_id(
     palace_identity: Mapping[str, Any],
     hashes: list[Any],
     execution_identity: Mapping[str, Any],
+    route_a_thin_film: Mapping[str, Any] | None = None,
 ) -> str:
     payload = {
         "route": route,
@@ -576,6 +592,11 @@ def _compute_handoff_id(
         "palace_identity": palace_identity,
         "hashes": hashes,
         "execution_identity": execution_identity,
+        **(
+            {"route_a_thin_film": route_a_thin_film}
+            if route_a_thin_film is not None
+            else {}
+        ),
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -1260,6 +1281,10 @@ def _validate_receipt_payload(
         raise ValueError("returned run receipt route mismatch.")
     if _expect_scalar(receipt_payload, "problem", str) != problem:
         raise ValueError("returned run receipt problem mismatch.")
+    if receipt_payload.get("route_a_thin_film") != handoff_metadata.get(
+        "route_a_thin_film"
+    ):
+        raise ValueError("returned run receipt Route-A thin-film identity mismatch.")
 
     if (
         _expect_scalar(run_metadata, "handoff_id", str, fallback="")

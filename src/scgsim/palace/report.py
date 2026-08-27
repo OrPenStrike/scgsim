@@ -1024,6 +1024,7 @@ def _build_trust_report(
             "hashes",
             "requested_resources",
             "resolved_resources",
+            "route_a_thin_film",
         )
         if handoff.get(key) is not None
     }
@@ -1064,6 +1065,8 @@ def _validate_inspection_receipt(
             raise ValueError(
                 f"returned receipt {field} does not match handoff metadata."
             )
+    if receipt.get("route_a_thin_film") != handoff.get("route_a_thin_film"):
+        raise ValueError("returned receipt Route-A thin-film identity mismatch.")
     if not isinstance(receipt.get("status"), str) or not receipt["status"]:
         raise ValueError("returned receipt status must be a non-empty string.")
     for field in ("exit_code", "solver_exit_code", "tee_exit_code"):

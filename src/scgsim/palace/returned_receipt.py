@@ -211,6 +211,8 @@ def main() -> int:
         "log": log_record,
         "solver_identity": _solver_identity(root),
     }
+    if handoff_metadata.get("route_a_thin_film") is not None:
+        payload["route_a_thin_film"] = handoff_metadata["route_a_thin_film"]
 
     _update_resource_record(
         root=root,
