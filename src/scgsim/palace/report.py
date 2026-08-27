@@ -176,7 +176,10 @@ class PassCostRecord:
 
 @dataclass(frozen=True)
 class PalaceResultSelection:
-    """The readable snapshot selected independently from the run outcome."""
+    """The readable snapshot selected independently from the run outcome.
+
+    ``selected_path`` is always relative to the run directory.
+    """
 
     final_snapshot_status: Literal["readable", "missing", "unreadable"]
     selected_source: str | None
@@ -1166,7 +1169,7 @@ def _result_selection(
     return PalaceResultSelection(
         final_snapshot_status=collected.final_snapshot_status,
         selected_source=selected.source,
-        selected_path=selected.path,
+        selected_path=selected.path.relative_to(root),
         selected_pass_index=selected.pass_index,
         reason=reason,
         integrity=integrity,

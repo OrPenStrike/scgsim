@@ -442,6 +442,11 @@ class PalaceReportUxTests(unittest.TestCase):
         )
         self.assertEqual(trust.selection.integrity, "observed_unsealed")
         self.assertEqual(trust.selection.selected_pass_index, 6)
+        self.assertEqual(
+            trust.selection.selected_path,
+            Path("results/palace/iteration07"),
+        )
+        self.assertFalse(trust.selection.selected_path.is_absolute())
         self.assertIsNotNone(trust.failure)
         self.assertEqual(trust.failure.category, "signal_killed")
         self.assertEqual(len(trust.passes), 1)
@@ -454,11 +459,17 @@ class PalaceReportUxTests(unittest.TestCase):
         identity_html = trust._identity_html()
         self.assertIn("Run failed", identity_html)
         self.assertIn("Fallback result selected", identity_html)
+        self.assertNotIn(str(root), identity_html)
         self.assertIsInstance(trust.show_run_trustworthiness(), PalaceTrustReport)
         self.assertIsInstance(trust.show_physics_quantities(), PhysicsQuantitiesReport)
         benchmark = trust.show_simulation_benchmark()["performance_metadata"]
         self.assertEqual(benchmark["completeness"], "partial")
         self.assertEqual(benchmark["selection"]["selected_source"], "iteration07")
+        self.assertEqual(
+            benchmark["selection"]["selected_path"],
+            "results/palace/iteration07",
+        )
+        self.assertNotIn(str(root), json.dumps(benchmark))
         self.assertEqual(benchmark["failure"]["category"], "signal_killed")
         benchmark_surface = trust.show_simulation_benchmark()
         self.assertEqual(
