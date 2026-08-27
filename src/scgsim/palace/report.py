@@ -17,6 +17,9 @@ from typing import Any, Literal
 
 from .resolve import (
     ResolvedPalaceResult,
+    _compute_hash_entry,
+    _confined_path,
+    _extract_hash_map,
     _read_csv_table,
     _read_json,
     _validate_index_entries,
@@ -172,6 +175,49 @@ class PassCostRecord:
 
 
 @dataclass(frozen=True)
+class PalaceResultSelection:
+    """The readable snapshot selected independently from the run outcome.
+
+    ``selected_path`` is always relative to the run directory.
+    """
+
+    final_snapshot_status: Literal["readable", "missing", "unreadable"]
+    selected_source: str | None
+    selected_path: Path | None
+    selected_pass_index: int | None
+    reason: Literal[
+        "final_snapshot",
+        "latest_complete_iteration_after_failed_attempt",
+        "no_complete_snapshot",
+    ]
+    integrity: Literal["receipt_bound", "observed_unsealed", "unavailable"]
+
+
+@dataclass(frozen=True)
+class PalaceFailureDiagnosis:
+    """Evidence-based diagnosis that never changes the returned run status."""
+
+    category: Literal[
+        "out_of_memory",
+        "signal_killed",
+        "solver_error",
+        "output_capture_error",
+        "unknown",
+    ]
+    exit_code: int | None
+    solver_exit_code: int | None
+    tee_exit_code: int | None
+    summary: str
+    evidence: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class _CollectedSnapshots:
+    passes: tuple[AmrPassSnapshot, ...]
+    final_snapshot_status: Literal["readable", "missing", "unreadable"]
+
+
+@dataclass(frozen=True)
 class PalaceTrustReport:
     """Run-identity, AMR evidence, and cost for one Palace package folder."""
 
@@ -181,6 +227,8 @@ class PalaceTrustReport:
     profile: str
     completeness: Literal["complete", "partial"]
     latest_source: str
+    selection: PalaceResultSelection
+    failure: PalaceFailureDiagnosis | None
     identity: dict[str, Any]
     passes: tuple[AmrPassSnapshot, ...]
     amr_tolerance: float | None
@@ -204,9 +252,19 @@ class PalaceTrustReport:
     def show_simulation_benchmark(self) -> dict[str, dict[str, Any]]:
         """Return every available cost, timing, resource, and run-state field."""
 
+        attempted = _read_optional_json(self.run_dir / "results/palace/palace.json")
         return {
             "cost": dict(self.cost),
             "performance": {"counts": {}, "durations": dict(self.durations)},
+            "attempted_run": {
+                "cost": _cost_cards(attempted, None),
+                "durations": _durations(attempted),
+            },
+            "selected_snapshot": {
+                "source": self.selection.selected_source,
+                "cost": dict(self.cost),
+                "durations": dict(self.durations),
+            },
             "resources": {
                 "requested_resources": self.provenance.get("requested_resources", {}),
                 "resolved_resources": self.provenance.get("resolved_resources", {}),
@@ -217,6 +275,8 @@ class PalaceTrustReport:
                 "status": self.identity.get("receipt"),
                 "completeness": self.completeness,
                 "latest_source": self.latest_source,
+                "selection": _selection_payload(self.selection),
+                "failure": _failure_payload(self.failure),
             },
         }
 
@@ -290,6 +350,8 @@ class PalaceTrustReport:
             ("Profile", self.profile),
             ("Completeness", self.completeness),
             ("Latest snapshot", self.latest_source),
+            ("Final snapshot", self.selection.final_snapshot_status),
+            ("Selection integrity", self.selection.integrity),
             ("AMR passes recorded", str(len(self.passes))),
             ("AMR MaxIts", _fmt(self.amr_max_passes)),
             ("AMR Tol", _fmt(self.amr_tolerance)),
@@ -307,8 +369,49 @@ class PalaceTrustReport:
             "<section><h3>Run Identity</h3>"
             "<p style='opacity:0.75;margin-top:0'>Package folder and solver identity. "
             "This is not a physics result.</p>"
-            f"<div style='display:flex;flex-wrap:wrap'>{items}</div></section>"
+            f"<div style='display:flex;flex-wrap:wrap'>{items}</div>"
+            f"{self._run_state_html()}</section>"
         )
+
+    def _run_state_html(self) -> str:
+        notices: list[str] = []
+        if self.failure is not None:
+            notices.append(
+                "<div style='border-left:4px solid #cf222e;background:rgba(207,34,46,0.10);"
+                "padding:0.65rem 0.8rem;margin:0.7rem 0'>"
+                f"<strong>Run failed — {html.escape(self.failure.category.replace('_', ' '))}</strong><br>"
+                f"{html.escape(self.failure.summary)}<br>"
+                f"Exit: {_fmt(self.failure.exit_code)}; solver: "
+                f"{_fmt(self.failure.solver_exit_code)}; output capture: "
+                f"{_fmt(self.failure.tee_exit_code)}."
+                "<details><summary>Failure evidence</summary><code>"
+                f"{html.escape(json.dumps(self.failure.evidence, sort_keys=True))}"
+                "</code></details></div>"
+            )
+        if self.selection.reason == "latest_complete_iteration_after_failed_attempt":
+            source = self.selection.selected_source or "unavailable"
+            path = self.selection.selected_path
+            notices.append(
+                "<div style='border-left:4px solid #bf8700;background:rgba(191,135,0,0.10);"
+                "padding:0.65rem 0.8rem;margin:0.7rem 0'>"
+                "<strong>Fallback result selected</strong><br>"
+                f"Using {html.escape(source)} as partial evidence; the attempted final "
+                f"snapshot is {html.escape(self.selection.final_snapshot_status)}. "
+                f"Integrity: {html.escape(self.selection.integrity)}."
+                + (
+                    f"<br><code>{html.escape(str(path))}</code>"
+                    if path is not None
+                    else ""
+                )
+                + "</div>"
+            )
+        elif self.selection.reason == "no_complete_snapshot":
+            notices.append(
+                "<div style='border-left:4px solid #bf8700;background:rgba(191,135,0,0.10);"
+                "padding:0.65rem 0.8rem;margin:0.7rem 0'>"
+                "<strong>No complete result snapshot is available.</strong></div>"
+            )
+        return "".join(notices)
 
     def _convergence_items(self) -> list[Any]:
         if len(self.passes) < 2:
@@ -722,8 +825,7 @@ class PhysicsQuantitiesReport:
         limit = (
             "all surfaces" if self.ranking_limit is None else str(self.ranking_limit)
         )
-        snapshots = self.snapshots
-        latest_source = snapshots[-1].source if snapshots else "unavailable"
+        latest_source = self.trust.selection.selected_source or "unavailable"
         return (
             "<section><h3>Physics Quantities</h3>"
             "<p style='opacity:0.75;margin-top:0'>Latest-readable individual-surface "
@@ -731,7 +833,9 @@ class PhysicsQuantitiesReport:
             "and numerical evidence. Modes and excitations remain separate. "
             f"Run state: {html.escape(state)}; latest readable snapshot: "
             f"{html.escape(latest_source)}; ranking limit: "
-            f"{html.escape(limit)}. Complete bound records remain available through "
+            f"{html.escape(limit)}; snapshot integrity: "
+            f"{html.escape(self.trust.selection.integrity)}. Complete bound records "
+            "remain available through "
             "<code>snapshots</code>.</p></section>"
         )
 
@@ -863,19 +967,32 @@ def _build_trust_report(
     receipt = _read_optional_json(
         root / "metadata" / "palace_returned_run_receipt.json"
     )
+    receipt_paths = _validate_inspection_receipt(root, handoff, receipt)
     refinement = _refinement(config)
     surface_bindings = _read_surface_bindings(
         resolved.provenance.index_map
         if resolved is not None
         else _read_optional_json(root / "metadata" / "palace_index_map.json")
     )
-    passes = _collect_amr_passes(root, problem, surface_bindings)
-    latest = passes[-1] if passes else None
-    parent_complete = latest is not None and latest.source == "final"
+    collected = _collect_amr_passes(root, problem, surface_bindings)
+    passes = collected.passes
+    receipt_status = receipt.get("status") if receipt is not None else None
+    selection = _result_selection(
+        root=root,
+        problem=problem,
+        collected=collected,
+        receipt_paths=receipt_paths,
+    )
+    parent_complete = (
+        receipt_status == "completed"
+        and collected.final_snapshot_status == "readable"
+        and selection.selected_source == "final"
+    )
     completeness: Literal["complete", "partial"] = (
         "complete" if parent_complete else "partial"
     )
-    latest_source = latest.source if latest is not None else "none"
+    latest_source = selection.selected_source or "none"
+    failure = _failure_diagnosis(root, receipt, receipt_paths)
     palace_payload = _latest_palace_json(passes, resolved)
     durations = _durations(palace_payload)
     cost = _cost_cards(palace_payload, resolved)
@@ -919,6 +1036,8 @@ def _build_trust_report(
         profile=profile,
         completeness=completeness,
         latest_source=latest_source,
+        selection=selection,
+        failure=failure,
         identity=identity,
         passes=tuple(passes),
         amr_tolerance=refinement.get("Tol"),
@@ -930,21 +1049,270 @@ def _build_trust_report(
     )
 
 
+def _validate_inspection_receipt(
+    root: Path,
+    handoff: dict[str, Any],
+    receipt: dict[str, Any] | None,
+) -> frozenset[str]:
+    if receipt is None:
+        return frozenset()
+    for field in ("handoff_id", "route", "problem"):
+        value = receipt.get(field)
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"returned receipt {field} must be a non-empty string.")
+        if field in handoff and handoff.get(field) != value:
+            raise ValueError(
+                f"returned receipt {field} does not match handoff metadata."
+            )
+    if not isinstance(receipt.get("status"), str) or not receipt["status"]:
+        raise ValueError("returned receipt status must be a non-empty string.")
+    for field in ("exit_code", "solver_exit_code", "tee_exit_code"):
+        _receipt_exit_code(receipt, field)
+
+    input_entries = receipt.get("input_hashes")
+    handoff_entries = handoff.get("hashes")
+    if not isinstance(input_entries, list) or not isinstance(handoff_entries, list):
+        raise TypeError("returned receipt and handoff input hashes must be lists.")
+    receipt_inputs = _extract_hash_map(input_entries)
+    handoff_inputs = _extract_hash_map(handoff_entries)
+    if receipt_inputs != handoff_inputs:
+        raise ValueError("returned receipt input hashes do not match handoff metadata.")
+    for relative, expected in receipt_inputs.items():
+        observed = _compute_hash_entry(_confined_path(root, relative))
+        if observed != expected:
+            raise ValueError(f"returned receipt input hash mismatch for {relative}.")
+
+    output_entries = receipt.get("output_files")
+    if not isinstance(output_entries, list):
+        raise TypeError("returned receipt output_files must be a list.")
+    verified: set[str] = set()
+    seen: set[str] = set()
+    for index, entry in enumerate(output_entries):
+        relative = _verify_receipt_file_record(root, entry, f"output_files[{index}]")
+        if relative in seen:
+            raise ValueError(f"returned receipt contains duplicate path {relative!r}.")
+        seen.add(relative)
+        if entry["present"] is True:
+            verified.add(relative)
+
+    log = receipt.get("log")
+    if not isinstance(log, dict):
+        raise TypeError("returned receipt log must be a mapping.")
+    log_relative = _verify_receipt_file_record(root, log, "log")
+    if log["present"] is True:
+        verified.add(log_relative)
+    return frozenset(verified)
+
+
+def _verify_receipt_file_record(root: Path, entry: Any, label: str) -> str:
+    if not isinstance(entry, dict):
+        raise TypeError(f"returned receipt {label} must be a mapping.")
+    relative = entry.get("path")
+    present = entry.get("present")
+    if not isinstance(relative, str) or not relative:
+        raise ValueError(f"returned receipt {label} path must be non-empty.")
+    if not isinstance(present, bool):
+        raise TypeError(f"returned receipt {label} present must be bool.")
+    observed = _compute_hash_entry(_confined_path(root, relative))
+    if present:
+        size = entry.get("bytes")
+        sha256 = entry.get("sha256")
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            raise ValueError(f"returned receipt {label} bytes must be non-negative.")
+        if not isinstance(sha256, str) or len(sha256) != 64:
+            raise ValueError(f"returned receipt {label} sha256 must have 64 digits.")
+        if observed != (size, sha256):
+            raise ValueError(f"returned receipt output hash mismatch for {relative}.")
+    elif entry.get("bytes") is not None or entry.get("sha256") is not None:
+        raise ValueError(f"returned receipt missing {label} must not carry a hash.")
+    elif observed != (None, None):
+        raise ValueError(f"returned receipt missing output now exists: {relative}.")
+    return relative
+
+
+def _receipt_exit_code(receipt: dict[str, Any], field: str) -> int:
+    value = receipt.get(field)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"returned receipt {field} must be an integer.")
+    return value
+
+
+def _result_selection(
+    *,
+    root: Path,
+    problem: str,
+    collected: _CollectedSnapshots,
+    receipt_paths: frozenset[str],
+) -> PalaceResultSelection:
+    if not collected.passes:
+        return PalaceResultSelection(
+            final_snapshot_status=collected.final_snapshot_status,
+            selected_source=None,
+            selected_path=None,
+            selected_pass_index=None,
+            reason="no_complete_snapshot",
+            integrity="unavailable",
+        )
+    selected = collected.passes[-1]
+    reason = (
+        "final_snapshot"
+        if selected.source == "final"
+        else "latest_complete_iteration_after_failed_attempt"
+    )
+    artifact_paths = _snapshot_artifact_paths(selected.path, problem)
+    relative_paths = {path.relative_to(root).as_posix() for path in artifact_paths}
+    integrity: Literal["receipt_bound", "observed_unsealed"] = (
+        "receipt_bound"
+        if relative_paths and relative_paths.issubset(receipt_paths)
+        else "observed_unsealed"
+    )
+    return PalaceResultSelection(
+        final_snapshot_status=collected.final_snapshot_status,
+        selected_source=selected.source,
+        selected_path=selected.path.relative_to(root),
+        selected_pass_index=selected.pass_index,
+        reason=reason,
+        integrity=integrity,
+    )
+
+
+def _snapshot_artifact_paths(path: Path, problem: str) -> tuple[Path, ...]:
+    names = (
+        (
+            "eig.csv",
+            "port-EPR.csv",
+            "surface-Q.csv",
+            "error-indicators.csv",
+            "palace.json",
+        )
+        if problem == "Eigenmode"
+        else ("terminal-C.csv", "surface-Q.csv", "error-indicators.csv", "palace.json")
+    )
+    return tuple(candidate for name in names if (candidate := path / name).is_file())
+
+
+def _failure_diagnosis(
+    root: Path,
+    receipt: dict[str, Any] | None,
+    receipt_paths: frozenset[str],
+) -> PalaceFailureDiagnosis | None:
+    if receipt is None or receipt.get("status") != "failed":
+        return None
+    exit_code = _receipt_exit_code(receipt, "exit_code")
+    solver_exit = _receipt_exit_code(receipt, "solver_exit_code")
+    tee_exit = _receipt_exit_code(receipt, "tee_exit_code")
+    evidence: list[dict[str, Any]] = [
+        {
+            "source": "returned_receipt",
+            "exit_code": exit_code,
+            "solver_exit_code": solver_exit,
+            "tee_exit_code": tee_exit,
+        }
+    ]
+    oom_evidence = _slurm_oom_evidence(root, receipt, receipt_paths)
+    if oom_evidence is not None:
+        evidence.append(oom_evidence)
+        category = "out_of_memory"
+        summary = "Slurm reported an out-of-memory event."
+    elif solver_exit == 137 or exit_code == 137:
+        category = "signal_killed"
+        summary = (
+            "The solver was killed with exit 137; out of memory is possible but "
+            "not confirmed by scheduler evidence."
+        )
+    elif solver_exit != 0:
+        category = "solver_error"
+        summary = f"The Palace solver exited with status {solver_exit}."
+    elif tee_exit != 0:
+        category = "output_capture_error"
+        summary = f"Solver output capture exited with status {tee_exit}."
+    else:
+        category = "unknown"
+        summary = "The returned receipt reports failure without a classified cause."
+    return PalaceFailureDiagnosis(
+        category=category,
+        exit_code=exit_code,
+        solver_exit_code=solver_exit,
+        tee_exit_code=tee_exit,
+        summary=summary,
+        evidence=tuple(evidence),
+    )
+
+
+def _slurm_oom_evidence(
+    root: Path,
+    receipt: dict[str, Any],
+    receipt_paths: frozenset[str],
+) -> dict[str, Any] | None:
+    log = receipt.get("log")
+    if not isinstance(log, dict):
+        return None
+    relative = log.get("path")
+    if not isinstance(relative, str) or relative not in receipt_paths:
+        return None
+    path = _confined_path(root, relative)
+    with path.open(encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            lowered = line.lower()
+            if "slurm" not in lowered:
+                continue
+            if (
+                "oom_kill event" in lowered
+                or "oom-kill event" in lowered
+                or "out_of_memory" in lowered
+            ):
+                return {
+                    "source": "hash_verified_log",
+                    "path": relative,
+                    "marker": "slurm_out_of_memory",
+                    "sha256": log.get("sha256"),
+                }
+    return None
+
+
+def _selection_payload(selection: PalaceResultSelection) -> dict[str, Any]:
+    return {
+        "final_snapshot_status": selection.final_snapshot_status,
+        "selected_source": selection.selected_source,
+        "selected_path": (
+            None if selection.selected_path is None else str(selection.selected_path)
+        ),
+        "selected_pass_index": selection.selected_pass_index,
+        "reason": selection.reason,
+        "integrity": selection.integrity,
+    }
+
+
+def _failure_payload(
+    failure: PalaceFailureDiagnosis | None,
+) -> dict[str, Any] | None:
+    if failure is None:
+        return None
+    return {
+        "category": failure.category,
+        "exit_code": failure.exit_code,
+        "solver_exit_code": failure.solver_exit_code,
+        "tee_exit_code": failure.tee_exit_code,
+        "summary": failure.summary,
+        "evidence": failure.evidence,
+    }
+
+
 def _collect_amr_passes(
     root: Path,
     problem: str,
     surface_bindings: tuple[dict[str, Any], ...] | None,
-) -> list[AmrPassSnapshot]:
+) -> _CollectedSnapshots:
     results = root / "results" / "palace"
     if not results.is_dir():
-        return []
+        return _CollectedSnapshots((), "missing")
     iteration_dirs = []
     for child in results.iterdir():
         match = _ITERATION_DIR.match(child.name)
         if match and child.is_dir():
             iteration_dirs.append((int(match.group(1)), child))
     iteration_dirs.sort()
-    snapshots = []
+    snapshots: list[AmrPassSnapshot] = []
     for index, path in iteration_dirs:
         snapshot = _load_optional_snapshot(
             pass_index=index - 1,
@@ -956,7 +1324,7 @@ def _collect_amr_passes(
         if snapshot is not None:
             snapshots.append(snapshot)
     if not _parent_has_physics(results, problem):
-        return snapshots
+        return _CollectedSnapshots(tuple(snapshots), "missing")
     parent = _load_optional_snapshot(
         pass_index=max((index for index, _path in iteration_dirs), default=0),
         source="final",
@@ -965,11 +1333,11 @@ def _collect_amr_passes(
         surface_bindings=surface_bindings,
     )
     if parent is None:
-        return snapshots
+        return _CollectedSnapshots(tuple(snapshots), "unreadable")
     if snapshots and _same_physics(snapshots[-1], parent):
         snapshots[-1] = replace(parent, pass_index=snapshots[-1].pass_index)
-        return snapshots
-    return [*snapshots, parent]
+        return _CollectedSnapshots(tuple(snapshots), "readable")
+    return _CollectedSnapshots((*snapshots, parent), "readable")
 
 
 def _load_optional_snapshot(
@@ -1950,6 +2318,8 @@ def _fmt_mb(value: Any) -> str:
 
 __all__ = [
     "AmrPassSnapshot",
+    "PalaceFailureDiagnosis",
+    "PalaceResultSelection",
     "PalaceTrustReport",
     "PassCostRecord",
     "PhysicsQuantitiesReport",

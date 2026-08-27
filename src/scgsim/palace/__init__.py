@@ -8,6 +8,8 @@ state without silently changing behavior.
 from .eigenmode import EigenmodeSim
 from .electrostatic import ElectrostaticSim
 from .report import (
+    PalaceFailureDiagnosis,
+    PalaceResultSelection,
     PalaceTrustReport,
     PassCostRecord,
     PhysicsQuantitiesReport,
@@ -27,8 +29,10 @@ __all__ = [
     "EigenmodeSim",
     "ElectrostaticSim",
     "PalaceCost",
+    "PalaceFailureDiagnosis",
     "PalacePerformance",
     "PalaceProvenance",
+    "PalaceResultSelection",
     "PalaceReturnedReceipt",
     "PalaceTrustReport",
     "ParsedTable",

@@ -67,6 +67,31 @@ def _required_output_paths(problem: str, log_path: str | None) -> list[str]:
     return paths
 
 
+def _iteration_output_paths(root: Path, problem: str) -> list[str]:
+    families = _REQUIRED_OUTPUT_FAMILIES.get(problem)
+    if not families:
+        raise ValueError("unsupported problem")
+    results = root / "results" / "palace"
+    if not results.is_dir():
+        return []
+    paths: list[str] = []
+    for directory in sorted(
+        (
+            path
+            for path in results.iterdir()
+            if path.is_dir()
+            and path.name.startswith("iteration")
+            and path.name.removeprefix("iteration").isdigit()
+        ),
+        key=lambda path: int(path.name.removeprefix("iteration")),
+    ):
+        for name in (*families, "palace"):
+            path = directory / f"{name}.{'json' if name == 'palace' else 'csv'}"
+            if path.is_file():
+                paths.append(path.relative_to(root).as_posix())
+    return paths
+
+
 def _record_for_path(run_dir: Path, relative_path: str) -> dict[str, Any]:
     path = _confined_path(run_dir, relative_path)
     if not path.is_file():
@@ -147,7 +172,10 @@ def main() -> int:
             route=route, problem=problem, input_hashes=input_hashes
         )
 
-    output_paths = _required_output_paths(problem, args.log_path)
+    output_paths = [
+        *_required_output_paths(problem, args.log_path),
+        *_iteration_output_paths(root, problem),
+    ]
     output_records = [_record_for_path(root, path) for path in output_paths]
     log_record = _record_for_path(root, args.log_path)
     completed_outputs = all(record["present"] is True for record in output_records)

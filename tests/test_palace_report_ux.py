@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 import math
@@ -18,6 +19,7 @@ from scgsim.palace import (
     PalaceCost,
     PalacePerformance,
     PalaceProvenance,
+    PalaceResultSelection,
     PalaceReturnedReceipt,
     PalaceTrustReport,
     ParsedTable,
@@ -31,6 +33,7 @@ from scgsim.palace.report import (
     SurfaceEprSeriesSnapshot,
     _read_surface_epr,
 )
+from scgsim.palace.returned_receipt import _iteration_output_paths
 
 
 class _Html:
@@ -82,6 +85,9 @@ def _surface_snapshot(pass_index: int, source: str) -> SurfaceEprSeriesSnapshot:
 def _trust_report(
     *, completeness: str = "complete", latest_source: str = "final"
 ) -> PalaceTrustReport:
+    sources = (
+        ("iteration01", "final") if completeness == "complete" else ("iteration01",)
+    )
     passes = tuple(
         AmrPassSnapshot(
             pass_index=index,
@@ -99,7 +105,21 @@ def _trust_report(
             elapsed_total_s=1.0 + index,
             peak_node_memory_mb=10.0,
         )
-        for index, source in enumerate(("iteration01", "final"))
+        for index, source in enumerate(sources)
+    )
+    selection = PalaceResultSelection(
+        final_snapshot_status="readable" if completeness == "complete" else "missing",
+        selected_source=latest_source,
+        selected_path=Path(latest_source),
+        selected_pass_index=passes[-1].pass_index,
+        reason=(
+            "final_snapshot"
+            if completeness == "complete"
+            else "latest_complete_iteration_after_failed_attempt"
+        ),
+        integrity="receipt_bound"
+        if completeness == "complete"
+        else "observed_unsealed",
     )
     return PalaceTrustReport(
         run_dir=Path("run"),
@@ -108,6 +128,8 @@ def _trust_report(
         profile="ltlab-slurm",
         completeness=completeness,
         latest_source=latest_source,
+        selection=selection,
+        failure=None,
         identity={},
         passes=passes,
         amr_tolerance=0.02,
@@ -116,6 +138,95 @@ def _trust_report(
         cost={},
         provenance={},
     )
+
+
+def _file_record(root: Path, relative: str) -> dict[str, object]:
+    path = root / relative
+    if not path.is_file():
+        return {"path": relative, "bytes": None, "sha256": None, "present": False}
+    return {
+        "path": relative,
+        "bytes": path.stat().st_size,
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "present": True,
+    }
+
+
+def _failed_eigenmode_run(
+    root: Path,
+    *,
+    solver_exit_code: int = 137,
+    log_text: str = "solver killed\n",
+    include_iteration: bool = True,
+    seal_iteration: bool = False,
+) -> tuple[str, dict[str, object]]:
+    metadata = root / "metadata"
+    results = root / "results" / "palace"
+    logs = root / "logs"
+    metadata.mkdir(parents=True)
+    results.mkdir(parents=True)
+    logs.mkdir()
+    (root / "config.json").write_text("{}", encoding="utf-8")
+    (results / "eig.csv").write_text("m,Re{f} (GHz)\n", encoding="utf-8")
+    (logs / "palace-1.log").write_text(log_text, encoding="utf-8")
+    if include_iteration:
+        iteration = results / "iteration07"
+        iteration.mkdir()
+        (iteration / "eig.csv").write_text(
+            "m,Re{f} (GHz)\n1,5.0\n",
+            encoding="utf-8",
+        )
+
+    handoff_id = "generic-handoff-id"
+    input_hashes = [_file_record(root, "config.json")]
+    (metadata / "palace_handoff_metadata.json").write_text(
+        json.dumps(
+            {
+                "problem": "Eigenmode",
+                "route": "A",
+                "profile": "direct-local",
+                "handoff_id": handoff_id,
+                "status": "prepared",
+                "hashes": input_hashes,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output_paths = [
+        "results/palace/eig.csv",
+        "results/palace/port-EPR.csv",
+        "results/palace/port-I.csv",
+        "results/palace/port-V.csv",
+        "results/palace/domain-E.csv",
+        "results/palace/surface-Q.csv",
+        "results/palace/error-indicators.csv",
+        "results/palace/palace.json",
+        "logs/palace-1.log",
+    ]
+    if seal_iteration:
+        output_paths.append("results/palace/iteration07/eig.csv")
+    output_files = [_file_record(root, relative) for relative in output_paths]
+    receipt: dict[str, object] = {
+        "schema": "palace-returned-run-receipt.v1",
+        "schema_version": 1,
+        "handoff_id": handoff_id,
+        "route": "A",
+        "problem": "Eigenmode",
+        "status": "failed",
+        "exit_code": solver_exit_code,
+        "solver_exit_code": solver_exit_code,
+        "tee_exit_code": 0,
+        "identity_verified": False,
+        "input_hashes": input_hashes,
+        "output_files": output_files,
+        "log": _file_record(root, "logs/palace-1.log"),
+    }
+    (metadata / "palace_returned_run_receipt.json").write_text(
+        json.dumps(receipt) + "\n",
+        encoding="utf-8",
+    )
+    return handoff_id, receipt
 
 
 def _resolved_result() -> ResolvedPalaceResult:
@@ -319,79 +430,123 @@ class PalaceReportUxTests(unittest.TestCase):
     def test_failed_parent_keeps_last_complete_iteration_and_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            metadata = root / "metadata"
-            results = root / "results" / "palace"
-            iteration = results / "iteration07"
-            metadata.mkdir()
-            iteration.mkdir(parents=True)
-            handoff_id = "generic-handoff-id"
-            input_hashes = [{"path": "config.json", "bytes": 2, "sha256": "a" * 64}]
-            (metadata / "palace_handoff_metadata.json").write_text(
-                json.dumps(
-                    {
-                        "problem": "Eigenmode",
-                        "route": "A",
-                        "profile": "direct-local",
-                        "handoff_id": handoff_id,
-                        "hashes": input_hashes,
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            output_files = [
-                {
-                    "path": f"results/palace/output-{index}.csv",
-                    "bytes": index,
-                    "sha256": f"{index:x}" * 64,
-                    "present": True,
-                }
-                for index in range(1, 10)
-            ]
-            receipt = {
-                "schema": "palace-returned-run-receipt.v1",
-                "schema_version": 1,
-                "handoff_id": handoff_id,
-                "route": "A",
-                "problem": "Eigenmode",
-                "status": "failed",
-                "exit_code": 137,
-                "solver_exit_code": 137,
-                "tee_exit_code": 0,
-                "identity_verified": False,
-                "input_hashes": input_hashes,
-                "output_files": output_files,
-            }
-            (metadata / "palace_returned_run_receipt.json").write_text(
-                json.dumps(receipt) + "\n",
-                encoding="utf-8",
-            )
-            (iteration / "eig.csv").write_text(
-                "m,Re{f} (GHz)\n1,5.0\n",
-                encoding="utf-8",
-            )
-            (results / "eig.csv").write_text(
-                "m,Re{f} (GHz)\n",
-                encoding="utf-8",
-            )
-
+            handoff_id, receipt = _failed_eigenmode_run(root)
             trust = inspect_run_trustworthiness(root)
 
         self.assertEqual(trust.completeness, "partial")
         self.assertEqual(trust.latest_source, "iteration07")
+        self.assertEqual(trust.selection.final_snapshot_status, "unreadable")
+        self.assertEqual(
+            trust.selection.reason,
+            "latest_complete_iteration_after_failed_attempt",
+        )
+        self.assertEqual(trust.selection.integrity, "observed_unsealed")
+        self.assertEqual(trust.selection.selected_pass_index, 6)
+        self.assertEqual(
+            trust.selection.selected_path,
+            Path("results/palace/iteration07"),
+        )
+        self.assertFalse(trust.selection.selected_path.is_absolute())
+        self.assertIsNotNone(trust.failure)
+        self.assertEqual(trust.failure.category, "signal_killed")
         self.assertEqual(len(trust.passes), 1)
         self.assertEqual(trust.passes[0].source, "iteration07")
-        self.assertEqual(trust.passes[0].path, iteration)
+        self.assertEqual(trust.passes[0].path.name, "iteration07")
         self.assertEqual(trust.passes[0].frequencies_ghz, (5.0,))
         self.assertEqual(trust.identity["handoff_id"], handoff_id)
         self.assertEqual(trust.identity["receipt"], "failed / exit 137")
-        self.assertEqual(trust.provenance["hashes"], input_hashes)
         self.assertEqual(trust.provenance["returned_receipt"], receipt)
+        identity_html = trust._identity_html()
+        self.assertIn("Run failed", identity_html)
+        self.assertIn("Fallback result selected", identity_html)
+        self.assertNotIn(str(root), identity_html)
         self.assertIsInstance(trust.show_run_trustworthiness(), PalaceTrustReport)
         self.assertIsInstance(trust.show_physics_quantities(), PhysicsQuantitiesReport)
+        benchmark = trust.show_simulation_benchmark()["performance_metadata"]
+        self.assertEqual(benchmark["completeness"], "partial")
+        self.assertEqual(benchmark["selection"]["selected_source"], "iteration07")
         self.assertEqual(
-            trust.show_simulation_benchmark()["performance_metadata"]["completeness"],
-            "partial",
+            benchmark["selection"]["selected_path"],
+            "results/palace/iteration07",
+        )
+        self.assertNotIn(str(root), json.dumps(benchmark))
+        self.assertEqual(benchmark["failure"]["category"], "signal_killed")
+        benchmark_surface = trust.show_simulation_benchmark()
+        self.assertEqual(
+            benchmark_surface["selected_snapshot"]["source"], "iteration07"
+        )
+        self.assertIn("attempted_run", benchmark_surface)
+
+    def test_hash_verified_slurm_oom_is_classified(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            _failed_eigenmode_run(
+                root,
+                log_text=(
+                    "slurmstepd: error: Detected 1 oom_kill event in StepId=1.0\n"
+                ),
+            )
+            trust = inspect_run_trustworthiness(root)
+
+        self.assertIsNotNone(trust.failure)
+        self.assertEqual(trust.failure.category, "out_of_memory")
+        self.assertEqual(trust.failure.evidence[-1]["marker"], "slurm_out_of_memory")
+
+    def test_non_oom_solver_failure_uses_the_same_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            _failed_eigenmode_run(root, solver_exit_code=2)
+            trust = inspect_run_trustworthiness(root)
+
+        self.assertEqual(trust.selection.selected_source, "iteration07")
+        self.assertIsNotNone(trust.failure)
+        self.assertEqual(trust.failure.category, "solver_error")
+
+    def test_no_complete_iteration_keeps_reports_available(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            _failed_eigenmode_run(root, include_iteration=False)
+            trust = inspect_run_trustworthiness(root)
+
+        self.assertEqual(trust.selection.reason, "no_complete_snapshot")
+        self.assertEqual(trust.selection.integrity, "unavailable")
+        self.assertEqual(trust.latest_source, "none")
+        self.assertEqual(trust.show_physics_quantities().snapshots, ())
+        with _captured_notebook_display() as displayed:
+            self.assertIsNone(trust.show_all_results())
+        self.assertEqual(len(displayed), 3)
+
+    def test_sealed_iteration_is_receipt_bound_and_tamper_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            _failed_eigenmode_run(root, seal_iteration=True)
+            trust = inspect_run_trustworthiness(root)
+            self.assertEqual(trust.selection.integrity, "receipt_bound")
+
+            (root / "results/palace/iteration07/eig.csv").write_text(
+                "m,Re{f} (GHz)\n1,6.0\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "output hash mismatch"):
+                inspect_run_trustworthiness(root)
+
+    def test_recorder_collects_report_relevant_iteration_files(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            iteration = root / "results/palace/iteration07"
+            iteration.mkdir(parents=True)
+            (iteration / "eig.csv").write_text("m,Re{f} (GHz)\n1,5\n")
+            (iteration / "surface-Q.csv").write_text("m,p_surf[1]\n1,0.1\n")
+            (iteration / "ignored.txt").write_text("ignored\n")
+
+            paths = _iteration_output_paths(root, "Eigenmode")
+
+        self.assertEqual(
+            paths,
+            [
+                "results/palace/iteration07/eig.csv",
+                "results/palace/iteration07/surface-Q.csv",
+            ],
         )
 
     def test_zero_loss_tangent_keeps_participation_and_marks_loss_unavailable(
