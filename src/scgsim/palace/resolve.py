@@ -785,6 +785,14 @@ def _validate_route_consistency(
         raise ValueError("mesh manifest schema_version must be integer 1.")
     if _expect_scalar(mesh_manifest, "route", str, fallback="") != route:
         raise ValueError("mesh manifest route does not match resolved route.")
+    thin_film = handoff_metadata.get("route_a_thin_film")
+    if (
+        mesh_manifest.get("route_a_thin_film") != thin_film
+        or run_metadata.get("route_a_thin_film") != thin_film
+    ):
+        raise ValueError(
+            "mesh manifest and run metadata Route-A thin-film identity mismatch."
+        )
 
     run_route = _expect_scalar(run_metadata, "route", str)
     handoff_route = _expect_scalar(handoff_metadata, "route", str)

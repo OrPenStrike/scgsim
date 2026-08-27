@@ -174,7 +174,9 @@ def _route_a_thin_film_facts(stack: Mapping[str, Any]) -> dict[str, Any]:
             record.get("host_void_semantic_id"),
             f"{semantic_id} host_void_semantic_id",
         )
-        z_min, z_max = _geometry_z_range(record.get("geometry"), semantic_id)
+        z_min, z_max = _geometry_z_range(
+            _record_geometry(record, semantic_id), semantic_id
+        )
         if z_max <= z_min:
             raise ValueError(
                 f"{semantic_id} physical face-metal thickness must be > 0."
@@ -200,7 +202,7 @@ def _route_a_thin_film_facts(stack: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError(f"Route A host solution {host_id!r} is missing.")
     if not isinstance(host, Mapping):
         raise TypeError(f"Route A host solution {host_id!r} must be a mapping.")
-    host_min, host_max = _geometry_z_range(host.get("geometry"), host_id)
+    host_min, host_max = _geometry_z_range(_record_geometry(host, host_id), host_id)
     if not _same_z(host_min, lower[0]) or not _same_z(host_max, upper[1]):
         raise ValueError(
             "Route A host solution boundaries must equal the two substrate faces."
@@ -275,7 +277,9 @@ def _adjacent_dielectric_region(
         material = materials.get(region.get("material_id"))
         if not isinstance(material, Mapping) or material.get("kind") != "dielectric":
             continue
-        z_min, z_max = _geometry_z_range(region.get("geometry"), str(semantic_id))
+        z_min, z_max = _geometry_z_range(
+            _record_geometry(region, str(semantic_id)), str(semantic_id)
+        )
         boundary = z_max if side == "lower" else z_min
         if _same_z(boundary, z_um):
             matches.append(
@@ -297,7 +301,7 @@ def _map_stack_z_ranges(stack: dict[str, Any], facts: Mapping[str, Any]) -> None
         records = stack.get(section)
         if isinstance(records, Mapping):
             rewritten_records: dict[Any, Any] | list[Any] = dict(records)
-        elif isinstance(records, list):
+        elif isinstance(records, Sequence) and not isinstance(records, str | bytes):
             rewritten_records = list(records)
         else:
             raise TypeError(f"stack {section} must contain structured records.")
@@ -309,16 +313,36 @@ def _map_stack_z_ranges(stack: dict[str, Any], facts: Mapping[str, Any]) -> None
         for key, record in items:
             if not isinstance(record, Mapping):
                 raise TypeError(f"stack {section} record {key!r} must be a mapping.")
+            rewritten = _mapped_geometry(record, facts, str(key))
             geometry = record.get("geometry")
-            if not isinstance(geometry, Mapping):
-                raise TypeError(f"stack {section} record {key!r} requires geometry.")
-            rewritten = dict(record)
-            rewritten["geometry"] = _mapped_geometry(geometry, facts, str(key))
+            if geometry is not None:
+                if not isinstance(geometry, Mapping):
+                    raise TypeError(
+                        f"stack {section} record {key!r} geometry must be a mapping."
+                    )
+                rewritten["geometry"] = _mapped_geometry(geometry, facts, str(key))
             if isinstance(rewritten_records, dict):
                 rewritten_records[key] = rewritten
             else:
                 rewritten_records[int(key)] = rewritten
         stack[section] = rewritten_records
+
+
+def _record_geometry(record: Mapping[str, Any], context: str) -> dict[str, Any]:
+    raw = record.get("geometry")
+    if raw is None:
+        geometry = dict(record)
+    elif isinstance(raw, Mapping):
+        geometry = dict(raw)
+    else:
+        raise TypeError(f"{context} geometry must be a mapping.")
+    for first, second in (("z_min_um", "z_max_um"), ("z_um", "thickness_um")):
+        if first in record or second in record:
+            if first not in record or second not in record:
+                raise ValueError(f"{context} must define both {first} and {second}.")
+            geometry.setdefault(first, record[first])
+            geometry.setdefault(second, record[second])
+    return geometry
 
 
 def _mapped_geometry(

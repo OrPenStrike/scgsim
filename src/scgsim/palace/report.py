@@ -957,6 +957,16 @@ def _build_trust_report(
     if not handoff_path.is_file():
         raise FileNotFoundError(f"required artifact missing: {handoff_path}")
     handoff = _read_json(handoff_path)
+    mesh_manifest = _read_optional_json(root / "metadata" / "mesh_manifest.json")
+    mesh_thin_film = (
+        mesh_manifest.get("route_a_thin_film")
+        if isinstance(mesh_manifest, dict)
+        else None
+    )
+    if mesh_thin_film != handoff.get("route_a_thin_film"):
+        raise ValueError(
+            "mesh manifest and handoff Route-A thin-film identity mismatch."
+        )
     problem = str(handoff.get("problem") or (resolved.problem if resolved else ""))
     route = str(handoff.get("route") or (resolved.route if resolved else ""))
     profile = str(handoff.get("profile") or "")
