@@ -86,6 +86,7 @@ def build_route_mesh(
         raise TypeError("stack must be a mapping after set_stack processing.")
     if route not in {"A", "B"}:
         raise ValueError("route must be either 'A' or 'B'.")
+    thin_film = _route_a_thin_film_provenance(stack, route)
     if (
         refined_mesh_size <= 0
         or max_mesh_size <= 0
@@ -181,6 +182,7 @@ def build_route_mesh(
         groups=groups,
         mesh_name=mesh_path.name,
         route=route,
+        route_a_thin_film=thin_film,
     )
     _write_json(manifest_path, manifest)
     _write_json(
@@ -188,6 +190,7 @@ def build_route_mesh(
         {
             "scgsim_version": _scgsim_version(),
             "route": route,
+            **({"route_a_thin_film": thin_film} if thin_film is not None else {}),
             "source_sha": {
                 "gsim": GSIM_SHA,
                 "scgsim_sgb": SGB_RUNTIME_AUTHORITY,
@@ -1345,6 +1348,7 @@ def _build_mesh_manifest(
     groups: Mapping[str, Mapping[str, Mapping[str, Any]]],
     mesh_name: str,
     route: str,
+    route_a_thin_film: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     """Build a compact manifest from structured groups only."""
     entries: list[dict[str, Any]] = []
@@ -1398,6 +1402,11 @@ def _build_mesh_manifest(
     return {
         "schema_version": 1,
         "route": route,
+        **(
+            {"route_a_thin_film": dict(route_a_thin_film)}
+            if route_a_thin_film is not None
+            else {}
+        ),
         "mesh_file": mesh_name,
         "source": {
             "gsim": GSIM_SHA,
@@ -1409,6 +1418,47 @@ def _build_mesh_manifest(
         },
         "groups": entries,
     }
+
+
+def _route_a_thin_film_provenance(
+    stack: Mapping[str, Any], route: str
+) -> dict[str, Any] | None:
+    metadata = stack.get("metadata", {})
+    if not isinstance(metadata, Mapping):
+        raise TypeError("stack metadata must be a mapping.")
+    value = metadata.get("route_a_thin_film")
+    if route == "B":
+        if value is not None:
+            raise ValueError("Route B stack must not define route_a_thin_film.")
+        return None
+    if value is None:
+        raise ValueError("Route A stack requires route_a_thin_film provenance.")
+    if not isinstance(value, Mapping):
+        raise TypeError("Route A route_a_thin_film provenance must be a mapping.")
+    result = copy.deepcopy(dict(value))
+    variant = result.get("variant")
+    expected_label = {
+        "substrate_face": "A_PRIME",
+        "metal_gap_equivalent": "A",
+    }.get(variant)
+    if (
+        result.get("schema_version") != 1
+        or result.get("display_label") != expected_label
+    ):
+        raise ValueError(
+            "Route A thin-film provenance variant or display label is invalid."
+        )
+    source = result.get("source_stack")
+    if not isinstance(source, Mapping):
+        raise TypeError("Route A thin-film provenance requires source_stack.")
+    sha = source.get("sha256")
+    if (
+        not isinstance(sha, str)
+        or len(sha) != 64
+        or source.get("revision") != f"sha256:{sha}"
+    ):
+        raise ValueError("Route A thin-film source-stack identity is invalid.")
+    return result
 
 
 def _write_component_gds(component: Any, path: Path) -> None:
