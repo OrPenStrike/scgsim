@@ -7,11 +7,12 @@ import html
 import importlib.metadata
 import json
 import math
+import os
 import shutil
 import tempfile
 import textwrap
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -57,14 +58,26 @@ _FIXED_COLORS = {
     "unassigned": "#D3D3D3",
 }
 _OTHER_COLORS = (
-    "#56B4E9",
-    "#F0E442",
-    "#D55E00",
-    "#009E73",
-    "#CC79A7",
-    "#0072B2",
-    "#E69F00",
-    "#000000",
+    "#1F77B4",
+    "#AEC7E8",
+    "#FF7F0E",
+    "#FFBB78",
+    "#2CA02C",
+    "#98DF8A",
+    "#D62728",
+    "#FF9896",
+    "#9467BD",
+    "#C5B0D5",
+    "#8C564B",
+    "#C49C94",
+    "#E377C2",
+    "#F7B6D2",
+    "#7F7F7F",
+    "#C7C7C7",
+    "#BCBD22",
+    "#DBDB8D",
+    "#17BECF",
+    "#9EDAE5",
 )
 _DIMENSIONS = {
     "vertex": 0,
@@ -101,6 +114,32 @@ class _Part:
 class _Mode:
     parts: tuple[_Part, ...] = ()
     unavailable_reason: str | None = None
+
+
+def _with_scene_palette(mode: _Mode) -> _Mode:
+    if mode.unavailable_reason is not None:
+        return mode
+    identities = sorted(
+        {part.semantic_id for part in mode.parts if part.role not in _FIXED_COLORS}
+    )
+    assigned = {
+        identity: _OTHER_COLORS[index % len(_OTHER_COLORS)]
+        for index, identity in enumerate(identities)
+    }
+    return replace(
+        mode,
+        parts=tuple(
+            replace(
+                part,
+                color=(
+                    _FIXED_COLORS[part.role]
+                    if part.role in _FIXED_COLORS
+                    else assigned[part.semantic_id]
+                ),
+            )
+            for part in mode.parts
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -148,7 +187,7 @@ class GeometryPreview:
         self._source_hashes = dict(source_hashes)
         self._source_identity = dict(source_identity or {})
         self._bind_receipt = bind_aedt_receipt
-        self._modes = dict(modes)
+        self._modes = {name: _with_scene_palette(mode) for name, mode in modes.items()}
         if set(self._modes) != set(_MODES):
             raise ValueError("geometry preview requires exactly four named modes")
         self._manifest_path = self.root / "metadata/geometry_preview_manifest.json"
@@ -188,8 +227,8 @@ class GeometryPreview:
                 "interactive geometry preview requires scgsim[visualization] "
                 "inside a Jupyter notebook"
             ) from exc
-
         display(HTML(_interactive_legend(mode, selected.parts)))
+        _configure_headless_rendering()
         plotter = pv.Plotter(notebook=True, off_screen=True)
         plotter.set_background("white")
         _add_parts(plotter, selected.parts)
@@ -197,10 +236,7 @@ class GeometryPreview:
         plotter.view_isometric()
         plotter.reset_camera()
         plotter.reset_camera_clipping_range()
-        return plotter.show(
-            jupyter_backend="html",
-            return_viewer=True,
-        )
+        return plotter.show(jupyter_backend="html", return_viewer=True)
 
     def show_all_previews(self) -> None:
         results = (
@@ -732,6 +768,7 @@ def _render_mode(
             (bounds[4] + bounds[5]) / 2,
         )
         span = max(bounds[1] - bounds[0], bounds[3] - bounds[2], bounds[5] - bounds[4])
+        _configure_headless_rendering()
         for filename, label, direction, clip in _VIEWS:
             plotter = pv.Plotter(off_screen=True, window_size=(1600, 1200))
             plotter.set_background("white")
@@ -907,8 +944,34 @@ def _combined_bounds(parts: tuple[_Part, ...]) -> tuple[float, ...]:
 def _color(identity: str) -> str:
     if identity in _FIXED_COLORS:
         return _FIXED_COLORS[identity]
+    return _OTHER_COLORS[_palette_index(identity)]
+
+
+def _palette_index(identity: str) -> int:
     digest = hashlib.sha256(identity.encode()).digest()
-    return _OTHER_COLORS[int.from_bytes(digest[:2], "big") % len(_OTHER_COLORS)]
+    return int.from_bytes(digest[:2], "big") % len(_OTHER_COLORS)
+
+
+def _configure_headless_rendering() -> None:
+    if os.environ.get("DISPLAY"):
+        return
+    window_name = os.environ.setdefault(
+        "VTK_DEFAULT_OPENGL_WINDOW", "vtkEGLRenderWindow"
+    )
+    if window_name != "vtkEGLRenderWindow":
+        return
+    if "VTK_DEFAULT_EGL_DEVICE_INDEX" in os.environ:
+        return
+    try:
+        from vtkmodules.vtkRenderingOpenGL2 import vtkEGLRenderWindow
+    except ImportError as exc:
+        raise RuntimeError(
+            "headless geometry preview requires VTK EGL support"
+        ) from exc
+    device_count = vtkEGLRenderWindow().GetNumberOfDevices()
+    if device_count < 1:
+        raise RuntimeError("headless geometry preview found no EGL rendering device")
+    os.environ["VTK_DEFAULT_EGL_DEVICE_INDEX"] = str(device_count - 1)
 
 
 def _unit(vector: tuple[float, float, float]) -> tuple[float, float, float]:
