@@ -101,10 +101,18 @@ The fixed semantic colors are:
 | MS_MA | Purple |
 | Unassigned | Light gray |
 
-Other exact semantic IDs receive deterministic colors from a colorblind-safe
-palette. Mapping must come from authoritative solver metadata. Unknown or
-ambiguous mapping fails closed; names, bounding boxes, existing colors, and
-rendered appearance are never semantic inference sources.
+Arbitrary material and terminal semantic IDs use a deterministic 20-color
+palette derived from Matplotlib `tab20`. Within one rendered mode or scene, the
+first 20 distinct arbitrary IDs receive distinct palette entries rather than
+independent hash-modulo assignments. SCGSim stores the public hex values; this
+contract does not require Matplotlib as a runtime dependency.
+
+When a scene contains more than 20 arbitrary IDs, colors may repeat. The legend
+table's exact semantic ID, text label, role, and count remain authoritative;
+color alone never identifies a semantic object. Mapping must come from
+authoritative solver metadata. Unknown or ambiguous mapping fails closed;
+names, bounding boxes, existing colors, and rendered appearance are never
+semantic inference sources.
 
 ## Manifest and evidence boundary
 
