@@ -84,6 +84,7 @@ runtime authority is the in-tree `scgsim.sgb` Core and the current
 `scgsim.palace` implementation.
 
 See [Geometry and SGB Route A/B](../geometry-sgb.qmd),
+[Headless Geometry Preview](../geometry-preview.qmd),
 [Execution Profiles and Local/Manual-HPC Handoff](../execution-profiles.qmd),
 and [Provenance and Data Boundaries](../provenance.qmd) for the surrounding
 contracts.

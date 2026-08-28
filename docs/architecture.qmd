@@ -28,6 +28,7 @@ flowchart LR
 | Component nets, ports, functional regions, and topology selectors | Component designer |
 | Geometry names, topology, Route A/B surfaces | SGB |
 | Palace and AEDT implementation | `scgsim.palace` and `scgsim.aedt` |
+| Solver-bound geometry inspection and preview evidence | `scgsim.visualization` |
 | Run identity, handoff, profiles, receipts | One common SCGSim contract |
 | Physical result meaning | Solver-specific, never flattened into a false common quantity |
 | Report navigation, provenance, cost presentation | SCGSim report/resolver surfaces |
@@ -42,4 +43,6 @@ SC PDK owns the public component examples and calls the shared runtime directly.
 The Palace Electrostatic/Eigenmode and version-locked AEDT runtime families are
 implemented but remain `CONVERGING`, not V1 stable.
 
-See [Folder tree and ownership](ownership.qmd) for repository placement.
+See [Folder tree and ownership](ownership.qmd) for repository placement and
+[Headless Geometry Preview](geometry-preview.qmd) for the static and connected
+Notebook inspection contract.

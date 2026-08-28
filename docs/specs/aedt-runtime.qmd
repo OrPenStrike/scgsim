@@ -73,3 +73,6 @@ This candidate does not provide S-parameter circuit models, automatic solver
 selection, arbitrary legacy recipe ingestion, custom AEDT material definitions,
 or compatibility fallbacks for old private runtimes. Those are independent
 future scopes.
+
+See [Headless Geometry Preview](../geometry-preview.qmd) for the separate
+off-screen inspection contract and the AEDT modes that may be unavailable.

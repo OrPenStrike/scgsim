@@ -54,6 +54,8 @@ website:
           href: docs/architecture.qmd
         - text: "Geometry and SGB Route A/B"
           href: docs/geometry-sgb.qmd
+        - text: "Headless geometry preview"
+          href: docs/geometry-preview.qmd
         - text: "Execution profiles and handoff"
           href: docs/execution-profiles.qmd
         - text: "Unified report model"

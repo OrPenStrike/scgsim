@@ -1,0 +1,116 @@
+---
+title: "Headless Geometry Preview"
+---
+
+::: {.callout-note title="CONVERGING local candidate"}
+The public V1 preview runtime now exists as a local `CONVERGING` candidate.
+Public Palace and AEDT 2024.2 non-graphical previews have been produced for
+Human visual review. This does not make the scope Human-accepted, stable, or
+delivered. Durable stabilization tests and PR delivery remain pending that
+Human review and acceptance.
+:::
+
+## Purpose and ownership
+
+SCGSim provides two views of the same solver-bound semantic scene. A connected
+Notebook viewer supports interactive rotation, pan, zoom, and camera reset.
+Deterministic headless contact sheets remain the portable, hash-bound review
+artifact. Neither surface redefines PDK or component semantics, solver
+geometry, run status, or scientific evidence.
+
+Palace previews read a Palace `.msh` file through `meshio` and render with
+PyVista off-screen. Their authority is the mesh tags together with the mesh
+manifest and the config/index mapping. AEDT previews use PyAEDT 1.3.0 in
+non-graphical mode: assignments and identity come from native readback, and
+each native object is exported as OBJ before off-screen rendering. Inspecting a
+raw `.aedt` project requires the caller to select the design explicitly.
+
+## Public surface
+
+| Surface | Contract |
+|---|---|
+| `inspect_palace_geometry(run_dir)` | Bind a Palace run directory and its authoritative mesh metadata. |
+| `inspect_aedt_geometry(source, ...)` | Bind an AEDT source; a raw `.aedt` source requires an explicit design. |
+| `preview.show_materials()` | Render the available material assignments. |
+| `preview.show_boundaries()` | Render the available boundary assignments. |
+| `preview.show_surface_epr()` | Render the available Surface-EPR assignments. |
+| `preview.show_mesh()` | Render the available mesh. |
+| `preview.show_all_previews()` | Invoke Materials, Boundaries, Surface EPR, then Mesh exactly once each, and return `None`. |
+| `preview.explore(mode)` | Display one connected Trame server-rendered scene for `materials`, `boundaries`, `surface_epr`, or `mesh`. |
+
+Unavailable modes are reported explicitly. SCGSim must not infer a missing
+assignment or emit a blank image that looks successful. AEDT Surface-EPR and
+mesh previews may therefore be unavailable even when another AEDT preview mode
+is valid.
+
+## Connected Notebook viewer
+
+`preview.explore(mode)` displays the semantic table above one PyVista scene.
+The geometry stays in the Python kernel and Trame streams rendered frames to
+the Notebook, so large meshes do not need to be serialized into the browser.
+The viewer starts from an isometric camera and supplies native rotation, pan,
+zoom, axes, and camera reset controls. Remote Notebook transport uses the
+Jupyter server proxy supplied by the visualization extra.
+
+The interactive session is ephemeral. It verifies the same bound source hashes
+as the deterministic renderer, but creates no preview artifact and changes no
+receipt, archive, handoff identity, or simulation status. A connected Notebook
+kernel and the `scgsim[visualization]` extra are required.
+
+## Curated views and contact sheet
+
+Every available mode writes 12 fixed light-theme views under
+`previews/geometry/<mode>/`:
+
+- the six axis views `+X`, `-X`, `+Y`, `-Y`, `+Z`, and `-Z`;
+- four diagonal views; and
+- X-center and Y-center visualization clips.
+
+The default tile size is 1600 × 1200 pixels. A contact sheet, approximately
+4800 × 4200 pixels, places a legend table above a 4 × 3 view grid. The legend
+shows each exact semantic ID, display label, semantic role, and object or entity
+count. Distinct semantic IDs are never merged merely because their labels or
+colors match.
+
+The fixed semantic colors are:
+
+| Semantic role | Color |
+|---|---|
+| Ground or PEC | Charcoal |
+| Lumped Port | Magenta |
+| MA | Orange |
+| MS | Green |
+| SA | Blue |
+| MS_MA | Purple |
+| Unassigned | Light gray |
+
+Other exact semantic IDs receive deterministic colors from a colorblind-safe
+palette. Mapping must come from authoritative solver metadata. Unknown or
+ambiguous mapping fails closed; names, bounding boxes, existing colors, and
+rendered appearance are never semantic inference sources.
+
+## Manifest and evidence boundary
+
+`metadata/geometry_preview_manifest.json` records the preview status, selected
+AEDT design where applicable, tool versions, palette, ordered views, and
+produced artifacts. It hashes the bound source, the solver-authoritative part
+of an AEDT receipt, and every produced artifact. An AEDT run receipt adds a
+`geometry_preview` binding for the manifest and artifact hashes; this binding
+does not change simulation status or the receipt authority hash. Raw `.aedt`
+inspection never edits an adjacent run receipt.
+
+Palace previews produced before `prepare_handoff()` are included automatically
+in the existing handoff archive and its member hashes. A later diagnostic
+preview remains a truthful sidecar, unsealed until a later archive operation
+includes and hashes it.
+
+Preview artifacts are excluded from solver and handoff identity. Rendering
+failure is recorded as preview failure or unavailability and never changes a
+simulation's execution, completion, or scientific status.
+
+## V1 exclusions
+
+V1 does not include ParaView, Gmsh with Xvfb, portable interactive HTML, actor
+filters, custom camera definitions, interactive clipping, or a dark rendering
+theme. Portable HTML remains a separate Human decision after review of the
+connected viewer.
