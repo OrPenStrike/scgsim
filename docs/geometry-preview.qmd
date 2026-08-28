@@ -12,7 +12,7 @@ Human review and acceptance.
 
 ## Purpose and ownership
 
-SCGSim provides two views of the same solver-bound semantic scene. A connected
+SCGSim provides two views of the same solver-bound semantic scene. An inline
 Notebook viewer supports interactive rotation, pan, zoom, and camera reset.
 Deterministic headless contact sheets remain the portable, hash-bound review
 artifact. Neither surface redefines PDK or component semantics, solver
@@ -36,26 +36,27 @@ raw `.aedt` project requires the caller to select the design explicitly.
 | `preview.show_surface_epr()` | Render the available Surface-EPR assignments. |
 | `preview.show_mesh()` | Render the available mesh. |
 | `preview.show_all_previews()` | Invoke Materials, Boundaries, Surface EPR, then Mesh exactly once each, and return `None`. |
-| `preview.explore(mode)` | Display one connected Trame server-rendered scene for `materials`, `boundaries`, `surface_epr`, or `mesh`. |
+| `preview.explore(mode)` | Display one self-contained, client-side VTK.js scene for `materials`, `boundaries`, `surface_epr`, or `mesh`. |
 
 Unavailable modes are reported explicitly. SCGSim must not infer a missing
 assignment or emit a blank image that looks successful. AEDT Surface-EPR and
 mesh previews may therefore be unavailable even when another AEDT preview mode
 is valid.
 
-## Connected Notebook viewer
+## Inline Notebook viewer
 
 `preview.explore(mode)` displays the semantic table above one PyVista scene.
-The geometry stays in the Python kernel and Trame streams rendered frames to
-the Notebook, so large meshes do not need to be serialized into the browser.
-The viewer starts from an isometric camera and supplies native rotation, pan,
-zoom, axes, and camera reset controls. Remote Notebook transport uses the
-Jupyter server proxy supplied by the visualization extra.
+PyVista's `jupyter_backend="html"` serializes the scene geometry into the live
+Notebook output, where VTK.js supplies rotation, pan, zoom, axes, and camera
+reset controls. Because no localhost Trame server or `/proxy/<port>/` iframe is
+involved, the viewer works in a VS Code Remote SSH Notebook without sudo, GPU
+device permission, port forwarding, or Jupyter Server Proxy.
 
-The interactive session is ephemeral. It verifies the same bound source hashes
-as the deterministic renderer, but creates no preview artifact and changes no
-receipt, archive, handoff identity, or simulation status. A connected Notebook
-kernel and the `scgsim[visualization]` extra are required.
+The inline widget verifies the same bound source hashes as the deterministic
+renderer, but creates no `.html` sidecar file and changes no receipt, archive,
+handoff identity, or simulation status. It is a live Notebook display, not a
+saved or exported portable HTML artifact. A connected Notebook kernel and the
+`scgsim[visualization]` extra are required.
 
 ## Curated views and contact sheet
 
@@ -113,4 +114,4 @@ simulation's execution, completion, or scientific status.
 V1 does not include ParaView, Gmsh with Xvfb, portable interactive HTML, actor
 filters, custom camera definitions, interactive clipping, or a dark rendering
 theme. Portable HTML remains a separate Human decision after review of the
-connected viewer.
+inline viewer.
