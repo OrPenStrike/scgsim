@@ -169,7 +169,7 @@ class GeometryPreview:
         self,
         mode: Literal["materials", "boundaries", "surface_epr", "mesh"],
     ) -> Any:
-        """Display one interactive semantic scene in a connected notebook."""
+        """Display one inline interactive semantic scene in a notebook."""
         if mode not in _MODES:
             raise ValueError(f"unsupported geometry preview mode: {mode!r}")
         selected = self._modes[mode]
@@ -198,9 +198,8 @@ class GeometryPreview:
         plotter.reset_camera()
         plotter.reset_camera_clipping_range()
         return plotter.show(
-            jupyter_backend="server",
+            jupyter_backend="html",
             return_viewer=True,
-            jupyter_kwargs={"server_proxy_enabled": True},
         )
 
     def show_all_previews(self) -> None:
