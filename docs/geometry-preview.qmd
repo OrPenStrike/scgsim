@@ -58,6 +58,22 @@ handoff identity, or simulation status. It is a live Notebook display, not a
 saved or exported portable HTML artifact. A connected Notebook kernel and the
 `scgsim[visualization]` extra are required.
 
+## Automatic headless display context
+
+Before creating a PyVista plotter, SCGSim leaves an existing `DISPLAY`
+unchanged. If `DISPLAY` is absent and Xvfb is installed, SCGSim starts one
+disposable, user-owned Xvfb with `-displayfd`, assigns its display to the
+current Python kernel, reuses it for later previews, and terminates it when the
+process exits. This path requires no sudo, group membership, GPU-device
+permission, or port forwarding, and it removes the repeated VTK/EGL device
+warnings in a VS Code Remote SSH session.
+
+The display context supplies headless VTK rendering only;
+`jupyter_backend="html"` remains the inline viewer. If Xvfb is unavailable,
+SCGSim leaves VTK's native off-screen selection untouched rather than forcing
+an OSMesa renderer. Starting or omitting Xvfb changes no preview receipt,
+archive, handoff identity, or simulation status.
+
 ## Curated views and contact sheet
 
 Every available mode writes 12 fixed light-theme views under
@@ -111,7 +127,9 @@ simulation's execution, completion, or scientific status.
 
 ## V1 exclusions
 
-V1 does not include ParaView, Gmsh with Xvfb, portable interactive HTML, actor
-filters, custom camera definitions, interactive clipping, or a dark rendering
-theme. Portable HTML remains a separate Human decision after review of the
+V1 does not include ParaView, Gmsh GUI sessions (including running Gmsh under
+Xvfb), portable interactive HTML, actor filters, custom camera definitions,
+interactive clipping, or a dark rendering theme. The automatic user-owned Xvfb
+context above is internal to PyVista/VTK rendering; it does not add a Gmsh GUI
+workflow. Portable HTML remains a separate Human decision after review of the
 inline viewer.
