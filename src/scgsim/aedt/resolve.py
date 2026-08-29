@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from ._hfss_convergence import read_hfss_convergence
-from ._matrix_export import read_q2d_rlgc_matrix
+from ._matrix_export import parse_matrix_export, read_q2d_rlgc_matrix
 from ._q2d_convergence import read_q2d_convergence, read_q3d_convergence
 from .spec import (
     HfssDrivenSpec,
@@ -20,6 +20,16 @@ from .spec import (
     parse_aedt_spec,
 )
 from .util import file_sha256, read_json
+
+_Q3D_REGION_DIRECTIONS = ("+X", "-X", "+Y", "-Y", "+Z", "-Z")
+_Q3D_REGION_SHEET_NAMES = {
+    "+X": ("SCGSimRegionGroundPX", "SCGSimRegionGroundPXThinConductor"),
+    "-X": ("SCGSimRegionGroundNX", "SCGSimRegionGroundNXThinConductor"),
+    "+Y": ("SCGSimRegionGroundPY", "SCGSimRegionGroundPYThinConductor"),
+    "-Y": ("SCGSimRegionGroundNY", "SCGSimRegionGroundNYThinConductor"),
+    "+Z": ("SCGSimRegionGroundPZ", "SCGSimRegionGroundPZThinConductor"),
+    "-Z": ("SCGSimRegionGroundNZ", "SCGSimRegionGroundNZThinConductor"),
+}
 
 
 @dataclass(frozen=True)
@@ -46,6 +56,23 @@ class ResolvedRun:
             return tuple(
                 {key: str(value) for key, value in row.items()} for row in rows
             )
+
+        if self.mode == "q3d":
+            root = self.receipt_path.parent.parent
+            spec = parse_aedt_spec(read_json(root / "aedt_spec.json"), base_dir=root)
+            if not isinstance(spec, Q3dSpec):
+                raise RuntimeError("resolved Q3D result has a non-Q3D spec")
+            if not spec.solve_ac_rl:
+                rows, _ = parse_matrix_export(
+                    self.primary_csv,
+                    "Q3D",
+                    "C",
+                    spec.run_control.frequency_ghz,
+                    {"Capacitance Matrix": "C", "Conductance Matrix": "G"},
+                )
+                return tuple(
+                    {key: str(value) for key, value in row.items()} for row in rows
+                )
 
         with self.primary_csv.open(newline="", encoding="utf-8-sig") as stream:
             return tuple(dict(row) for row in csv.DictReader(stream))
@@ -137,18 +164,24 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
             convergence=receipt["convergence"],
         )
     if mode == "q3d":
-        expected = {
-            project_relative,
-            "results/q3d/c_matrix.csv",
-            "results/q3d/ac_rl_matrix.csv",
-            "results/q3d/matrices.csv",
-        }
+        expected = {project_relative, "results/q3d/c_matrix.csv"}
+        primary = "results/q3d/c_matrix.csv"
+        if spec.solve_ac_rl:
+            expected.update(
+                {"results/q3d/ac_rl_matrix.csv", "results/q3d/matrices.csv"}
+            )
+            primary = "results/q3d/matrices.csv"
+        elif any(
+            _contained(root, relative).exists()
+            for relative in ("results/q3d/ac_rl_matrix.csv", "results/q3d/matrices.csv")
+        ):
+            raise RuntimeError("Q3D capacitance-only run contains AC-RL artifacts")
         if set(outputs) != expected:
             raise RuntimeError("Q3D output manifest is not canonical")
         return ResolvedRun(
             "q3d",
             project,
-            _verified(root, "results/q3d/matrices.csv", outputs),
+            _verified(root, primary, outputs),
             None,
             None,
             receipt_path,
@@ -372,7 +405,9 @@ def _validate_q3d_readback(root: Path, receipt: dict[str, Any], spec: Q3dSpec) -
             or record.get("net_type") != expected.net_type
             or record.get("object_names") != list(expected.object_names)
             or not isinstance(record.get("native_object_ids"), list)
-            or not record["native_object_ids"]
+            or not _positive_unique_ids(
+                record["native_object_ids"], len(expected.object_names)
+            )
         ):
             raise RuntimeError("Q3D native net evidence does not match the spec")
         if expected.net_type == "Signal":
@@ -393,6 +428,12 @@ def _validate_q3d_readback(root: Path, receipt: dict[str, Any], spec: Q3dSpec) -
                     raise RuntimeError("Q3D native terminal evidence is invalid")
         elif "source" in record or "sink" in record:
             raise RuntimeError("Q3D Ground net receipt must not contain terminals")
+    net_object_ids = [
+        object_id for record in nets for object_id in record["native_object_ids"]
+    ]
+    if len(set(net_object_ids)) != len(net_object_ids):
+        raise RuntimeError("Q3D native object IDs must be unique across nets")
+    _validate_q3d_region_ground(receipt, spec, nets)
     expected_setup = {
         "name": spec.run_control.setup_name,
         "native": {
@@ -404,34 +445,307 @@ def _validate_q3d_readback(root: Path, receipt: dict[str, Any], spec: Q3dSpec) -
             ),
             "capacitance_convergence_percent": spec.run_control.convergence_percent,
             "capacitance_percent_refinement": spec.run_control.percent_refinement,
-            "ac_rl_maximum_passes": spec.run_control.maximum_passes,
-            "ac_rl_minimum_passes": spec.run_control.minimum_passes,
-            "ac_rl_minimum_converged_passes": (
-                spec.run_control.minimum_converged_passes
-            ),
-            "ac_rl_convergence_percent": spec.run_control.convergence_percent,
-            "ac_rl_percent_refinement": spec.run_control.percent_refinement,
             "dc_enabled": False,
         },
     }
+    if spec.solve_ac_rl:
+        expected_setup["native"].update(
+            {
+                "ac_rl_maximum_passes": spec.run_control.maximum_passes,
+                "ac_rl_minimum_passes": spec.run_control.minimum_passes,
+                "ac_rl_minimum_converged_passes": (
+                    spec.run_control.minimum_converged_passes
+                ),
+                "ac_rl_convergence_percent": spec.run_control.convergence_percent,
+                "ac_rl_percent_refinement": spec.run_control.percent_refinement,
+            }
+        )
     if receipt.get("setup") != expected_setup:
         raise RuntimeError("Q3D native setup evidence is invalid")
     if receipt.get("convergence") != read_q3d_convergence(root, spec):
         raise RuntimeError("Q3D native convergence evidence is invalid")
     readback = receipt.get("result_readback")
     matrices = readback.get("matrices") if isinstance(readback, dict) else None
+    if spec.solve_ac_rl:
+        if (
+            not isinstance(matrices, dict)
+            or matrices.get("frequency_ghz") != spec.run_control.frequency_ghz
+            or set(matrices.get("native", {})) != {"c", "ac_rl"}
+            or not isinstance(matrices.get("normalized_rows"), int)
+            or matrices["normalized_rows"] <= 0
+        ):
+            raise RuntimeError("Q3D matrix readback is invalid")
+        _validate_normalized_matrices(
+            _contained(root, "results/q3d/matrices.csv"),
+            matrices["normalized_rows"],
+            {"C", "AC RL"},
+        )
+        return
+    rows, summary = parse_matrix_export(
+        _contained(root, "results/q3d/c_matrix.csv"),
+        "Q3D",
+        "C",
+        spec.run_control.frequency_ghz,
+        {"Capacitance Matrix": "C", "Conductance Matrix": "G"},
+    )
+    expected_matrices = {
+        "path": "results/q3d/c_matrix.csv",
+        "frequency_ghz": spec.run_control.frequency_ghz,
+        "native": summary,
+        "primary_rows": len(rows),
+    }
+    if matrices != expected_matrices:
+        raise RuntimeError("Q3D capacitance-only matrix readback is invalid")
+
+
+def _validate_q3d_region_ground(
+    receipt: dict[str, Any], spec: Q3dSpec, nets: list[Any]
+) -> None:
+    region = receipt.get("region")
+    if not isinstance(region, dict):
+        raise TypeError("Q3D receipt has invalid Region evidence")
+    requested_padding = list(spec.region_padding_um)
     if (
-        not isinstance(matrices, dict)
-        or matrices.get("frequency_ghz") != spec.run_control.frequency_ghz
-        or set(matrices.get("native", {})) != {"c", "ac_rl"}
-        or not isinstance(matrices.get("normalized_rows"), int)
-        or matrices["normalized_rows"] <= 0
+        region.get("padding_um") != requested_padding
+        or region.get("requested_padding_um") != requested_padding
     ):
-        raise RuntimeError("Q3D matrix readback is invalid")
-    _validate_normalized_matrices(
-        _contained(root, "results/q3d/matrices.csv"),
-        matrices["normalized_rows"],
-        {"C", "AC RL"},
+        raise RuntimeError("Q3D receipt Region padding does not match the spec")
+    evidence = region.get("grounded_region")
+    if spec.grounded_region_net is None:
+        if evidence is not None:
+            raise RuntimeError("open Q3D Region receipt contains grounding evidence")
+        return
+    if not isinstance(evidence, dict):
+        raise TypeError("grounded Q3D Region receipt lacks evidence")
+    source_id, source_bounds, source_faces = _q3d_region_evidence(
+        evidence.get("source_region")
+    )
+    final_id, final_bounds, _final_faces = _q3d_region_evidence(
+        evidence.get("final_region")
+    )
+    sheets = evidence.get("sheets")
+    if (
+        region.get("native_region_object_id") != final_id
+        or region.get("native_bounding_box_um") != list(final_bounds)
+        or evidence.get("target_net") != spec.grounded_region_net
+        or evidence.get("native_final_region_padding_um") != [0.0] * 6
+        or evidence.get("native_region_object_id") != final_id
+        or evidence.get("native_bounding_box_um") != list(final_bounds)
+        or not _q3d_values_close(list(source_bounds), list(final_bounds))
+        or not isinstance(sheets, list)
+        or len(sheets) != len(_Q3D_REGION_DIRECTIONS)
+    ):
+        raise RuntimeError("grounded Q3D Region receipt is invalid")
+    sheet_ids: list[int] = []
+    thin_boundaries: list[dict[str, Any]] = []
+    source_face_ids: set[int] = set()
+    for direction, record in zip(_Q3D_REGION_DIRECTIONS, sheets, strict=True):
+        if not isinstance(record, dict):
+            raise TypeError("grounded Q3D Region sheet receipt is invalid")
+        sheet_name, boundary_name = _Q3D_REGION_SHEET_NAMES[direction]
+        face_id = record.get("source_face_id")
+        sheet_id = record.get("sheet_object_id")
+        source = source_faces[direction]
+        expected_bounds = _q3d_sheet_bounds(direction, final_bounds)
+        if (
+            record.get("direction") != direction
+            or record.get("source_region_object_id") != source_id
+            or face_id != source["native_face_id"]
+            or face_id in source_face_ids
+            or record.get("source_face_center_um") != source["native_face_center_um"]
+            or record.get("source_face_normal") != source["native_face_normal"]
+            or record.get("sheet_name") != sheet_name
+            or not _positive_unique_ids([sheet_id], 1)
+            or not _q3d_values_close(
+                record.get("sheet_bounding_box_um"), expected_bounds
+            )
+            or record.get("boundary_name") != boundary_name
+            or record.get("native_thin_conductor_object_ids") != [sheet_id]
+        ):
+            raise RuntimeError("grounded Q3D Region sheet receipt is invalid")
+        source_face_ids.add(face_id)
+        sheet_ids.append(sheet_id)
+        thin_boundaries.append(
+            {
+                "name": boundary_name,
+                "bound_type": "ThinConductor",
+                "object_ids": [sheet_id],
+                "material": "pec",
+                "thickness": "1um",
+            }
+        )
+    target_net = next(
+        (record for record in nets if record.get("name") == spec.grounded_region_net),
+        None,
+    )
+    if not isinstance(target_net, dict) or target_net.get("net_type") != "Ground":
+        raise RuntimeError("grounded Q3D Region target net receipt is invalid")
+    original_ids = target_net["native_object_ids"]
+    all_net_ids = {
+        object_id for record in nets for object_id in record["native_object_ids"]
+    }
+    if (
+        not _positive_unique_ids(original_ids, len(target_net["object_names"]))
+        or len(sheet_ids) != 6
+        or len(set(sheet_ids)) != 6
+        or set(sheet_ids) & all_net_ids
+        or final_id in all_net_ids
+        or final_id in sheet_ids
+    ):
+        raise RuntimeError("grounded Q3D Region object IDs are invalid")
+    expected_ids = [*original_ids, *sheet_ids]
+    saved = evidence.get("native_saved_boundaries")
+    if (
+        evidence.get("native_target_net_object_ids") != expected_ids
+        or not isinstance(saved, dict)
+        or saved.get("target")
+        != {
+            "name": spec.grounded_region_net,
+            "bound_type": "GroundNet",
+            "object_ids": expected_ids,
+        }
+        or saved.get("thin_conductors") != thin_boundaries
+    ):
+        raise RuntimeError("grounded Q3D Region native assignment receipt is invalid")
+
+
+def _positive_unique_ids(value: Any, count: int) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) == count
+        and all(
+            isinstance(item, int) and not isinstance(item, bool) and item > 0
+            for item in value
+        )
+        and len(set(value)) == count
+    )
+
+
+def _q3d_region_evidence(
+    value: Any,
+) -> tuple[
+    int, tuple[float, float, float, float, float, float], dict[str, dict[str, Any]]
+]:
+    if not isinstance(value, dict):
+        raise TypeError("Q3D Region evidence is invalid")
+    region_id = value.get("native_object_id")
+    bounds = _q3d_bounds(value.get("native_bounding_box_um"))
+    faces = value.get("faces")
+    if (
+        not isinstance(region_id, int)
+        or isinstance(region_id, bool)
+        or region_id <= 0
+        or not isinstance(faces, list)
+        or len(faces) != len(_Q3D_REGION_DIRECTIONS)
+    ):
+        raise RuntimeError("Q3D Region evidence is invalid")
+    by_direction: dict[str, dict[str, Any]] = {}
+    face_ids: set[int] = set()
+    for direction, record in zip(_Q3D_REGION_DIRECTIONS, faces, strict=True):
+        if (
+            not isinstance(record, dict)
+            or record.get("direction") != direction
+            or not _positive_unique_ids([record.get("native_face_id")], 1)
+            or record["native_face_id"] in face_ids
+            or not _q3d_face_center_matches(
+                direction, record.get("native_face_center_um"), bounds
+            )
+            or not _q3d_face_normal_matches(direction, record.get("native_face_normal"))
+        ):
+            raise RuntimeError("Q3D Region face evidence is invalid")
+        face_ids.add(record["native_face_id"])
+        by_direction[direction] = record
+    return region_id, bounds, by_direction
+
+
+def _q3d_bounds(value: Any) -> tuple[float, float, float, float, float, float]:
+    if not isinstance(value, list) or len(value) != 6:
+        raise RuntimeError("grounded Q3D Region bounds are invalid")
+    try:
+        bounds = tuple(float(item) for item in value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("grounded Q3D Region bounds are invalid") from exc
+    if not all(math.isfinite(item) for item in bounds) or any(
+        bounds[index] >= bounds[index + 3] for index in range(3)
+    ):
+        raise RuntimeError("grounded Q3D Region bounds are invalid")
+    return bounds  # type: ignore[return-value]
+
+
+def _q3d_face_center_matches(
+    direction: str, value: Any, bounds: tuple[float, float, float, float, float, float]
+) -> bool:
+    if not isinstance(value, list) or len(value) != 3:
+        return False
+    try:
+        center = [float(item) for item in value]
+    except (TypeError, ValueError):
+        return False
+    if not all(math.isfinite(item) for item in center):
+        return False
+    x_min, y_min, z_min, x_max, y_max, z_max = bounds
+    expected = {
+        "+X": [x_max, (y_min + y_max) / 2, (z_min + z_max) / 2],
+        "-X": [x_min, (y_min + y_max) / 2, (z_min + z_max) / 2],
+        "+Y": [(x_min + x_max) / 2, y_max, (z_min + z_max) / 2],
+        "-Y": [(x_min + x_max) / 2, y_min, (z_min + z_max) / 2],
+        "+Z": [(x_min + x_max) / 2, (y_min + y_max) / 2, z_max],
+        "-Z": [(x_min + x_max) / 2, (y_min + y_max) / 2, z_min],
+    }[direction]
+    return all(
+        math.isclose(actual, required, rel_tol=0.0, abs_tol=1e-9)
+        for actual, required in zip(center, expected, strict=True)
+    )
+
+
+def _q3d_sheet_bounds(
+    direction: str, bounds: tuple[float, float, float, float, float, float]
+) -> list[float]:
+    x_min, y_min, z_min, x_max, y_max, z_max = bounds
+    return {
+        "+X": [x_max, y_min, z_min, x_max, y_max, z_max],
+        "-X": [x_min, y_min, z_min, x_min, y_max, z_max],
+        "+Y": [x_min, y_max, z_min, x_max, y_max, z_max],
+        "-Y": [x_min, y_min, z_min, x_max, y_min, z_max],
+        "+Z": [x_min, y_min, z_max, x_max, y_max, z_max],
+        "-Z": [x_min, y_min, z_min, x_max, y_max, z_min],
+    }[direction]
+
+
+def _q3d_values_close(value: Any, expected: list[float]) -> bool:
+    if not isinstance(value, list) or len(value) != len(expected):
+        return False
+    try:
+        observed = [float(item) for item in value]
+    except (TypeError, ValueError):
+        return False
+    return all(
+        math.isclose(actual, required, rel_tol=0.0, abs_tol=1e-9)
+        for actual, required in zip(observed, expected, strict=True)
+    )
+
+
+def _q3d_face_normal_matches(direction: str, value: Any) -> bool:
+    if not isinstance(value, list) or len(value) != 3:
+        return False
+    try:
+        normal = [float(item) for item in value]
+    except (TypeError, ValueError):
+        return False
+    if not all(math.isfinite(item) for item in normal):
+        return False
+    axis, sign = {
+        "+X": (0, 1.0),
+        "-X": (0, -1.0),
+        "+Y": (1, 1.0),
+        "-Y": (1, -1.0),
+        "+Z": (2, 1.0),
+        "-Z": (2, -1.0),
+    }[direction]
+    return math.isclose(normal[axis], sign, rel_tol=0.0, abs_tol=1e-9) and all(
+        math.isclose(item, 0.0, rel_tol=0.0, abs_tol=1e-9)
+        for index, item in enumerate(normal)
+        if index != axis
     )
 
 

@@ -26,14 +26,15 @@ def read_q2d_convergence(run_dir: Path, spec: Q2dSpec) -> dict[str, Any]:
 
 def read_q3d_convergence(run_dir: Path, spec: Q3dSpec) -> dict[str, Any]:
     """Parse and bind capacitance/AC-RL convergence from AEDT 2024.2 files."""
+    problems = [("capacitance", "CapConv", "delta", None)]
+    if spec.solve_ac_rl:
+        problems.append(("ac_rl", "ACRLConv", "delta", None))
     return _read_convergence(
         run_dir,
         spec,
         solver="Q3D",
-        problems=(
-            ("capacitance", "CapConv", "delta", None),
-            ("ac_rl", "ACRLConv", "delta", None),
-        ),
+        problems=tuple(problems),
+        forbidden_block_names=() if spec.solve_ac_rl else ("ACRLConv",),
     )
 
 
@@ -43,6 +44,7 @@ def _read_convergence(
     *,
     solver: str,
     problems: tuple[tuple[str, str, str, str | None], ...],
+    forbidden_block_names: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     root = run_dir.resolve()
     results_dir = _contained(root, f"{spec.project_name}.aedtresults", solver)
@@ -60,6 +62,7 @@ def _read_convergence(
 
     block_names = {name for _, name, _, _ in problems}
     blocks: dict[str, tuple[str, str]] = {}
+    found_names: set[str] = set()
     for match in re.finditer(
         r"(?ms)^\s*\$begin '(?P<id>\d+)'\s*$"
         r"(?P<body>.*?)^\s*\$end '(?P=id)'\s*$",
@@ -67,6 +70,8 @@ def _read_convergence(
     ):
         body = match.group("body")
         name = _optional(body, r"(?m)^\s*ConvSetupName='([^']+)'\s*$")
+        if name is not None:
+            found_names.add(name)
         if name in block_names:
             if name in blocks:
                 raise RuntimeError(f"{solver} native solution repeats {name}")
@@ -74,6 +79,10 @@ def _read_convergence(
     if set(blocks) != block_names:
         raise RuntimeError(
             f"{solver} native solution lacks exact matrix convergence blocks"
+        )
+    if set(forbidden_block_names) & found_names:
+        raise RuntimeError(
+            f"{solver} native solution contains a disabled convergence block"
         )
 
     evidence = {

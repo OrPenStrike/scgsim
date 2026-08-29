@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scgsim"
-version = "1.0.0.dev8"
+version = "1.0.0.dev9"
 description = "Research-first electromagnetic simulation workflows for superconducting circuits."
 readme = "README.md"
 requires-python = "~=3.12.0"

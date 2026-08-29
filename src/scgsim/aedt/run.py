@@ -34,6 +34,16 @@ from .spec import (
 )
 from .util import file_sha256, read_json, write_csv, write_json
 
+_Q3D_REGION_DIRECTIONS = ("+X", "-X", "+Y", "-Y", "+Z", "-Z")
+_Q3D_REGION_SHEET_NAMES = {
+    "+X": ("SCGSimRegionGroundPX", "SCGSimRegionGroundPXThinConductor"),
+    "-X": ("SCGSimRegionGroundNX", "SCGSimRegionGroundNXThinConductor"),
+    "+Y": ("SCGSimRegionGroundPY", "SCGSimRegionGroundPYThinConductor"),
+    "-Y": ("SCGSimRegionGroundNY", "SCGSimRegionGroundNYThinConductor"),
+    "+Z": ("SCGSimRegionGroundPZ", "SCGSimRegionGroundPZThinConductor"),
+    "-Z": ("SCGSimRegionGroundNZ", "SCGSimRegionGroundNZThinConductor"),
+}
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run one prepared SCGSim AEDT handoff")
@@ -231,10 +241,23 @@ def _solve_q3d(Q3d: Any, run_dir: Path, spec: Q3dSpec) -> dict[str, Any]:
     materials = _import_and_bind(app, spec)
     region = _create_region(app, spec)
     nets = _assign_q3d_nets(app, spec)
+    if spec.grounded_region_net is not None:
+        grounded_region = _seal_q3d_region(app, spec)
+        region["native_region_object_id"] = grounded_region["native_region_object_id"]
+        region["native_bounding_box_um"] = grounded_region["native_bounding_box_um"]
+        region["grounded_region"] = grounded_region
     _setup_q3d(app, spec)
     if not app.save_project() or not project_path.is_file():
         raise RuntimeError("Q3D project was not saved before solve")
     setup = _read_q3d_setup(app, spec)
+    if spec.grounded_region_net is not None:
+        region["grounded_region"] = _read_q3d_region_ground(app, spec, region)
+        region["native_region_object_id"] = region["grounded_region"][
+            "native_region_object_id"
+        ]
+        region["native_bounding_box_um"] = region["grounded_region"][
+            "native_bounding_box_um"
+        ]
     if not app.analyze_setup(name=spec.run_control.setup_name, blocking=True):
         raise RuntimeError(
             f"Q3D failed to analyze setup {spec.run_control.setup_name!r}"
@@ -242,6 +265,14 @@ def _solve_q3d(Q3d: Any, run_dir: Path, spec: Q3dSpec) -> dict[str, Any]:
     outputs, result_readback = _export_q3d(app, run_dir, spec)
     if not app.save_project() or not project_path.is_file():
         raise RuntimeError("Q3D project was not saved")
+    if spec.grounded_region_net is not None:
+        region["grounded_region"] = _read_q3d_region_ground(app, spec, region)
+        region["native_region_object_id"] = region["grounded_region"][
+            "native_region_object_id"
+        ]
+        region["native_bounding_box_um"] = region["grounded_region"][
+            "native_bounding_box_um"
+        ]
     convergence = read_q3d_convergence(run_dir, spec)
     project_relative = project_path.relative_to(run_dir).as_posix()
     outputs[project_relative] = file_sha256(project_path)
@@ -433,11 +464,447 @@ def _create_region(hfss: Any, spec: HfssSpec | Q3dSpec) -> dict[str, Any]:
         or observed_material.casefold() != vacuum.library_name.casefold()
     ):
         raise RuntimeError("vacuum region readback failed")
-    return {
+    result = {
         "material_id": vacuum.material_id,
         "requested_library_name": vacuum.library_name,
         "observed_material_name": observed_material,
         "padding_um": list(spec.region_padding_um),
+    }
+    if isinstance(spec, Q3dSpec):
+        result["native_region_object_id"] = int(region.id)
+        result["native_bounding_box_um"] = list(_q3d_region_bounds(region))
+        result["requested_padding_um"] = list(spec.region_padding_um)
+    return result
+
+
+def _q3d_region_bounds(region: Any) -> tuple[float, float, float, float, float, float]:
+    try:
+        values = tuple(float(value) for value in region.bounding_box)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Q3D Region native bounds are unavailable") from exc
+    if (
+        len(values) != 6
+        or not all(math.isfinite(value) for value in values)
+        or any(values[index] >= values[index + 3] for index in range(3))
+    ):
+        raise RuntimeError("Q3D Region native bounds are invalid")
+    return values  # type: ignore[return-value]
+
+
+def _q3d_region_faces(
+    region: Any, bounds: tuple[float, float, float, float, float, float]
+) -> dict[str, tuple[Any, tuple[float, float, float], tuple[float, float, float]]]:
+    faces: dict[
+        str, tuple[Any, tuple[float, float, float], tuple[float, float, float]]
+    ] = {}
+    for face in region.faces:
+        try:
+            center = tuple(float(value) for value in face.center)
+            normal = tuple(float(value) for value in face.normal)
+            face_id = int(face.id)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("Q3D Region native face readback is invalid") from exc
+        if (
+            face_id <= 0
+            or len(center) != 3
+            or len(normal) != 3
+            or not all(math.isfinite(value) for value in [*center, *normal])
+        ):
+            raise RuntimeError("Q3D Region native face readback is invalid")
+        matches = [
+            direction
+            for direction, axis, boundary in (
+                ("+X", 0, bounds[3]),
+                ("-X", 0, bounds[0]),
+                ("+Y", 1, bounds[4]),
+                ("-Y", 1, bounds[1]),
+                ("+Z", 2, bounds[5]),
+                ("-Z", 2, bounds[2]),
+            )
+            if math.isclose(center[axis], boundary, rel_tol=0.0, abs_tol=1e-9)
+        ]
+        if len(matches) != 1 or matches[0] in faces:
+            raise RuntimeError("Q3D Region native faces do not identify six directions")
+        direction = matches[0]
+        expected_center = _q3d_face_center(direction, bounds)
+        if not all(
+            math.isclose(value, expected, rel_tol=0.0, abs_tol=1e-9)
+            for value, expected in zip(center, expected_center, strict=True)
+        ):
+            raise RuntimeError("Q3D Region native face center is invalid")
+        axis, sign = {
+            "+X": (0, 1.0),
+            "-X": (0, -1.0),
+            "+Y": (1, 1.0),
+            "-Y": (1, -1.0),
+            "+Z": (2, 1.0),
+            "-Z": (2, -1.0),
+        }[direction]
+        if not math.isclose(normal[axis], sign, rel_tol=0.0, abs_tol=1e-9) or any(
+            not math.isclose(value, 0.0, rel_tol=0.0, abs_tol=1e-9)
+            for index, value in enumerate(normal)
+            if index != axis
+        ):
+            raise RuntimeError("Q3D Region native face normal is invalid")
+        faces[direction] = (face, center, normal)  # type: ignore[assignment]
+    if set(faces) != set(_Q3D_REGION_DIRECTIONS):
+        raise RuntimeError("Q3D Region must expose exactly one face in each direction")
+    if len({int(face.id) for face, _, _ in faces.values()}) != len(faces):
+        raise RuntimeError("Q3D Region native face IDs are not unique")
+    return faces
+
+
+def _q3d_face_center(
+    direction: str, bounds: tuple[float, float, float, float, float, float]
+) -> list[float]:
+    x_min, y_min, z_min, x_max, y_max, z_max = bounds
+    x_mid = (x_min + x_max) / 2
+    y_mid = (y_min + y_max) / 2
+    z_mid = (z_min + z_max) / 2
+    return {
+        "+X": [x_max, y_mid, z_mid],
+        "-X": [x_min, y_mid, z_mid],
+        "+Y": [x_mid, y_max, z_mid],
+        "-Y": [x_mid, y_min, z_mid],
+        "+Z": [x_mid, y_mid, z_max],
+        "-Z": [x_mid, y_mid, z_min],
+    }[direction]
+
+
+def _q3d_region_evidence(
+    region: Any,
+    bounds: tuple[float, float, float, float, float, float],
+    faces: dict[
+        str, tuple[Any, tuple[float, float, float], tuple[float, float, float]]
+    ],
+) -> dict[str, Any]:
+    return {
+        "native_object_id": int(region.id),
+        "native_bounding_box_um": list(bounds),
+        "faces": [
+            {
+                "direction": direction,
+                "native_face_id": int(faces[direction][0].id),
+                "native_face_center_um": list(faces[direction][1]),
+                "native_face_normal": list(faces[direction][2]),
+            }
+            for direction in _Q3D_REGION_DIRECTIONS
+        ],
+    }
+
+
+def _q3d_region_sheet_geometry(
+    direction: str, bounds: tuple[float, float, float, float, float, float]
+) -> tuple[str, list[float], list[float], list[float]]:
+    x_min, y_min, z_min, x_max, y_max, z_max = bounds
+    if direction == "+X":
+        return (
+            "YZ",
+            [x_max, y_min, z_min],
+            [y_max - y_min, z_max - z_min],
+            [x_max, y_min, z_min, x_max, y_max, z_max],
+        )
+    if direction == "-X":
+        return (
+            "YZ",
+            [x_min, y_min, z_min],
+            [y_max - y_min, z_max - z_min],
+            [x_min, y_min, z_min, x_min, y_max, z_max],
+        )
+    if direction == "+Y":
+        return (
+            "ZX",
+            [x_min, y_max, z_min],
+            [z_max - z_min, x_max - x_min],
+            [x_min, y_max, z_min, x_max, y_max, z_max],
+        )
+    if direction == "-Y":
+        return (
+            "ZX",
+            [x_min, y_min, z_min],
+            [z_max - z_min, x_max - x_min],
+            [x_min, y_min, z_min, x_max, y_min, z_max],
+        )
+    if direction == "+Z":
+        return (
+            "XY",
+            [x_min, y_min, z_max],
+            [x_max - x_min, y_max - y_min],
+            [x_min, y_min, z_max, x_max, y_max, z_max],
+        )
+    if direction == "-Z":
+        return (
+            "XY",
+            [x_min, y_min, z_min],
+            [x_max - x_min, y_max - y_min],
+            [x_min, y_min, z_min, x_max, y_max, z_min],
+        )
+    raise RuntimeError("Q3D Region direction is invalid")
+
+
+def _q3d_assignment(app: Any, name: str) -> list[int]:
+    try:
+        assignment = [
+            int(value) for value in app.oboundary.GetExcitationAssignment(name)
+        ]
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"Q3D native assignment is unavailable for {name!r}"
+        ) from exc
+    if not assignment:
+        raise RuntimeError(f"Q3D native assignment is empty for {name!r}")
+    return assignment
+
+
+def _same_q3d_bounds(observed: Any, expected: list[float]) -> bool:
+    try:
+        values = [float(value) for value in observed]
+    except (TypeError, ValueError):
+        return False
+    return len(values) == len(expected) and all(
+        math.isclose(actual, required, rel_tol=0.0, abs_tol=1e-9)
+        for actual, required in zip(values, expected, strict=True)
+    )
+
+
+def _seal_q3d_region(app: Any, spec: Q3dSpec) -> dict[str, Any]:
+    initial_region = app.modeler.get_object_from_name("Region")
+    if initial_region is None or initial_region.name != "Region":
+        raise RuntimeError("Q3D Region is unavailable for grounding")
+    intended_bounds = _q3d_region_bounds(initial_region)
+    source_faces = _q3d_region_faces(initial_region, intended_bounds)
+    source_region = _q3d_region_evidence(initial_region, intended_bounds, source_faces)
+    target = app.design_nets.get(spec.grounded_region_net)
+    target_spec = next(
+        (net for net in spec.nets if net.name == spec.grounded_region_net), None
+    )
+    if target is None or target_spec is None or target.type != "GroundNet":
+        raise RuntimeError("Q3D grounded Region target is not one native Ground net")
+    expected_target_ids = [
+        int(app.modeler.get_object_from_name(name).id)
+        for name in target_spec.object_names
+    ]
+    if _q3d_assignment(app, target_spec.name) != expected_target_ids:
+        raise RuntimeError("Q3D grounded Region target net assignment is invalid")
+    sheet_names = [name for name, _ in _Q3D_REGION_SHEET_NAMES.values()]
+    if set(sheet_names) & set(app.modeler.sheet_names):
+        raise RuntimeError("Q3D Region grounding sheet name already exists")
+    initial_sheets = set(app.modeler.sheet_names)
+    if not app.modeler.delete("Region"):
+        raise RuntimeError("Q3D initial Region could not be frozen for grounding")
+    created: dict[str, tuple[Any, list[float]]] = {}
+    for direction in _Q3D_REGION_DIRECTIONS:
+        sheet_name, _ = _Q3D_REGION_SHEET_NAMES[direction]
+        orientation, origin, sizes, expected_bounds = _q3d_region_sheet_geometry(
+            direction, intended_bounds
+        )
+        sheet = app.modeler.create_rectangle(
+            orientation=orientation,
+            origin=origin,
+            sizes=sizes,
+            name=sheet_name,
+            material="pec",
+        )
+        if (
+            sheet is None
+            or sheet.name != sheet_name
+            or sheet_name not in app.modeler.sheet_names
+            or not _same_q3d_bounds(sheet.bounding_box, expected_bounds)
+        ):
+            raise RuntimeError(
+                f"Q3D Region grounding sheet creation failed for {direction}"
+            )
+        created[direction] = (sheet, expected_bounds)
+    region = app.modeler.create_region(
+        pad_value=[0.0] * 6,
+        pad_type="Absolute Offset",
+        name="Region",
+    )
+    vacuum = spec.materials[spec.vacuum_material_id]
+    region.material_name = vacuum.library_name
+    if (
+        region.name != "Region"
+        or _native_object_property(region, "Material").strip('"').casefold()
+        != vacuum.library_name.casefold()
+        or not _same_q3d_bounds(region.bounding_box, list(intended_bounds))
+    ):
+        raise RuntimeError("Q3D final grounded Region readback failed")
+    bounds = _q3d_region_bounds(region)
+    faces = _q3d_region_faces(region, bounds)
+    records: list[dict[str, Any]] = []
+    for direction in _Q3D_REGION_DIRECTIONS:
+        source_face, source_center, source_normal = source_faces[direction]
+        sheet_name, boundary_name = _Q3D_REGION_SHEET_NAMES[direction]
+        sheet, expected_bounds = created[direction]
+        boundary = app.assign_thin_conductor(
+            assignment=sheet,
+            material="pec",
+            thickness=1,
+            name=boundary_name,
+        )
+        if not boundary or boundary.name != boundary_name:
+            raise RuntimeError(
+                f"Q3D Region thin conductor assignment failed for {direction}"
+            )
+        sheet_id = int(sheet.id)
+        if _q3d_assignment(app, boundary_name) != [sheet_id]:
+            raise RuntimeError(
+                f"Q3D Region thin conductor readback failed for {direction}"
+            )
+        records.append(
+            {
+                "direction": direction,
+                "source_region_object_id": int(initial_region.id),
+                "source_face_id": int(source_face.id),
+                "source_face_center_um": list(source_center),
+                "source_face_normal": list(source_normal),
+                "sheet_name": sheet_name,
+                "sheet_object_id": sheet_id,
+                "sheet_bounding_box_um": [float(value) for value in sheet.bounding_box],
+                "boundary_name": boundary_name,
+                "native_thin_conductor_object_ids": [sheet_id],
+            }
+        )
+    if set(app.modeler.sheet_names) - initial_sheets != set(sheet_names):
+        raise RuntimeError("Q3D Region grounding did not create exactly six sheets")
+    target.props["Objects"] = [*target_spec.object_names, *sheet_names]
+    if not target.update():
+        raise RuntimeError("Q3D Region grounding target net update failed")
+    native_target_ids = _q3d_assignment(app, target_spec.name)
+    if native_target_ids != [
+        *expected_target_ids,
+        *(record["sheet_object_id"] for record in records),
+    ]:
+        raise RuntimeError("Q3D Region grounding target net readback failed")
+    if not _same_q3d_bounds(region.bounding_box, list(bounds)):
+        raise RuntimeError("Q3D Region native geometry changed during grounding")
+    return {
+        "target_net": target_spec.name,
+        "native_region_object_id": int(region.id),
+        "native_bounding_box_um": list(bounds),
+        "native_final_region_padding_um": [0.0] * 6,
+        "source_region": source_region,
+        "final_region": _q3d_region_evidence(region, bounds, faces),
+        "sheets": records,
+        "native_target_net_object_ids": native_target_ids,
+    }
+
+
+def _read_q3d_region_ground(
+    app: Any, spec: Q3dSpec, region_record: dict[str, Any]
+) -> dict[str, Any]:
+    evidence = region_record.get("grounded_region")
+    region = app.modeler.get_object_from_name("Region")
+    if not isinstance(evidence, dict) or region is None:
+        raise RuntimeError("Q3D grounded Region evidence is unavailable after save")
+    bounds = _q3d_region_bounds(region)
+    faces = _q3d_region_faces(region, bounds)
+    if (
+        evidence.get("target_net") != spec.grounded_region_net
+        or not _same_q3d_bounds(evidence.get("native_bounding_box_um"), list(bounds))
+        or evidence.get("native_final_region_padding_um") != [0.0] * 6
+        or _native_object_property(region, "Material").strip('"').casefold()
+        != spec.materials[spec.vacuum_material_id].library_name.casefold()
+    ):
+        raise RuntimeError("Q3D grounded Region geometry changed after save")
+    boundary_setup = app.design_properties.get("BoundarySetup")
+    boundaries = (
+        boundary_setup.get("Boundaries") if isinstance(boundary_setup, dict) else None
+    )
+    if not isinstance(boundaries, dict):
+        raise TypeError("Q3D saved boundary records are unavailable")
+    sheets = evidence.get("sheets")
+    source_region = evidence.get("source_region")
+    source_faces = (
+        source_region.get("faces") if isinstance(source_region, dict) else None
+    )
+    if (
+        not isinstance(sheets, list)
+        or len(sheets) != len(_Q3D_REGION_DIRECTIONS)
+        or not isinstance(source_faces, list)
+        or len(source_faces) != len(_Q3D_REGION_DIRECTIONS)
+    ):
+        raise RuntimeError("Q3D grounded Region sheet evidence is invalid")
+    native_thin_conductors: list[dict[str, Any]] = []
+    sheet_ids: list[int] = []
+    for direction, record, source in zip(
+        _Q3D_REGION_DIRECTIONS, sheets, source_faces, strict=True
+    ):
+        if not isinstance(record, dict) or not isinstance(source, dict):
+            raise TypeError("Q3D grounded Region sheet evidence is invalid")
+        sheet_name, boundary_name = _Q3D_REGION_SHEET_NAMES[direction]
+        sheet_id = record.get("sheet_object_id")
+        _, _, _, expected_bounds = _q3d_region_sheet_geometry(direction, bounds)
+        sheet = app.modeler.get_object_from_name(sheet_name)
+        saved = boundaries.get(boundary_name)
+        if (
+            record.get("direction") != direction
+            or record.get("source_region_object_id")
+            != source_region.get("native_object_id")
+            or record.get("source_face_id") != source.get("native_face_id")
+            or record.get("source_face_center_um")
+            != source.get("native_face_center_um")
+            or record.get("source_face_normal") != source.get("native_face_normal")
+            or record.get("sheet_name") != sheet_name
+            or not isinstance(sheet_id, int)
+            or not _same_q3d_bounds(
+                record.get("sheet_bounding_box_um"), expected_bounds
+            )
+            or record.get("boundary_name") != boundary_name
+            or record.get("native_thin_conductor_object_ids") != [sheet_id]
+            or sheet is None
+            or int(sheet.id) != sheet_id
+            or not _same_q3d_bounds(sheet.bounding_box, expected_bounds)
+            or not isinstance(saved, dict)
+            or saved.get("BoundType") != "ThinConductor"
+            or saved.get("Objects") != [sheet_id]
+            or saved.get("Material") != "pec"
+            or saved.get("Thickness") != "1um"
+            or _q3d_assignment(app, boundary_name) != [sheet_id]
+        ):
+            raise RuntimeError("Q3D saved thin conductor readback is invalid")
+        native_thin_conductors.append(
+            {
+                "name": boundary_name,
+                "bound_type": "ThinConductor",
+                "object_ids": [sheet_id],
+                "material": "pec",
+                "thickness": "1um",
+            }
+        )
+        sheet_ids.append(sheet_id)
+    target = boundaries.get(spec.grounded_region_net)
+    expected_target = evidence.get("native_target_net_object_ids")
+    if (
+        not isinstance(target, dict)
+        or target.get("BoundType") != "GroundNet"
+        or target.get("Objects") != expected_target
+        or expected_target
+        != [
+            *(
+                int(app.modeler.get_object_from_name(name).id)
+                for net in spec.nets
+                if net.name == spec.grounded_region_net
+                for name in net.object_names
+            ),
+            *sheet_ids,
+        ]
+        or _q3d_assignment(app, spec.grounded_region_net) != expected_target
+    ):
+        raise RuntimeError("Q3D saved grounded Region net readback is invalid")
+    return {
+        **evidence,
+        "native_region_object_id": int(region.id),
+        "native_bounding_box_um": list(bounds),
+        "final_region": _q3d_region_evidence(region, bounds, faces),
+        "native_saved_boundaries": {
+            "target": {
+                "name": spec.grounded_region_net,
+                "bound_type": "GroundNet",
+                "object_ids": expected_target,
+            },
+            "thin_conductors": native_thin_conductors,
+        },
     }
 
 
@@ -523,17 +990,20 @@ def _setup_q3d(app: Any, spec: Q3dSpec) -> None:
         raise RuntimeError("new Q3D design must not inherit a setup")
     setup = app.create_setup(spec.run_control.setup_name)
     setup.dc_enabled = False
+    setup.ac_rl_enabled = spec.solve_ac_rl
+    setup.capacitance_enabled = True
     setup.props["AdaptiveFreq"] = f"{spec.run_control.frequency_ghz:g}GHz"
     setup.props["Cap"]["MaxPass"] = spec.run_control.maximum_passes
     setup.props["Cap"]["MinPass"] = spec.run_control.minimum_passes
     setup.props["Cap"]["MinConvPass"] = spec.run_control.minimum_converged_passes
     setup.props["Cap"]["PerError"] = spec.run_control.convergence_percent
     setup.props["Cap"]["PerRefine"] = spec.run_control.percent_refinement
-    setup.props["AC"]["MaxPass"] = spec.run_control.maximum_passes
-    setup.props["AC"]["MinPass"] = spec.run_control.minimum_passes
-    setup.props["AC"]["MinConvPass"] = spec.run_control.minimum_converged_passes
-    setup.props["AC"]["PerError"] = spec.run_control.convergence_percent
-    setup.props["AC"]["PerRefine"] = spec.run_control.percent_refinement
+    if spec.solve_ac_rl:
+        setup.props["AC"]["MaxPass"] = spec.run_control.maximum_passes
+        setup.props["AC"]["MinPass"] = spec.run_control.minimum_passes
+        setup.props["AC"]["MinConvPass"] = spec.run_control.minimum_converged_passes
+        setup.props["AC"]["PerError"] = spec.run_control.convergence_percent
+        setup.props["AC"]["PerRefine"] = spec.run_control.percent_refinement
     if not setup.update():
         raise RuntimeError("Q3D setup update failed")
 
@@ -542,8 +1012,10 @@ def _read_q3d_setup(app: Any, spec: Q3dSpec) -> dict[str, Any]:
     raw = _saved_setup_properties(app, spec.run_control.setup_name)
     cap = raw.get("Cap")
     ac = raw.get("AC")
-    if not isinstance(cap, dict) or not isinstance(ac, dict):
-        raise TypeError("Q3D saved setup lacks capacitance or AC-RL controls")
+    if not isinstance(cap, dict) or (spec.solve_ac_rl != isinstance(ac, dict)):
+        raise TypeError("Q3D saved setup does not match its capacitance/AC-RL mode")
+    if not spec.solve_ac_rl and ("AC" in raw or "DC" in raw):
+        raise RuntimeError("Q3D capacitance-only setup saved AC-RL or DC controls")
     native = {
         "adaptive_frequency": raw.get("AdaptiveFreq"),
         "capacitance_maximum_passes": cap.get("MaxPass"),
@@ -551,13 +1023,18 @@ def _read_q3d_setup(app: Any, spec: Q3dSpec) -> dict[str, Any]:
         "capacitance_minimum_converged_passes": cap.get("MinConvPass"),
         "capacitance_convergence_percent": cap.get("PerError"),
         "capacitance_percent_refinement": cap.get("PerRefine"),
-        "ac_rl_maximum_passes": ac.get("MaxPass"),
-        "ac_rl_minimum_passes": ac.get("MinPass"),
-        "ac_rl_minimum_converged_passes": ac.get("MinConvPass"),
-        "ac_rl_convergence_percent": ac.get("PerError"),
-        "ac_rl_percent_refinement": ac.get("PerRefine"),
         "dc_enabled": "DC" in raw,
     }
+    if spec.solve_ac_rl:
+        native.update(
+            {
+                "ac_rl_maximum_passes": ac.get("MaxPass"),
+                "ac_rl_minimum_passes": ac.get("MinPass"),
+                "ac_rl_minimum_converged_passes": ac.get("MinConvPass"),
+                "ac_rl_convergence_percent": ac.get("PerError"),
+                "ac_rl_percent_refinement": ac.get("PerRefine"),
+            }
+        )
     expected = {
         "adaptive_frequency": f"{spec.run_control.frequency_ghz:g}GHz",
         "capacitance_maximum_passes": spec.run_control.maximum_passes,
@@ -567,13 +1044,20 @@ def _read_q3d_setup(app: Any, spec: Q3dSpec) -> dict[str, Any]:
         ),
         "capacitance_convergence_percent": spec.run_control.convergence_percent,
         "capacitance_percent_refinement": spec.run_control.percent_refinement,
-        "ac_rl_maximum_passes": spec.run_control.maximum_passes,
-        "ac_rl_minimum_passes": spec.run_control.minimum_passes,
-        "ac_rl_minimum_converged_passes": spec.run_control.minimum_converged_passes,
-        "ac_rl_convergence_percent": spec.run_control.convergence_percent,
-        "ac_rl_percent_refinement": spec.run_control.percent_refinement,
         "dc_enabled": False,
     }
+    if spec.solve_ac_rl:
+        expected.update(
+            {
+                "ac_rl_maximum_passes": spec.run_control.maximum_passes,
+                "ac_rl_minimum_passes": spec.run_control.minimum_passes,
+                "ac_rl_minimum_converged_passes": (
+                    spec.run_control.minimum_converged_passes
+                ),
+                "ac_rl_convergence_percent": spec.run_control.convergence_percent,
+                "ac_rl_percent_refinement": spec.run_control.percent_refinement,
+            }
+        )
     if native != expected:
         raise RuntimeError(f"Q3D saved setup readback mismatch: {native!r}")
     return {"name": spec.run_control.setup_name, "native": native}
@@ -586,9 +1070,10 @@ def _export_q3d(
     output_dir.mkdir(parents=True, exist_ok=True)
     hashes: dict[str, str] = {}
     summaries: dict[str, Any] = {}
-    normalized: list[dict[str, Any]] = []
     frequency_hz = spec.run_control.frequency_ghz * 1e9
-    for problem, stem in (("C", "c"), ("AC RL", "ac_rl")):
+    exports = (("C", "c"), ("AC RL", "ac_rl")) if spec.solve_ac_rl else (("C", "c"),)
+    normalized: list[dict[str, Any]] = []
+    for problem, stem in exports:
         path = output_dir / f"{stem}_matrix.csv"
         app.odesign.ExportMatrixData(
             str(path),
@@ -615,9 +1100,20 @@ def _export_q3d(
         rows, summary = parse_matrix_export(
             path, "Q3D", problem, spec.run_control.frequency_ghz, titles
         )
-        normalized.extend(rows)
+        if spec.solve_ac_rl:
+            normalized.extend(rows)
         summaries[stem] = summary
         hashes[path.relative_to(run_dir).as_posix()] = file_sha256(path)
+    if not spec.solve_ac_rl:
+        path = output_dir / "c_matrix.csv"
+        return hashes, {
+            "matrices": {
+                "path": path.relative_to(run_dir).as_posix(),
+                "frequency_ghz": spec.run_control.frequency_ghz,
+                "native": summaries["c"],
+                "primary_rows": len(rows),
+            }
+        }
     normalized_path = output_dir / "matrices.csv"
     write_csv(
         normalized_path,

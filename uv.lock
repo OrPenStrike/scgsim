@@ -2088,7 +2088,7 @@ wheels = [
 
 [[package]]
 name = "scgsim"
-version = "1.0.0.dev8"
+version = "1.0.0.dev9"
 source = { editable = "." }
 
 [package.optional-dependencies]

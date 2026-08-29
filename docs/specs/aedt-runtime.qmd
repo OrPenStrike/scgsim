@@ -36,7 +36,7 @@ version checks, receipts, and path/hash validation:
 | HFSS Driven Terminal | terminal ports with explicit reference conductors | ordered terminal S-parameters and Touchstone |
 | HFSS Driven Modal | modal ports with exact integration lines | ordered modal S-parameters, impedance, and Touchstone |
 | HFSS Eigenmode | no ports or driven sweep; explicit mode count and search frequency | mode frequency, damping/Q, and convergence evidence |
-| Q3D | exact nets with source/sink assignments | native capacitance and resistance/inductance matrices |
+| Q3D | exact nets with source/sink assignments; optional exact six-face Region ground seal | native capacitance and, when enabled, resistance/inductance matrices |
 | Q2D | explicit cross-section geometry and conductor/reference assignments | per-unit-length capacitance/conductance and resistance/inductance matrices |
 
 No family may report completion from requested PyAEDT object properties alone.
@@ -66,6 +66,40 @@ setup and `LastAdaptive` solution, frequency, per-unit-length units, conductor
 order, and every primary matrix value match the sealed run and are finite.
 This Q2D contract is accepted V1 behavior; the broader AEDT surface remains
 `CONVERGING` and is not V1 stable.
+
+## Q3D extraction and Region-ground candidate
+
+`Q3dSpec.solve_ac_rl` is a strict boolean and defaults to `true`. The default
+therefore preserves the existing combined capacitance/conductance plus AC
+resistance/inductance extraction: it seals and resolves
+`results/q3d/c_matrix.csv`, `results/q3d/ac_rl_matrix.csv`, and the normalized
+`results/q3d/matrices.csv`. With `solve_ac_rl=false`, Q3D creates only the
+capacitance/conductance setup and seals/resolves exactly the native
+`results/q3d/c_matrix.csv`; no AC-RL setup fields, export, convergence evidence,
+or normalized compatibility artifact is produced.
+
+`Q3dSpec.grounded_region_net` is either `null`, retaining the current open
+formulation, or non-empty text that exactly names one declared `Ground` net.
+The latter is fail-closed: it creates exactly six sheets from the six native
+faces of the AEDT object named `Region`, assigns each a PEC thin conductor, and
+adds those six sheets to that one existing Ground net. It does not infer a net
+from component names, geometry, or a solver default.
+
+For a grounded Region, PyAEDT 1.3.0 public APIs are the only construction
+path. The receipt and resolver bind the exact `+X`, `-X`, `+Y`, `-Y`, `+Z`, and
+`-Z` directions; the pre-sheet source Region object/face IDs, centers, and
+normals; the separately read-back final Region faces; created sheet object IDs
+and names; thin-conductor boundary names; Region bounds; the declared target
+net; and native net/boundary assignment readback. A missing, repeated,
+mismatched, or non-native value rejects the run.
+The same native Region and boundary evidence is read again after the final
+post-solve project save before it becomes receipt-authoritative.
+
+AEDT Region history expands again when model sheets are placed on its faces.
+SCGSim therefore snapshots the requested expanded native faces, creates the six
+sheets there, and rebuilds the final native Region with zero additional offset.
+The final Region has the requested expanded bounds; the receipt records both
+the requested padding and this zero-offset finalization explicitly.
 
 ## Current exclusions
 

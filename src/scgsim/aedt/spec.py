@@ -907,6 +907,8 @@ class Q3dSpec:
     nets: tuple[Q3dNetSpec, ...]
     run_control: MatrixRunControl
     region_padding_um: tuple[float, float, float, float, float, float]
+    solve_ac_rl: bool = True
+    grounded_region_net: str | None = None
     aedt_version: str = REQUIRED_AEDT_VERSION
     pyaedt_version: str = LOCKED_PYAEDT
 
@@ -942,6 +944,23 @@ class Q3dSpec:
             if binding.role in {"signal", "ground"}
         ):
             raise ValueError("Q3D conductor imports require positive finite thickness")
+        if not isinstance(self.solve_ac_rl, bool):
+            raise TypeError("solve_ac_rl must be boolean")
+        grounded_region_net = self.grounded_region_net
+        if grounded_region_net is not None:
+            if _text(grounded_region_net, "grounded_region_net") != grounded_region_net:
+                raise ValueError(
+                    "grounded_region_net must exactly match a declared Ground net"
+                )
+            matches = [
+                net
+                for net in nets
+                if net.name == grounded_region_net and net.net_type == "Ground"
+            ]
+            if len(matches) != 1:
+                raise ValueError(
+                    "grounded_region_net must exactly name one declared Ground net"
+                )
         object.__setattr__(self, "nets", nets)
 
     def to_payload(self) -> dict[str, Any]:
@@ -965,6 +984,8 @@ class Q3dSpec:
             "nets": [item.to_payload() for item in self.nets],
             "run_control": self.run_control.to_payload(),
             "region_padding_um": list(self.region_padding_um),
+            "solve_ac_rl": self.solve_ac_rl,
+            "grounded_region_net": self.grounded_region_net,
         }
 
     @classmethod
@@ -1005,6 +1026,8 @@ class Q3dSpec:
             nets=tuple(Q3dNetSpec(**item) for item in payload.get("nets", ())),
             run_control=MatrixRunControl(**run),
             region_padding_um=tuple(payload.get("region_padding_um", ())),  # type: ignore[arg-type]
+            solve_ac_rl=payload.get("solve_ac_rl", True),
+            grounded_region_net=payload.get("grounded_region_net"),
             aedt_version=_text(
                 payload.get("aedt", {}).get("requested_version"),
                 "aedt.requested_version",
