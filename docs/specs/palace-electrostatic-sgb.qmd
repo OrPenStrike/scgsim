@@ -19,7 +19,7 @@ The intended visible sequence is:
 ```text
 construct component
 -> set geometry / stack / airbox
--> add exact-net terminals
+-> add exact-net terminals and physical grounds
 -> configure Electrostatic
 -> mesh / config
 -> common handoff
@@ -37,6 +37,7 @@ scheduler does not also write `slurm-%j.out`.
 | Stack input | `set_stack` | Bind the layer-stack input consumed by SGB. |
 | Airbox | `set_airbox` | Declare the simulation-domain envelope before geometry production. |
 | Terminal binding | `add_terminal` | Select a terminal by exact SGB net identity. |
+| Physical Ground binding | `add_ground` | Select conductor components for Palace Ground by exact SGB net identity. |
 | Problem controls | `set_electrostatic` | Declare Electrostatic-specific config controls. |
 | Output identity | `set_output_dir` | Bind the mesh/config/handoff output location. |
 | Mesh | `mesh` | Request the SGB-backed Palace mesh path. |
@@ -78,6 +79,19 @@ These values are **CONVERGING**, not accepted scientific defaults or Gates:
 Palace defaults `Nonconformal` to `true` when the key is omitted. SCGSim always
 writes the key and defaults it to `false` (conformal tet AMR). Notebooks opt
 into nonconformal AMR with `set_numerical(amr_nonconformal=True)`.
+
+`add_ground(net_id=...)` is the explicit physical-conductor path. It is
+independent of `exterior_boundary_policy="ground"`, which adds the finite
+solution-domain exterior faces. With `unassigned_conductor_policy="error"`,
+every conductor component must be covered by exactly one Terminal or explicit
+Ground binding. The index map records physical-Ground and exterior-Ground
+attributes separately and their exact union must equal
+`Boundaries.Ground.Attributes`. Existing
+`exterior_boundary_policy="none"` plus
+`unassigned_conductor_policy="ground"` remains the implicit-ground path.
+New Electrostatic authoring writes index-map schema v2. The resolver retains
+schema-v1 read support for sealed historical runs, but only schema v2 carries
+and can claim the physical-versus-exterior Ground split.
 
 External gsim and historical SGB revisions are derivation evidence only. The
 runtime authority is the in-tree `scgsim.sgb` Core and the current

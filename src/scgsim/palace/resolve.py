@@ -799,8 +799,11 @@ def _validate_route_consistency(
     if run_route != route or handoff_route != route:
         raise ValueError("metadata route does not match resolved route.")
 
-    if _expect_scalar(index_map, "schema_version", int, fallback=0) != 1:
-        raise ValueError("palace index map schema_version must be integer 1.")
+    index_schema = _expect_scalar(index_map, "schema_version", int, fallback=0)
+    if index_schema not in {1, 2}:
+        raise ValueError("palace index map schema_version must be integer 1 or 2.")
+    if problem == "Eigenmode" and index_schema != 1:
+        raise ValueError("Eigenmode palace index map schema_version must be integer 1.")
     _validate_index_entries(index_map)
     entries = _expect_list(index_map.get("entries"), "palace_index_map.entries")
     for entry in entries:
@@ -834,6 +837,8 @@ def _validate_config_index_correspondence(
         )
         if index_counts["terminal"] != len(terminals):
             raise ValueError("terminal count mismatch between config and index map.")
+        if _expect_scalar(index_map, "schema_version", int) == 2:
+            _validate_ground_boundary_resolution(boundaries, index_map)
     else:
         ports = _expect_list(
             boundaries.get("LumpedPort"), "config.Boundaries.LumpedPort"
@@ -913,6 +918,66 @@ def _validate_config_problem(config: dict[str, Any], problem: str) -> None:
 
     if problem_block.get("Output") not in {"results/palace", "results/palace/", None}:
         raise ValueError("config Problem.Output must be results/palace.")
+
+
+def _validate_ground_boundary_resolution(
+    boundaries: dict[str, Any], index_map: dict[str, Any]
+) -> None:
+    record = _expect_mapping(
+        index_map.get("ground_boundary"), "palace_index_map.ground_boundary"
+    )
+    list_fields = (
+        "requested_net_ids",
+        "physical_net_ids",
+        "conductor_component_ids",
+        "physical_names",
+        "physical_attributes",
+        "exterior_physical_names",
+        "exterior_attributes",
+        "union_attributes",
+    )
+    if set(record) != set(list_fields):
+        raise ValueError("ground boundary index evidence has unexpected fields.")
+    values = {
+        field: _expect_list(
+            record.get(field), f"ground_boundary.{field}", allow_empty=True
+        )
+        for field in list_fields
+    }
+    for field in (
+        "requested_net_ids",
+        "physical_net_ids",
+        "conductor_component_ids",
+        "physical_names",
+        "exterior_physical_names",
+    ):
+        if not all(isinstance(item, str) and item for item in values[field]) or values[
+            field
+        ] != sorted(set(values[field])):
+            raise ValueError(f"ground_boundary.{field} must be sorted unique text.")
+    for field in (
+        "physical_attributes",
+        "exterior_attributes",
+        "union_attributes",
+    ):
+        if not all(
+            isinstance(item, int) and not isinstance(item, bool) and item > 0
+            for item in values[field]
+        ) or values[field] != sorted(set(values[field])):
+            raise ValueError(
+                f"ground_boundary.{field} must be sorted unique positive integers."
+            )
+    physical = set(values["physical_attributes"])
+    exterior = set(values["exterior_attributes"])
+    union = sorted(physical | exterior)
+    if physical & exterior or values["union_attributes"] != union:
+        raise ValueError("physical/exterior Ground evidence has an invalid union.")
+    configured = boundaries.get("Ground")
+    if union:
+        if configured != {"Attributes": union}:
+            raise ValueError("config Ground attributes do not match index evidence.")
+    elif configured is not None:
+        raise ValueError("config contains Ground without indexed attributes.")
 
 
 def _validate_index_entries(index_map: dict[str, Any]) -> None:

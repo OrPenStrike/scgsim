@@ -28,6 +28,7 @@ class ConfigBuildResult:
     surface_epr_index_map: list[dict[str, Any]]
     domain_energy_index_map: list[dict[str, Any]]
     material_resolution: list[dict[str, Any]]
+    ground_boundary_resolution: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,7 @@ def build_electrostatic_config(
     *,
     groups: Mapping[str, Mapping[str, Mapping[str, Any]]],
     terminals: Sequence[TerminalBinding],
+    ground_net_ids: Sequence[str] = (),
     materials: Mapping[str, Mapping[str, Any]],
     save_fields: int,
     unassigned_conductor_policy: Literal["ground", "error"],
@@ -74,11 +76,14 @@ def build_electrostatic_config(
             "exterior ground requires unassigned_conductor_policy='error'."
         )
 
-    boundary_map, terminal_index_map = _electrostatic_boundaries(
-        groups=groups,
-        terminals=terminals,
-        unassigned_conductor_policy=unassigned_conductor_policy,
-        exterior_boundary_policy=exterior_boundary_policy,
+    boundary_map, terminal_index_map, ground_boundary_resolution = (
+        _electrostatic_boundaries(
+            groups=groups,
+            terminals=terminals,
+            ground_net_ids=ground_net_ids,
+            unassigned_conductor_policy=unassigned_conductor_policy,
+            exterior_boundary_policy=exterior_boundary_policy,
+        )
     )
     domain_volumes = _domains_from_solution_volumes(groups.get("volumes", {}))
     materials_payload = _materials_from_solution_volumes(
@@ -162,6 +167,7 @@ def build_electrostatic_config(
             }
             for name, volume in domain_volumes
         ],
+        ground_boundary_resolution=ground_boundary_resolution,
     )
 
 
@@ -281,15 +287,17 @@ def _electrostatic_boundaries(
     *,
     groups: Mapping[str, Mapping[str, Mapping[str, Any]]],
     terminals: Sequence[TerminalBinding],
+    ground_net_ids: Sequence[str],
     unassigned_conductor_policy: str,
     exterior_boundary_policy: str,
-) -> tuple[dict[str, object], list[dict[str, Any]]]:
+) -> tuple[dict[str, object], list[dict[str, Any]], dict[str, Any]]:
     """Map exact conductor_component_id/net_id pairs to terminal and ground boundaries."""
     component_attrs: dict[str, set[int]] = {}
     component_nets: dict[str, str] = {}
+    component_physical_names: dict[str, set[str]] = {}
     attribute_components: dict[int, str] = {}
 
-    for info in groups.get("boundary_surfaces", {}).values():
+    for physical_name, info in groups.get("boundary_surfaces", {}).items():
         if not isinstance(info, Mapping):
             continue
         if (
@@ -323,6 +331,7 @@ def _electrostatic_boundaries(
                 f"SGB conductor component {component_id!r} has conflicting net_id values."
             )
         component_nets[component_id] = net_id
+        component_physical_names.setdefault(component_id, set()).add(str(physical_name))
 
         for attr in attrs:
             existing = attribute_components.get(int(attr))
@@ -396,33 +405,68 @@ def _electrostatic_boundaries(
         )
         assigned.update(matching)
 
+    requested_ground_nets: list[str] = []
+    physical_ground_components: set[str] = set()
+    for value in ground_net_ids:
+        net_id = _optional_string(value)
+        if net_id is None:
+            raise ValueError("physical Ground net ids must be non-empty.")
+        if net_id in requested_ground_nets:
+            raise ValueError(f"SGB physical Ground net {net_id!r} is repeated.")
+        matching = {
+            component_id
+            for component_id, candidate in component_nets.items()
+            if candidate == net_id
+        }
+        if not matching:
+            raise ValueError(f"SGB physical Ground net {net_id!r} has no exact match.")
+        overlap = assigned.intersection(matching)
+        if overlap:
+            raise ValueError(
+                f"SGB physical Ground net {net_id!r} overlaps a Terminal binding."
+            )
+        requested_ground_nets.append(net_id)
+        physical_ground_components.update(matching)
+        assigned.update(matching)
+
     unassigned = set(component_attrs).difference(assigned)
     if unassigned and unassigned_conductor_policy == "error":
         raise ValueError(
             "Unassigned conductor components: " + ", ".join(sorted(unassigned))
         )
 
+    if unassigned_conductor_policy == "ground":
+        physical_ground_components.update(unassigned)
+
     boundary_map: dict[str, object] = {"Terminal": terminal_entries}
-    ground_attrs: set[int] = {
+    physical_ground_attrs: set[int] = {
         int(attr)
-        for component_id in unassigned
+        for component_id in physical_ground_components
         for attr in component_attrs[component_id]
     }
+    exterior_ground_attrs: set[int] = set()
+    exterior_physical_names: set[str] = set()
 
     if exterior_boundary_policy == "ground":
-        for info in groups.get("boundary_surfaces", {}).values():
+        for physical_name, info in groups.get("boundary_surfaces", {}).items():
             if (
                 isinstance(info, Mapping)
                 and info.get("sgb_record") == "final_physical_group"
                 and info.get("source") == "domain_boundary"
                 and info.get("solver_use") == "solver_active"
             ):
-                ground_attrs.update(_physical_group_values(info.get("phys_group")))
-        if not ground_attrs:
+                exterior_ground_attrs.update(
+                    _physical_group_values(info.get("phys_group"))
+                )
+                exterior_physical_names.add(str(physical_name))
+        if not exterior_ground_attrs:
             raise ValueError(
                 "exterior_boundary_policy='ground' requires at least one exterior boundary."
             )
 
+    if set(attribute_components).intersection(exterior_ground_attrs):
+        raise ValueError("conductor and exterior boundary attributes must be disjoint.")
+    ground_attrs = physical_ground_attrs | exterior_ground_attrs
     if ground_attrs:
         boundary_map["Ground"] = {"Attributes": sorted(ground_attrs)}
 
@@ -433,7 +477,29 @@ def _electrostatic_boundaries(
     ):
         raise ValueError("Terminal-to-boundary mapping mismatch after synthesis.")
 
-    return boundary_map, terminal_index_map
+    ground_components = sorted(physical_ground_components)
+    return (
+        boundary_map,
+        terminal_index_map,
+        {
+            "requested_net_ids": sorted(requested_ground_nets),
+            "physical_net_ids": sorted(
+                {component_nets[component_id] for component_id in ground_components}
+            ),
+            "conductor_component_ids": ground_components,
+            "physical_names": sorted(
+                {
+                    name
+                    for component_id in ground_components
+                    for name in component_physical_names[component_id]
+                }
+            ),
+            "physical_attributes": sorted(physical_ground_attrs),
+            "exterior_physical_names": sorted(exterior_physical_names),
+            "exterior_attributes": sorted(exterior_ground_attrs),
+            "union_attributes": sorted(ground_attrs),
+        },
+    )
 
 
 def _linear_solver(numerical: Mapping[str, Any]) -> dict[str, Any]:

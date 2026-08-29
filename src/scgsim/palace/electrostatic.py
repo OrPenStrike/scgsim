@@ -43,6 +43,7 @@ class ElectrostaticSim:
     route: Literal["A", "B"] = "B"
     route_a_thin_film: RouteAThinFilm | None = None
     terminals: list[TerminalBinding] = field(default_factory=list)
+    ground_net_ids: list[str] = field(default_factory=list)
     surface_epr_specs: dict[str, dict[str, Any]] | None = None
     save_fields: int = 0
     unassigned_conductor_policy: Literal["ground", "error"] = "ground"
@@ -151,6 +152,13 @@ class ElectrostaticSim:
         )
         self.terminals = [item for item in self.terminals if item.name != binding.name]
         self.terminals.append(binding)
+        self._invalidate_config()
+
+    def add_ground(self, *, net_id: str) -> None:
+        """Bind exact SGB conductor-net identity to physical Palace Ground."""
+        ground_net_id = validate_nonempty_string(net_id, "net_id")
+        if ground_net_id not in self.ground_net_ids:
+            self.ground_net_ids.append(ground_net_id)
         self._invalidate_config()
 
     def set_surface_epr(
@@ -346,6 +354,7 @@ class ElectrostaticSim:
         result = build_electrostatic_config(
             groups=self._mesh_result.groups,
             terminals=self.terminals,
+            ground_net_ids=self.ground_net_ids,
             materials=self._materials,
             save_fields=self.save_fields,
             unassigned_conductor_policy=self.unassigned_conductor_policy,
@@ -356,12 +365,13 @@ class ElectrostaticSim:
         )
         metadata_dir = self._mesh_result.output_dir / "metadata"
         index_payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "entries": [
                 *result.terminal_index_map,
                 *result.domain_energy_index_map,
                 *result.surface_epr_index_map,
             ],
+            "ground_boundary": result.ground_boundary_resolution,
         }
         material_payload = {
             "schema_version": 1,
