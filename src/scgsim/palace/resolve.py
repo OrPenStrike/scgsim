@@ -147,17 +147,32 @@ class ResolvedPalaceResult:
     returned_receipt: PalaceReturnedReceipt
     provenance: PalaceProvenance
 
-    def show_run_trustworthiness(self, *, theme: str = "light"):
+    def show_run_trustworthiness(
+        self, *, theme: str = "light", show_details: bool = False
+    ):
         from .report import _show_run_trustworthiness
 
-        return _show_run_trustworthiness(self, theme=theme)
+        return _show_run_trustworthiness(
+            self,
+            theme=theme,
+            show_details=show_details,
+        )
 
     def show_all_results(
-        self, *, theme: str = "light", ranking_limit: int | None = 20
+        self,
+        *,
+        theme: str = "light",
+        ranking_limit: int | None = 20,
+        show_details: bool = False,
     ) -> None:
         from .report import _show_all_results
 
-        _show_all_results(self, theme=theme, ranking_limit=ranking_limit)
+        _show_all_results(
+            self,
+            theme=theme,
+            ranking_limit=ranking_limit,
+            show_details=show_details,
+        )
 
     def show_physics_quantities(
         self, *, theme: str = "light", ranking_limit: int | None = 20
@@ -166,10 +181,10 @@ class ResolvedPalaceResult:
 
         return _show_physics_quantities(self, theme=theme, ranking_limit=ranking_limit)
 
-    def show_simulation_benchmark(self) -> dict[str, dict[str, Any]]:
+    def show_simulation_benchmark(self, *, show_details: bool = False):
         from .report import _show_simulation_benchmark
 
-        return _show_simulation_benchmark(self)
+        return _show_simulation_benchmark(self, show_details=show_details)
 
 
 def resolve_palace_result(

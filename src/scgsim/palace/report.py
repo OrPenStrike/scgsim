@@ -237,23 +237,32 @@ class PalaceTrustReport:
     cost: dict[str, Any]
     provenance: dict[str, Any]
     theme: ReportTheme = "light"
+    show_details: bool = False
 
     def with_theme(self, theme: ReportTheme) -> PalaceTrustReport:
         checked = _checked_theme(theme)
         return self if self.theme == checked else replace(self, theme=checked)
 
     def show_run_trustworthiness(
-        self, *, theme: ReportTheme = "light"
+        self, *, theme: ReportTheme = "light", show_details: bool = False
     ) -> PalaceTrustReport:
         """Return this complete or partial trust report with the selected theme."""
 
-        return self.with_theme(theme)
+        report = self.with_theme(theme)
+        checked = _checked_show_details(show_details)
+        return (
+            report
+            if report.show_details == checked
+            else replace(report, show_details=checked)
+        )
 
-    def show_simulation_benchmark(self) -> dict[str, dict[str, Any]]:
-        """Return every available cost, timing, resource, and run-state field."""
+    def show_simulation_benchmark(
+        self, *, show_details: bool = False
+    ) -> SimulationBenchmarkReport:
+        """Return the readable benchmark while retaining every machine field."""
 
         attempted = _read_optional_json(self.run_dir / "results/palace/palace.json")
-        return {
+        data = {
             "cost": dict(self.cost),
             "performance": {"counts": {}, "durations": dict(self.durations)},
             "attempted_run": {
@@ -279,17 +288,29 @@ class PalaceTrustReport:
                 "failure": _failure_payload(self.failure),
             },
         }
+        return SimulationBenchmarkReport(
+            trust=self,
+            data=data,
+            show_details=_checked_show_details(show_details),
+        )
 
     def show_all_results(
-        self, *, theme: ReportTheme = "light", ranking_limit: int | None = 20
+        self,
+        *,
+        theme: ReportTheme = "light",
+        ranking_limit: int | None = 20,
+        show_details: bool = False,
     ) -> None:
         """Display trust, benchmark, and available physics in the shared order."""
 
         from IPython.display import display
 
-        trust = self.show_run_trustworthiness(theme=theme)
+        trust = self.show_run_trustworthiness(
+            theme=theme,
+            show_details=show_details,
+        )
         display(trust)
-        display(trust.show_simulation_benchmark())
+        display(trust.show_simulation_benchmark(show_details=show_details))
         display(
             trust.show_physics_quantities(
                 theme=theme,
@@ -328,7 +349,8 @@ class PalaceTrustReport:
                 display(HTML(item))
             else:
                 _show_figure(item)
-        display(HTML(self._provenance_html()))
+        if self.show_details:
+            display(HTML(self._provenance_html()))
 
     def show_physics_quantities(
         self,
@@ -778,6 +800,38 @@ class PalaceTrustReport:
 
 
 @dataclass(frozen=True)
+class SimulationBenchmarkReport:
+    """Human-readable simulation cost with complete machine data in ``data``."""
+
+    trust: PalaceTrustReport
+    data: dict[str, Any]
+    show_details: bool = False
+
+    def _ipython_display_(self) -> None:
+        from IPython.display import HTML, display
+
+        display(HTML(self.trust._benchmark_cards_html()))
+        timing = self.trust._benchmark_time_figure()
+        if isinstance(timing, str):
+            display(HTML(timing))
+        else:
+            _show_figure(timing)
+        display(HTML(self.trust._benchmark_pass_table_html()))
+        for figure in self.trust._benchmark_pass_figures():
+            _show_figure(figure)
+        if self.show_details:
+            payload = html.escape(json.dumps(self.data, indent=2, sort_keys=True))
+            display(
+                HTML(
+                    "<section><h4>Benchmark metadata</h4>"
+                    "<p style='opacity:0.75;margin-top:0'>Complete machine-readable "
+                    "cost, timing, resource, and run-state fields.</p>"
+                    f"<pre style='white-space:pre-wrap'>{payload}</pre></section>"
+                )
+            )
+
+
+@dataclass(frozen=True)
 class PhysicsQuantitiesReport:
     """Latest readable physical quantities built from structured solver data."""
 
@@ -856,12 +910,15 @@ def inspect_run_trustworthiness(
 
 
 def _show_run_trustworthiness(
-    result: ResolvedPalaceResult, *, theme: ReportTheme = "light"
+    result: ResolvedPalaceResult,
+    *,
+    theme: ReportTheme = "light",
+    show_details: bool = False,
 ) -> PalaceTrustReport:
     if not isinstance(result, ResolvedPalaceResult):
         raise TypeError("resolved result report requires ResolvedPalaceResult.")
     report = _build_trust_report(result.run_dir, resolved=result, theme=theme)
-    return report
+    return report.show_run_trustworthiness(theme=theme, show_details=show_details)
 
 
 def _show_physics_quantities(
@@ -882,6 +939,7 @@ def _show_all_results(
     *,
     theme: ReportTheme = "light",
     ranking_limit: int | None = 20,
+    show_details: bool = False,
 ) -> None:
     """Display trust, benchmark, and physics in the Human-defined order."""
 
@@ -890,9 +948,19 @@ def _show_all_results(
 
     from IPython.display import display
 
-    trust = _show_run_trustworthiness(result, theme=theme)
+    trust = _show_run_trustworthiness(
+        result,
+        theme=theme,
+        show_details=show_details,
+    )
     display(trust)
-    display(_show_simulation_benchmark(result))
+    display(
+        SimulationBenchmarkReport(
+            trust=trust,
+            data=_resolved_benchmark_data(result),
+            show_details=_checked_show_details(show_details),
+        )
+    )
     display(
         trust.show_physics_quantities(
             theme=theme,
@@ -903,12 +971,22 @@ def _show_all_results(
 
 def _show_simulation_benchmark(
     result: ResolvedPalaceResult,
-) -> dict[str, dict[str, Any]]:
-    """Return native cost, performance, resources, and receipt metadata."""
+    *,
+    show_details: bool = False,
+) -> SimulationBenchmarkReport:
+    """Return the readable benchmark and its complete machine data."""
 
     if not isinstance(result, ResolvedPalaceResult):
         raise TypeError("resolved result report requires ResolvedPalaceResult.")
 
+    return SimulationBenchmarkReport(
+        trust=_show_run_trustworthiness(result),
+        data=_resolved_benchmark_data(result),
+        show_details=_checked_show_details(show_details),
+    )
+
+
+def _resolved_benchmark_data(result: ResolvedPalaceResult) -> dict[str, Any]:
     return {
         "cost": {
             "problem_degrees_of_freedom": result.cost.problem_degrees_of_freedom,
@@ -1769,12 +1847,13 @@ def _surface_ranking_figure(
             f"{_series_label(snapshot)}: latest surface participation ranking "
             f"({snapshot.source}; {shown} of {count})"
         ),
-        height=max(360, 29 * shown + 130),
+        height=max(420, 48 * shown + 150),
         margin={"l": 240, "r": 52, "t": 72, "b": 64},
         hovermode="closest",
         showlegend=False,
         theme=theme,
     )
+    fig.update_layout(bargap=0.38)
     fig.update_xaxes(title=_axis_title("participation", tokens), rangemode="tozero")
     fig.update_yaxes(autorange="reversed", automargin=True)
     return fig
@@ -2276,6 +2355,12 @@ def _checked_ranking_limit(value: int | None) -> int | None:
         return None
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError("ranking_limit must be a positive integer or None.")
+    return value
+
+
+def _checked_show_details(value: bool) -> bool:
+    if not isinstance(value, bool):
+        raise TypeError("show_details must be a bool.")
     return value
 
 

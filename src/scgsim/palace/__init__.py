@@ -13,6 +13,7 @@ from .report import (
     PalaceTrustReport,
     PassCostRecord,
     PhysicsQuantitiesReport,
+    SimulationBenchmarkReport,
     inspect_run_trustworthiness,
 )
 from .resolve import (
@@ -39,6 +40,7 @@ __all__ = [
     "PassCostRecord",
     "PhysicsQuantitiesReport",
     "ResolvedPalaceResult",
+    "SimulationBenchmarkReport",
     "inspect_run_trustworthiness",
     "resolve_palace_result",
 ]
