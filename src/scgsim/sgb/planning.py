@@ -6181,6 +6181,46 @@ def _auto_vacuum_sidewall_ref_solution_id(
     return True, matches[0]
 
 
+def _adjacent_auto_vacuum_sidewall_component_id(
+    build_input: GeometryBuildInput,
+    *,
+    entity: SemanticEntitySpec,
+    geometry_ref: Mapping[str, Any],
+) -> str | None:
+    """Resolve an exact auto-vacuum child across an authored host boundary."""
+    points = geometry_ref.get("quad_points", ())
+    if len(points) != 4:
+        raise ValueError(f"{entity.semantic_id} sidewall requires four quad points")
+    start = (float(points[0][0]), float(points[0][1]))
+    end = (float(points[1][0]), float(points[1][1]))
+    z_values = tuple(float(point[2]) for point in points)
+    z_min_um, z_max_um = min(z_values), max(z_values)
+    matches: list[str] = []
+    for solution in _solution_entities(build_input):
+        if not bool(solution.metadata.get("is_auto_vacuum_region")):
+            continue
+        entity_ids = solution.metadata.get("auto_vacuum_subtracting_entity_ids")
+        if isinstance(entity_ids, str | bytes) or not isinstance(entity_ids, Sequence):
+            raise TypeError(
+                f"auto-vacuum component {solution.semantic_id!r} lacks an entity subtractor ledger"
+            )
+        if entity.semantic_id not in entity_ids:
+            continue
+        if not (
+            _same_z(float(solution.geometry["z_min_um"]), z_min_um)
+            and _same_z(float(solution.geometry["z_max_um"]), z_max_um)
+            and _sidewall_segment_is_component_boundary(start, end, solution)
+        ):
+            continue
+        matches.append(solution.semantic_id)
+    if len(matches) > 1:
+        raise ValueError(
+            f"{entity.semantic_id} sidewall segment {start!r}->{end!r} has "
+            f"ambiguous auto-vacuum adjacency: {matches!r}."
+        )
+    return matches[0] if matches else None
+
+
 def _sidewall_segment_is_component_boundary(
     start: tuple[float, float],
     end: tuple[float, float],
@@ -6764,7 +6804,13 @@ def _conductor_sidewall_geometry_refs(
             if not auto_parent and _sidewall_on_solution_outer_boundary(
                 geometry_ref, adjacent_solution
             ):
-                continue
+                ref_adjacent_solution_id = _adjacent_auto_vacuum_sidewall_component_id(
+                    build_input,
+                    entity=entity,
+                    geometry_ref=geometry_ref,
+                )
+                if ref_adjacent_solution_id is None:
+                    continue
             exposed_refs.append(
                 {
                     **geometry_ref,
