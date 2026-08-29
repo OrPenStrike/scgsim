@@ -161,6 +161,7 @@ def _failed_eigenmode_run(
     log_text: str = "solver killed\n",
     include_iteration: bool = True,
     seal_iteration: bool = False,
+    conflicting_final_problem_size: bool = False,
 ) -> tuple[str, dict[str, object]]:
     metadata = root / "metadata"
     results = root / "results" / "palace"
@@ -169,13 +170,42 @@ def _failed_eigenmode_run(
     results.mkdir(parents=True)
     logs.mkdir()
     (root / "config.json").write_text("{}", encoding="utf-8")
-    (results / "eig.csv").write_text("m,Re{f} (GHz)\n", encoding="utf-8")
+    (results / "eig.csv").write_text(
+        (
+            "m,Re{f} (GHz)\n1,5.0\n"
+            if conflicting_final_problem_size
+            else "m,Re{f} (GHz)\n"
+        ),
+        encoding="utf-8",
+    )
     (logs / "palace-1.log").write_text(log_text, encoding="utf-8")
     if include_iteration:
         iteration = results / "iteration07"
         iteration.mkdir()
         (iteration / "eig.csv").write_text(
             "m,Re{f} (GHz)\n1,5.0\n",
+            encoding="utf-8",
+        )
+        if conflicting_final_problem_size:
+            (iteration / "palace.json").write_text(
+                json.dumps(
+                    {
+                        "Problem": {"DegreesOfFreedom": 100, "MeshElements": 50},
+                        "ElapsedTime": {"Durations": {"Total": 10.0}},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+    if conflicting_final_problem_size:
+        (results / "palace.json").write_text(
+            json.dumps(
+                {
+                    "Problem": {"DegreesOfFreedom": 200, "MeshElements": 100},
+                    "ElapsedTime": {"Durations": {"Total": 10.0}},
+                }
+            )
+            + "\n",
             encoding="utf-8",
         )
 
@@ -208,6 +238,8 @@ def _failed_eigenmode_run(
     ]
     if seal_iteration:
         output_paths.append("results/palace/iteration07/eig.csv")
+        if conflicting_final_problem_size:
+            output_paths.append("results/palace/iteration07/palace.json")
     output_files = [_file_record(root, relative) for relative in output_paths]
     receipt: dict[str, object] = {
         "schema": "palace-returned-run-receipt.v1",
@@ -590,6 +622,24 @@ class PalaceReportUxTests(unittest.TestCase):
             benchmark_surface["selected_snapshot"]["source"], "iteration07"
         )
         self.assertIn("attempted_run", benchmark_surface)
+
+    def test_equal_final_physics_with_conflicting_cost_uses_atomic_iteration(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            _failed_eigenmode_run(
+                root,
+                seal_iteration=True,
+                conflicting_final_problem_size=True,
+            )
+            trust = inspect_run_trustworthiness(root)
+
+        self.assertEqual(trust.selection.final_snapshot_status, "unreadable")
+        self.assertEqual(trust.selection.selected_source, "iteration07")
+        self.assertEqual(trust.selection.integrity, "receipt_bound")
+        self.assertEqual(trust.cost["problem_degrees_of_freedom"], 100)
+        self.assertEqual(trust.cost["mesh_elements"], 50)
 
     def test_hash_verified_slurm_oom_is_classified(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

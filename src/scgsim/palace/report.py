@@ -1062,7 +1062,12 @@ def _build_trust_report(
         if resolved is not None
         else _read_optional_json(root / "metadata" / "palace_index_map.json")
     )
-    collected = _collect_amr_passes(root, problem, surface_bindings)
+    collected = _collect_amr_passes(
+        root,
+        problem,
+        surface_bindings,
+        failed_attempt=receipt is not None and receipt.get("status") == "failed",
+    )
     passes = collected.passes
     receipt_status = receipt.get("status") if receipt is not None else None
     selection = _result_selection(
@@ -1393,6 +1398,8 @@ def _collect_amr_passes(
     root: Path,
     problem: str,
     surface_bindings: tuple[dict[str, Any], ...] | None,
+    *,
+    failed_attempt: bool,
 ) -> _CollectedSnapshots:
     results = root / "results" / "palace"
     if not results.is_dir():
@@ -1426,6 +1433,8 @@ def _collect_amr_passes(
     if parent is None:
         return _CollectedSnapshots(tuple(snapshots), "unreadable")
     if snapshots and _same_physics(snapshots[-1], parent):
+        if failed_attempt and _problem_size_conflicts(snapshots[-1], parent):
+            return _CollectedSnapshots(tuple(snapshots), "unreadable")
         snapshots[-1] = replace(parent, pass_index=snapshots[-1].pass_index)
         return _CollectedSnapshots(tuple(snapshots), "readable")
     return _CollectedSnapshots((*snapshots, parent), "readable")
@@ -1941,6 +1950,16 @@ def _same_physics(left: AmrPassSnapshot, right: AmrPassSnapshot) -> bool:
     if left.capacitance_matrix_f is not None and right.capacitance_matrix_f is not None:
         return left.capacitance_matrix_f == right.capacitance_matrix_f
     return False
+
+
+def _problem_size_conflicts(left: AmrPassSnapshot, right: AmrPassSnapshot) -> bool:
+    return any(
+        left_value is not None and right_value is not None and left_value != right_value
+        for left_value, right_value in (
+            (left.degrees_of_freedom, right.degrees_of_freedom),
+            (left.mesh_elements, right.mesh_elements),
+        )
+    )
 
 
 def _scalar_physics(pass_: AmrPassSnapshot | None, problem: str) -> float | None:
