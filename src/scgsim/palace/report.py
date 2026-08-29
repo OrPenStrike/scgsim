@@ -2186,7 +2186,7 @@ def _style_figure(
             "xanchor": "left",
             "y": 0.98,
             "yanchor": "top",
-            "pad": {"t": 0, "b": 10, "l": 0},
+            "pad": {"t": 12, "b": 12, "l": 16, "r": 0},
         },
         colorway=list(_COLORWAY),
         hovermode=hovermode,
