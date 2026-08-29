@@ -528,6 +528,7 @@ def _validate_q3d_region_ground(
         region.get("native_region_object_id") != final_id
         or region.get("native_bounding_box_um") != list(final_bounds)
         or evidence.get("target_net") != spec.grounded_region_net
+        or evidence.get("target_net_origin") != "generated_region_enclosure"
         or evidence.get("native_final_region_padding_um") != [0.0] * 6
         or evidence.get("native_region_object_id") != final_id
         or evidence.get("native_bounding_box_um") != list(final_bounds)
@@ -574,18 +575,13 @@ def _validate_q3d_region_ground(
                 "thickness": "1um",
             }
         )
-    target_net = next(
-        (record for record in nets if record.get("name") == spec.grounded_region_net),
-        None,
-    )
-    if not isinstance(target_net, dict) or target_net.get("net_type") != "Ground":
-        raise RuntimeError("grounded Q3D Region target net receipt is invalid")
-    original_ids = target_net["native_object_ids"]
+    declared_net_ids = {record["name"]: record["native_object_ids"] for record in nets}
     all_net_ids = {
         object_id for record in nets for object_id in record["native_object_ids"]
     }
     if (
-        not _positive_unique_ids(original_ids, len(target_net["object_names"]))
+        spec.grounded_region_net in declared_net_ids
+        or evidence.get("native_declared_net_object_ids") != declared_net_ids
         or len(sheet_ids) != 6
         or len(set(sheet_ids)) != 6
         or set(sheet_ids) & all_net_ids
@@ -593,15 +589,18 @@ def _validate_q3d_region_ground(
         or final_id in sheet_ids
     ):
         raise RuntimeError("grounded Q3D Region object IDs are invalid")
-    expected_ids = [*original_ids, *sheet_ids]
+    expected_ids = sheet_ids
     saved = evidence.get("native_saved_boundaries")
     if (
         evidence.get("native_target_net_object_ids") != expected_ids
+        or evidence.get("native_design_validation")
+        != {"method": "ValidateDesign", "ok": True}
         or not isinstance(saved, dict)
         or saved.get("target")
         != {
             "name": spec.grounded_region_net,
             "bound_type": "GroundNet",
+            "origin": "generated_region_enclosure",
             "object_ids": expected_ids,
         }
         or saved.get("thin_conductors") != thin_boundaries

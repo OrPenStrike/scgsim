@@ -949,17 +949,12 @@ class Q3dSpec:
         grounded_region_net = self.grounded_region_net
         if grounded_region_net is not None:
             if _text(grounded_region_net, "grounded_region_net") != grounded_region_net:
+                raise ValueError("grounded_region_net must be exact non-empty text")
+            if self.solve_ac_rl:
+                raise ValueError("grounded_region_net requires solve_ac_rl=False")
+            if grounded_region_net in {net.name for net in nets}:
                 raise ValueError(
-                    "grounded_region_net must exactly match a declared Ground net"
-                )
-            matches = [
-                net
-                for net in nets
-                if net.name == grounded_region_net and net.net_type == "Ground"
-            ]
-            if len(matches) != 1:
-                raise ValueError(
-                    "grounded_region_net must exactly name one declared Ground net"
+                    "grounded_region_net must name a new dedicated enclosure net"
                 )
         object.__setattr__(self, "nets", nets)
 

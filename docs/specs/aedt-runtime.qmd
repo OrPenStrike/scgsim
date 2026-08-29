@@ -78,20 +78,34 @@ capacitance/conductance setup and seals/resolves exactly the native
 `results/q3d/c_matrix.csv`; no AC-RL setup fields, export, convergence evidence,
 or normalized compatibility artifact is produced.
 
-`Q3dSpec.grounded_region_net` is either `null`, retaining the current open
-formulation, or non-empty text that exactly names one declared `Ground` net.
-The latter is fail-closed: it creates exactly six sheets from the six native
-faces of the AEDT object named `Region`, assigns each a PEC thin conductor, and
-adds those six sheets to that one existing Ground net. It does not infer a net
-from component names, geometry, or a solver default.
+`Q3dSpec.grounded_region_net` is either `null`, retaining the open formulation,
+or non-empty text naming a new SCGSim-created, dedicated Region-enclosure
+`GroundNet`. The generated name must not collide with any declared physical
+net. A grounded Region requires `solve_ac_rl=false`; the combination otherwise
+fails closed. This is a capacitance/conductance-only construction and makes no
+DC or AC-RL return-path claim.
 
-For a grounded Region, PyAEDT 1.3.0 public APIs are the only construction
-path. The receipt and resolver bind the exact `+X`, `-X`, `+Y`, `-Y`, `+Z`, and
-`-Z` directions; the pre-sheet source Region object/face IDs, centers, and
-normals; the separately read-back final Region faces; created sheet object IDs
-and names; thin-conductor boundary names; Region bounds; the declared target
-net; and native net/boundary assignment readback. A missing, repeated,
-mismatched, or non-native value rejects the run.
+For a grounded Region, SCGSim creates exactly six PEC `ThinConductor` sheets
+from the six native faces of the AEDT object named `Region`. The sheets remain
+separate edge-touching geometry objects and are assigned only to the generated
+Region-enclosure net; SCGSim does not unite them or add a physical bridge.
+Declared physical `Ground` nets and their native object assignments remain
+unchanged.
+
+PyAEDT 1.3.0 public APIs remain the construction path. After the pre-solve
+project save, the runtime calls AEDT's native `ValidateDesign`. The receipt
+seals successful validation together with the generated net and sheet
+assignments. It also binds the exact `+X`, `-X`, `+Y`, `-Y`, `+Z`, and `-Z`
+directions; pre-sheet Region object and face identities, centers, and normals;
+separately read-back final Region faces; created sheet object identities and
+names; thin-conductor boundary names; Region bounds; generated net identity;
+and native net and boundary assignment readback.
+
+The resolver requires exact equality between sealed and native readback
+assignments, proves that generated and declared physical-net assignments are
+disjoint, and verifies that declared physical `Ground` assignments remain
+unchanged. Missing, repeated, mismatched, non-native, or unsuccessful validation
+evidence rejects the run.
 The same native Region and boundary evidence is read again after the final
 post-solve project save before it becomes receipt-authoritative.
 
@@ -100,6 +114,10 @@ SCGSim therefore snapshots the requested expanded native faces, creates the six
 sheets there, and rebuilds the final native Region with zero additional offset.
 The final Region has the requested expanded bounds; the receipt records both
 the requested padding and this zero-offset finalization explicitly.
+
+The prior failed `_01` project remains immutable diagnostic evidence. There is
+no compatibility fallback, physical bridge, or unite path. This replacement
+contract remains `CONVERGING`.
 
 ## Current exclusions
 

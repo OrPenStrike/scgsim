@@ -258,6 +258,12 @@ def _solve_q3d(Q3d: Any, run_dir: Path, spec: Q3dSpec) -> dict[str, Any]:
         region["native_bounding_box_um"] = region["grounded_region"][
             "native_bounding_box_um"
         ]
+        if app.validate_simple() != 1:
+            raise RuntimeError("Q3D grounded Region failed native ValidateDesign")
+        region["grounded_region"]["native_design_validation"] = {
+            "method": "ValidateDesign",
+            "ok": True,
+        }
     if not app.analyze_setup(name=spec.run_control.setup_name, blocking=True):
         raise RuntimeError(
             f"Q3D failed to analyze setup {spec.run_control.setup_name!r}"
@@ -674,18 +680,9 @@ def _seal_q3d_region(app: Any, spec: Q3dSpec) -> dict[str, Any]:
     intended_bounds = _q3d_region_bounds(initial_region)
     source_faces = _q3d_region_faces(initial_region, intended_bounds)
     source_region = _q3d_region_evidence(initial_region, intended_bounds, source_faces)
-    target = app.design_nets.get(spec.grounded_region_net)
-    target_spec = next(
-        (net for net in spec.nets if net.name == spec.grounded_region_net), None
-    )
-    if target is None or target_spec is None or target.type != "GroundNet":
-        raise RuntimeError("Q3D grounded Region target is not one native Ground net")
-    expected_target_ids = [
-        int(app.modeler.get_object_from_name(name).id)
-        for name in target_spec.object_names
-    ]
-    if _q3d_assignment(app, target_spec.name) != expected_target_ids:
-        raise RuntimeError("Q3D grounded Region target net assignment is invalid")
+    declared_net_ids = {net.name: _q3d_assignment(app, net.name) for net in spec.nets}
+    if spec.grounded_region_net in app.net_names:
+        raise RuntimeError("Q3D grounded Region net already exists")
     sheet_names = [name for name, _ in _Q3D_REGION_SHEET_NAMES.values()]
     if set(sheet_names) & set(app.modeler.sheet_names):
         raise RuntimeError("Q3D Region grounding sheet name already exists")
@@ -767,25 +764,35 @@ def _seal_q3d_region(app: Any, spec: Q3dSpec) -> dict[str, Any]:
         )
     if set(app.modeler.sheet_names) - initial_sheets != set(sheet_names):
         raise RuntimeError("Q3D Region grounding did not create exactly six sheets")
-    target.props["Objects"] = [*target_spec.object_names, *sheet_names]
-    if not target.update():
-        raise RuntimeError("Q3D Region grounding target net update failed")
-    native_target_ids = _q3d_assignment(app, target_spec.name)
-    if native_target_ids != [
-        *expected_target_ids,
-        *(record["sheet_object_id"] for record in records),
-    ]:
+    target = app.assign_net(sheet_names, spec.grounded_region_net, "Ground")
+    if (
+        target is None
+        or target.name != spec.grounded_region_net
+        or target.type != "GroundNet"
+    ):
+        raise RuntimeError("Q3D Region enclosure Ground net creation failed")
+    native_target_ids = _q3d_assignment(app, spec.grounded_region_net)
+    if native_target_ids != [record["sheet_object_id"] for record in records]:
         raise RuntimeError("Q3D Region grounding target net readback failed")
+    if any(
+        _q3d_assignment(app, name) != object_ids
+        for name, object_ids in declared_net_ids.items()
+    ):
+        raise RuntimeError(
+            "Q3D declared net assignment changed during Region grounding"
+        )
     if not _same_q3d_bounds(region.bounding_box, list(bounds)):
         raise RuntimeError("Q3D Region native geometry changed during grounding")
     return {
-        "target_net": target_spec.name,
+        "target_net": spec.grounded_region_net,
+        "target_net_origin": "generated_region_enclosure",
         "native_region_object_id": int(region.id),
         "native_bounding_box_um": list(bounds),
         "native_final_region_padding_um": [0.0] * 6,
         "source_region": source_region,
         "final_region": _q3d_region_evidence(region, bounds, faces),
         "sheets": records,
+        "native_declared_net_object_ids": declared_net_ids,
         "native_target_net_object_ids": native_target_ids,
     }
 
@@ -801,6 +808,7 @@ def _read_q3d_region_ground(
     faces = _q3d_region_faces(region, bounds)
     if (
         evidence.get("target_net") != spec.grounded_region_net
+        or evidence.get("target_net_origin") != "generated_region_enclosure"
         or not _same_q3d_bounds(evidence.get("native_bounding_box_um"), list(bounds))
         or evidence.get("native_final_region_padding_um") != [0.0] * 6
         or _native_object_property(region, "Material").strip('"').casefold()
@@ -875,21 +883,23 @@ def _read_q3d_region_ground(
         sheet_ids.append(sheet_id)
     target = boundaries.get(spec.grounded_region_net)
     expected_target = evidence.get("native_target_net_object_ids")
+    declared_net_ids = {
+        net.name: [
+            int(app.modeler.get_object_from_name(name).id) for name in net.object_names
+        ]
+        for net in spec.nets
+    }
     if (
         not isinstance(target, dict)
         or target.get("BoundType") != "GroundNet"
         or target.get("Objects") != expected_target
-        or expected_target
-        != [
-            *(
-                int(app.modeler.get_object_from_name(name).id)
-                for net in spec.nets
-                if net.name == spec.grounded_region_net
-                for name in net.object_names
-            ),
-            *sheet_ids,
-        ]
+        or expected_target != sheet_ids
         or _q3d_assignment(app, spec.grounded_region_net) != expected_target
+        or evidence.get("native_declared_net_object_ids") != declared_net_ids
+        or any(
+            _q3d_assignment(app, name) != object_ids
+            for name, object_ids in declared_net_ids.items()
+        )
     ):
         raise RuntimeError("Q3D saved grounded Region net readback is invalid")
     return {
@@ -901,6 +911,7 @@ def _read_q3d_region_ground(
             "target": {
                 "name": spec.grounded_region_net,
                 "bound_type": "GroundNet",
+                "origin": "generated_region_enclosure",
                 "object_ids": expected_target,
             },
             "thin_conductors": native_thin_conductors,
