@@ -2,18 +2,23 @@
 title: "Unified Report Model"
 ---
 
-SCGSim provides strict solver-specific resolvers and a consistent notebook
-reading surface without pretending different physical quantities are
-identical.
+SCGSim is an independent downstream toolkit, not official gsim. It provides
+strict solver-specific resolvers and a consistent, trust-first notebook reading
+surface without pretending different physical quantities are identical.
 
 ## Common envelope
 
-Current Palace reports organize:
+Current Palace `show_all_results()` presentation follows this order:
 
-1. physical quantities;
-2. convergence and solver diagnostics;
-3. simulation cost and resource benchmarks;
-4. provenance and artifact identities.
+1. run trustworthiness, run identity, and receipt state;
+2. numerical evidence and simulation cost/resource benchmarks;
+3. available solver-specific physics.
+
+`inspect_run_trustworthiness()` supports completed, failed, and partial returned
+packages. It preserves the recorded receipt status and may expose the latest
+readable evidence without promoting an incomplete run. The strict
+`resolve_palace_result(..., expected_handoff_id=...)` path accepts only a
+completed package whose handoff, receipt, solver, and artifact hashes validate.
 
 ## Honesty rule
 
@@ -22,7 +27,21 @@ eigenfrequencies, driven network responses, field-energy participation, Q3D
 matrices, and Q2D per-unit-length results must retain their own units,
 extraction authority, and failure meaning.
 
-Palace returns native tabular summaries by default and can render Plotly tables
-when Plotly is explicitly installed and requested. AEDT resolved runs expose
-receipt-bound native physics rows and execution benchmarks. Presentation never
-weakens receipt, artifact-hash, or solver-identity validation.
+For Palace Surface EPR, `LossTan=0` preserves participation evidence but makes
+surface-loss Q and T1 unavailable; the report makes no surface-loss lifetime
+claim. Palace also returns the native `domain-E.csv` Volume Energy table and
+its exact index mapping, but no first-class Volume Energy report renderer is
+implemented.
+
+Palace and AEDT resolved quantities remain bound to their exact receipt,
+artifact-hash, handoff, and solver identities. Presentation never weakens those
+bindings and makes no numerical-convergence or cross-solver-agreement claim.
+
+## Current Palace scope
+
+The support derived from upstream gsim #61 is limited to Domain Energy,
+MA/MS/SA Surface EPR, exact index mapping, and Electrostatic/Eigenmode reports.
+SCGSim does not implement the upstream #171 cumulative inset-band presentation.
+Palace Driven and Magnetostatic implementation/reports, a Volume Energy
+renderer, and a portable report snapshot/export API are outside this current
+contract.
