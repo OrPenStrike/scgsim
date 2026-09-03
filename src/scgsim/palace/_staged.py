@@ -11,7 +11,6 @@ from typing import Any, Literal
 
 from scgsim.sgb.models import VacuumRegionSpec
 
-RUNTIME_VERSION = "v0.16.1"
 SCHEMA_VERSION = "v0.16.0"
 
 RouteAThinFilm = Literal["substrate_face", "metal_gap_equivalent"]

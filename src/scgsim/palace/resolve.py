@@ -10,6 +10,7 @@ import csv
 import hashlib
 import json
 import math
+import re
 import tarfile
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -17,6 +18,9 @@ from pathlib import Path
 from typing import Any
 
 from ._archive_layout import logical_tar_member_name, resolve_run_archive_path
+
+_RUNTIME_COMPATIBILITY_PATH = "metadata/palace_runtime_compatibility.json"
+_RUNTIME_COMPATIBILITY_SCHEMA = "palace-runtime-compatibility.v1"
 
 _PROBLEM_FAMILIES = {
     "Electrostatic": (
@@ -115,6 +119,9 @@ class PalaceReturnedReceipt:
     output_files: tuple[dict[str, Any], ...]
     log: dict[str, Any] | None
     solver_identity: dict[str, Any]
+    execution_stage: str | None = None
+    solver_invoked: bool | None = None
+    preflight_exit_code: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1460,6 +1467,66 @@ def _validate_receipt_payload(
         if observed[0] != expected[0] or observed[1] != expected[1]:
             raise ValueError(f"returned run receipt output hash mismatch for {rel}")
 
+    declared_palace_identity = _expect_mapping(
+        handoff_metadata.get("palace_identity"), "handoff palace_identity"
+    )
+    if declared_palace_identity.get("config_compatibility_probe") is not None:
+        if receipt_payload.get("execution_stage") != "solver":
+            raise ValueError(
+                "completed Palace receipt execution_stage must be solver."
+            )
+        if receipt_payload.get("solver_invoked") is not True:
+            raise ValueError("completed Palace receipt must record solver invocation.")
+        if _expect_int(receipt_payload.get("preflight_exit_code")) != 0:
+            raise ValueError(
+                "completed Palace receipt config compatibility preflight must pass."
+            )
+        if _RUNTIME_COMPATIBILITY_PATH not in output_map:
+            raise ValueError(
+                "returned run receipt misses the Palace runtime compatibility artifact."
+            )
+        runtime_compatibility = _expect_mapping(
+            receipt_payload.get("runtime_compatibility"),
+            "receipt.runtime_compatibility",
+        )
+        runtime_artifact = _read_json(
+            _confined_path(root, _RUNTIME_COMPATIBILITY_PATH)
+        )
+        if runtime_compatibility != runtime_artifact:
+            raise ValueError(
+                "returned run receipt Palace runtime compatibility does not match "
+                "its artifact."
+            )
+        _validate_runtime_compatibility(
+            runtime_compatibility, declared_palace_identity, root=root
+        )
+        runtime_command = _expect_mapping(
+            runtime_compatibility.get("command"),
+            "receipt.runtime_compatibility.command",
+        )
+        execution_identity = _expect_mapping(
+            handoff_metadata.get("execution_identity"), "handoff execution_identity"
+        )
+        expected_command = _expect_mapping(
+            execution_identity.get("command"), "handoff execution command"
+        )
+        if runtime_command.get("executable_identity") != expected_command.get(
+            "executable_identity"
+        ):
+            raise ValueError(
+                "Palace compatibility probe executable does not match the handoff "
+                "command."
+            )
+        resources = _expect_mapping(
+            handoff_metadata.get("requested_resources"), "handoff requested_resources"
+        )
+        if runtime_command.get("command_style") != resources.get(
+            "command_style", "binary"
+        ):
+            raise ValueError(
+                "Palace compatibility probe command style does not match the handoff."
+            )
+
     log = _expect_mapping(receipt_payload.get("log"), "return_receipt.log")
     if not log:
         raise ValueError("returned run receipt log entry is missing.")
@@ -1521,6 +1588,15 @@ def _build_returned_receipt(payload: dict[str, Any]) -> PalaceReturnedReceipt:
         else None,
         solver_identity=_expect_mapping(
             payload.get("solver_identity"), "receipt.solver_identity"
+        ),
+        execution_stage=_expect_scalar(
+            payload, "execution_stage", str, fallback=None
+        ),
+        solver_invoked=_expect_scalar(
+            payload, "solver_invoked", bool, fallback=None
+        ),
+        preflight_exit_code=_expect_int(
+            payload.get("preflight_exit_code"), optional=True
         ),
     )
 
@@ -1596,9 +1672,95 @@ def _expect_mapping(value: Any, name: str) -> dict[str, Any]:
 def _validate_palace_identity(payload: Mapping[str, Any]) -> None:
     if not payload:
         raise ValueError("palace_identity must be a non-empty mapping.")
-    for key in ("config_schema", "runtime"):
-        if _expect_scalar(payload, key, str, fallback=None) is None:
-            raise ValueError("palace_identity must include config_schema and runtime.")
+    _expect_scalar(payload, "config_schema", str)
+    probe = payload.get("config_compatibility_probe")
+    if probe is None:
+        _expect_scalar(payload, "runtime", str)
+        return
+    if probe != "native_dry_run":
+        raise ValueError("palace_identity config compatibility probe is invalid.")
+    if payload.get("config_compatibility_semantics") != "required_before_solve":
+        raise ValueError(
+            "palace_identity must require config compatibility before solving."
+        )
+    if payload.get("runtime_identity_semantics") != "observed_provenance_only":
+        raise ValueError(
+            "palace_identity must treat runtime identity as observed provenance only."
+        )
+    if payload.get("runtime") is not None or payload.get("runtime_git_commit") is not None:
+        raise ValueError(
+            "palace_identity must not declare a runtime version or Git eligibility Gate."
+        )
+
+
+def _validate_runtime_compatibility(
+    payload: Mapping[str, Any], palace_identity: Mapping[str, Any], *, root: Path
+) -> None:
+    if payload.get("schema") != _RUNTIME_COMPATIBILITY_SCHEMA:
+        raise ValueError("Palace runtime compatibility schema is invalid.")
+    config = _expect_mapping(payload.get("config"), "runtime compatibility config")
+    expected_config = {
+        "path": "config.json",
+        "bytes": (root / "config.json").stat().st_size,
+        "sha256": _sha256(root / "config.json"),
+        "declared_schema": _expect_scalar(palace_identity, "config_schema", str),
+    }
+    if config != expected_config:
+        raise ValueError(
+            "Palace runtime compatibility probe does not bind the sealed config."
+        )
+    compatibility = _expect_mapping(
+        payload.get("compatibility"), "runtime compatibility result"
+    )
+    if compatibility != {
+        "method": "native_dry_run",
+        "probe_exit_code": 0,
+        "verified": True,
+    }:
+        raise ValueError("Palace did not accept the sealed config during dry-run.")
+    observed = _expect_mapping(
+        payload.get("observed_identity"), "runtime observed identity"
+    )
+    native_git_tag = observed.get("native_git_tag")
+    if native_git_tag is not None and (
+        not isinstance(native_git_tag, str) or not native_git_tag
+    ):
+        raise ValueError("Palace observed native GitTag must be a non-empty string.")
+    version_probe_exit_code = observed.get("version_probe_exit_code")
+    if version_probe_exit_code is not None and (
+        isinstance(version_probe_exit_code, bool)
+        or not isinstance(version_probe_exit_code, int)
+    ):
+        raise ValueError("Palace version probe exit code must be an integer or null.")
+    runtime_binary_identity = observed.get("runtime_binary_identity")
+    runtime_binary_sha256 = observed.get("runtime_binary_sha256")
+    if (runtime_binary_identity is None) != (runtime_binary_sha256 is None):
+        raise ValueError("Palace runtime binary provenance must be complete or absent.")
+    if runtime_binary_identity is not None:
+        if (
+            not isinstance(runtime_binary_identity, str)
+            or not runtime_binary_identity
+            or Path(runtime_binary_identity).name != runtime_binary_identity
+        ):
+            raise ValueError("Palace runtime binary identity must be a basename.")
+        if (
+            not isinstance(runtime_binary_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", runtime_binary_sha256) is None
+        ):
+            raise ValueError("Palace runtime binary SHA-256 is invalid.")
+    command = _expect_mapping(payload.get("command"), "runtime compatibility command")
+    if command.get("command_style") not in {"binary", "wrapper"}:
+        raise ValueError("Palace runtime compatibility command style is invalid.")
+    executable_identity = _expect_scalar(command, "executable_identity", str)
+    if Path(executable_identity).name != executable_identity:
+        raise ValueError("Palace runtime executable must be a basename.")
+    if (
+        runtime_binary_identity is not None
+        and command.get("command_style") != "binary"
+    ):
+        raise ValueError(
+            "Palace runtime binary SHA may describe only the configured binary."
+        )
 
 
 def _parse_cell(value: str) -> Any:

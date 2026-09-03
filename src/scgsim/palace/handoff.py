@@ -25,7 +25,7 @@ from ._mesh import (
     SGB_RUNTIME_AUTHORITY,
     MeshBuildResult,
 )
-from ._staged import RUNTIME_VERSION, SCHEMA_VERSION
+from ._staged import SCHEMA_VERSION
 
 HandoffProfile = Literal["direct-local", "slurm-single-node", "slurm-multi-node"]
 _PROFILES = {"direct-local", "slurm-single-node", "slurm-multi-node"}
@@ -117,6 +117,12 @@ def prepare_handoff(
         ),
     )
     identity = _identity()
+    palace_identity = {
+        "config_schema": SCHEMA_VERSION,
+        "config_compatibility_probe": "native_dry_run",
+        "config_compatibility_semantics": "required_before_solve",
+        "runtime_identity_semantics": "observed_provenance_only",
+    }
 
     if returned_receipt_recorder_path.is_file():
         returned_receipt_recorder_path.unlink()
@@ -134,16 +140,13 @@ def prepare_handoff(
             setup,
             petsc,
             returned_receipt_recorder_name=returned_receipt_recorder_path.name,
+            palace_identity=palace_identity,
         )
         + "\n",
         encoding="utf-8",
     )
     script_path.chmod(script_path.stat().st_mode | 0o755)
 
-    palace_identity = {
-        "config_schema": SCHEMA_VERSION,
-        "runtime": RUNTIME_VERSION,
-    }
     execution_identity = _execution_identity(
         profile=profile,
         resources=resource_map,
@@ -332,6 +335,7 @@ def _render_script(
     petsc: Sequence[str],
     *,
     returned_receipt_recorder_name: str,
+    palace_identity: Mapping[str, Any],
 ) -> str:
     style = str(resources.get("command_style", "binary"))
     threads = _positive_int(
@@ -378,6 +382,28 @@ def _render_script(
         arguments.extend(["-np", '"$PALACE_PROCESSES"', "-nt", '"$PALACE_THREADS"'])
     arguments.append('"$PALACE_CONFIG"')
     command = " ".join([*(shlex.quote(item) for item in launcher), *arguments])
+    config_schema = _single_line(
+        str(palace_identity["config_schema"]), "palace_identity.config_schema"
+    )
+    receipt_command = (
+        f'python3 metadata/{returned_receipt_recorder_name} "$(pwd)" '
+        '"$PIPELINE_EXIT_CODE" --log-path "$PALACE_LOG" '
+        '--tee-exit-code "$TEE_EXIT_CODE" '
+        '--job-id "${SLURM_JOB_ID:-manual}" '
+        '--job-name "${SLURM_JOB_NAME:-manual}" '
+    )
+    preflight_receipt_command = (
+        receipt_command
+        + '--execution-stage config_compatibility '
+        '--preflight-exit-code "$COMPATIBILITY_VERIFY_EXIT" '
+        " || RECEIPT_EXIT=$?"
+    )
+    solver_receipt_command = (
+        receipt_command
+        + '--execution-stage solver --preflight-exit-code 0 '
+        '--solver-exit-code "$PALACE_EXIT_CODE" '
+        " || RECEIPT_EXIT=$?"
+    )
 
     run_directory_lines = (
         [
@@ -406,6 +432,7 @@ def _render_script(
         'cd "$RUN_DIR" || exit 2',
         "mkdir -p logs results/palace metadata",
         "rm -f metadata/palace_returned_run_receipt.json",
+        "rm -f metadata/palace_runtime_compatibility.json",
         *(["rm -f logs/palace-*.log"] if profile == "direct-local" else []),
         "rm -rf results/palace",
         "mkdir -p results/palace",
@@ -414,8 +441,10 @@ def _render_script(
         f"PALACE_EXECUTABLE={shlex.quote(executable)}",
         f"PALACE_PROCESSES={processes}",
         f"PALACE_THREADS={threads}",
+        f"PALACE_COMMAND_STYLE={shlex.quote(style)}",
         'export OMP_NUM_THREADS="$PALACE_THREADS"',
         'PALACE_LOG="logs/palace-${SLURM_JOB_ID:-manual}.log"',
+        'PALACE_RUNTIME_COMPATIBILITY="metadata/palace_runtime_compatibility.json"',
         '[[ -f "$PALACE_CONFIG" ]] || { echo "missing $PALACE_CONFIG" >&2; exit 2; }',
         '[[ -f "$PALACE_MESH" ]] || { echo "missing $PALACE_MESH" >&2; exit 2; }',
     ]
@@ -447,10 +476,48 @@ def _render_script(
             ]
         )
 
+    compatibility_probe = (
+        f"python3 metadata/{returned_receipt_recorder_name} verify-config "
+        '"$PALACE_EXECUTABLE" "$PALACE_COMMAND_STYLE" '
+        '"$PALACE_RUNTIME_COMPATIBILITY" "$PALACE_CONFIG" '
+        f"--config-schema {shlex.quote(config_schema)}"
+    )
+    if profile == "direct-local":
+        lines.extend(
+            [
+                "set -o pipefail",
+                f'{compatibility_probe} 2>&1 | tee -a "$PALACE_LOG"',
+                'COMPATIBILITY_PIPE_STATUS=("${PIPESTATUS[@]}")',
+                "COMPATIBILITY_VERIFY_EXIT=${COMPATIBILITY_PIPE_STATUS[0]:-1}",
+                "COMPATIBILITY_TEE_EXIT=${COMPATIBILITY_PIPE_STATUS[1]:-1}",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                compatibility_probe,
+                "COMPATIBILITY_VERIFY_EXIT=$?",
+                "COMPATIBILITY_TEE_EXIT=0",
+            ]
+        )
+    lines.extend(
+        [
+            'if [ "$COMPATIBILITY_VERIFY_EXIT" -ne 0 ] || [ "$COMPATIBILITY_TEE_EXIT" -ne 0 ]; then',
+            "  TEE_EXIT_CODE=$COMPATIBILITY_TEE_EXIT",
+            "  PIPELINE_EXIT_CODE=$COMPATIBILITY_VERIFY_EXIT",
+            '  if [ "$PIPELINE_EXIT_CODE" -eq 0 ]; then PIPELINE_EXIT_CODE=$TEE_EXIT_CODE; fi',
+            f"  {preflight_receipt_command}",
+            "  RECEIPT_EXIT=${RECEIPT_EXIT:-0}",
+            '  if [ "$PIPELINE_EXIT_CODE" -ne 0 ]; then exit "$PIPELINE_EXIT_CODE"; fi',
+            '  exit "$RECEIPT_EXIT"',
+            "fi",
+        ]
+    )
+
     execution_lines = (
         [
             "set -o pipefail",
-            f'{command} 2>&1 | tee "$PALACE_LOG"',
+            f'{command} 2>&1 | tee -a "$PALACE_LOG"',
             'PALACE_PIPE_STATUS=("${PIPESTATUS[@]}")',
             "PALACE_EXIT_CODE=${PALACE_PIPE_STATUS[0]:-1}",
             "TEE_EXIT_CODE=${PALACE_PIPE_STATUS[1]:-1}",
@@ -468,15 +535,7 @@ def _render_script(
     lines.extend(
         [
             *execution_lines,
-            (
-                f'python3 metadata/{returned_receipt_recorder_name} "$(pwd)" '
-                '"$PIPELINE_EXIT_CODE" --log-path "$PALACE_LOG" '
-                '--solver-exit-code "$PALACE_EXIT_CODE" '
-                '--tee-exit-code "$TEE_EXIT_CODE" '
-                '--job-id "${SLURM_JOB_ID:-manual}" '
-                '--job-name "${SLURM_JOB_NAME:-manual}" '
-                " || RECEIPT_EXIT=$?"
-            ),
+            solver_receipt_command,
             "RECEIPT_EXIT=${RECEIPT_EXIT:-0}",
             'if [ "$PIPELINE_EXIT_CODE" -ne 0 ]; then exit "$PIPELINE_EXIT_CODE"; fi',
             'if [ "$RECEIPT_EXIT" -ne 0 ]; then exit "$RECEIPT_EXIT"; fi',
@@ -581,6 +640,9 @@ def _clear_previous_returned_outputs(
     """A new manual handoff cannot reuse outputs or a receipt from an earlier run."""
 
     returned_receipt_path.unlink(missing_ok=True)
+    (run_dir / "metadata" / "palace_runtime_compatibility.json").unlink(
+        missing_ok=True
+    )
     results_path = run_dir / "results" / "palace"
     if results_path.exists():
         shutil.rmtree(results_path)

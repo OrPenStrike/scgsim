@@ -198,6 +198,7 @@ class PalaceFailureDiagnosis:
     """Evidence-based diagnosis that never changes the returned run status."""
 
     category: Literal[
+        "config_compatibility",
         "out_of_memory",
         "signal_killed",
         "solver_error",
@@ -205,6 +206,9 @@ class PalaceFailureDiagnosis:
         "unknown",
     ]
     exit_code: int | None
+    execution_stage: Literal["config_compatibility", "solver"] | None
+    solver_invoked: bool | None
+    preflight_exit_code: int | None
     solver_exit_code: int | None
     tee_exit_code: int | None
     summary: str
@@ -403,7 +407,10 @@ class PalaceTrustReport:
                 "padding:0.65rem 0.8rem;margin:0.7rem 0'>"
                 f"<strong>Run failed — {html.escape(self.failure.category.replace('_', ' '))}</strong><br>"
                 f"{html.escape(self.failure.summary)}<br>"
-                f"Exit: {_fmt(self.failure.exit_code)}; solver: "
+                f"Stage: {_fmt(self.failure.execution_stage)}; preflight: "
+                f"{_fmt(self.failure.preflight_exit_code)}; solver invoked: "
+                f"{_fmt(self.failure.solver_invoked)}; exit: "
+                f"{_fmt(self.failure.exit_code)}; solver: "
                 f"{_fmt(self.failure.solver_exit_code)}; output capture: "
                 f"{_fmt(self.failure.tee_exit_code)}."
                 "<details><summary>Failure evidence</summary><code>"
@@ -1162,8 +1169,7 @@ def _validate_inspection_receipt(
         raise ValueError("returned receipt Route-A thin-film identity mismatch.")
     if not isinstance(receipt.get("status"), str) or not receipt["status"]:
         raise ValueError("returned receipt status must be a non-empty string.")
-    for field in ("exit_code", "solver_exit_code", "tee_exit_code"):
-        _receipt_exit_code(receipt, field)
+    _receipt_execution_state(receipt)
 
     input_entries = receipt.get("input_hashes")
     handoff_entries = handoff.get("hashes")
@@ -1233,6 +1239,56 @@ def _receipt_exit_code(receipt: dict[str, Any], field: str) -> int:
     return value
 
 
+def _receipt_execution_state(
+    receipt: dict[str, Any],
+) -> tuple[
+    Literal["config_compatibility", "solver"] | None,
+    bool | None,
+    int | None,
+    int | None,
+    int,
+    int,
+]:
+    exit_code = _receipt_exit_code(receipt, "exit_code")
+    tee_exit_code = _receipt_exit_code(receipt, "tee_exit_code")
+    stage = receipt.get("execution_stage")
+    if stage is None:
+        return (
+            None,
+            None,
+            None,
+            _receipt_exit_code(receipt, "solver_exit_code"),
+            exit_code,
+            tee_exit_code,
+        )
+    if stage not in {"config_compatibility", "solver"}:
+        raise ValueError("returned receipt execution_stage is invalid.")
+    solver_invoked = receipt.get("solver_invoked")
+    if not isinstance(solver_invoked, bool):
+        raise TypeError("returned receipt solver_invoked must be boolean.")
+    preflight_exit_code = _receipt_exit_code(receipt, "preflight_exit_code")
+    solver_exit_code = receipt.get("solver_exit_code")
+    if stage == "config_compatibility":
+        if solver_invoked or solver_exit_code is not None:
+            raise ValueError(
+                "config compatibility failure must record solver not invoked."
+            )
+    else:
+        if not solver_invoked or preflight_exit_code != 0:
+            raise ValueError(
+                "solver execution requires a successful config compatibility preflight."
+            )
+        solver_exit_code = _receipt_exit_code(receipt, "solver_exit_code")
+    return (
+        stage,
+        solver_invoked,
+        preflight_exit_code,
+        solver_exit_code,
+        exit_code,
+        tee_exit_code,
+    )
+
+
 def _result_selection(
     *,
     root: Path,
@@ -1294,19 +1350,49 @@ def _failure_diagnosis(
 ) -> PalaceFailureDiagnosis | None:
     if receipt is None or receipt.get("status") != "failed":
         return None
-    exit_code = _receipt_exit_code(receipt, "exit_code")
-    solver_exit = _receipt_exit_code(receipt, "solver_exit_code")
-    tee_exit = _receipt_exit_code(receipt, "tee_exit_code")
+    (
+        execution_stage,
+        solver_invoked,
+        preflight_exit,
+        solver_exit,
+        exit_code,
+        tee_exit,
+    ) = _receipt_execution_state(receipt)
     evidence: list[dict[str, Any]] = [
         {
             "source": "returned_receipt",
             "exit_code": exit_code,
+            "execution_stage": execution_stage,
+            "solver_invoked": solver_invoked,
+            "preflight_exit_code": preflight_exit,
             "solver_exit_code": solver_exit,
             "tee_exit_code": tee_exit,
         }
     ]
-    oom_evidence = _slurm_oom_evidence(root, receipt, receipt_paths)
-    if oom_evidence is not None:
+    oom_evidence = (
+        None
+        if execution_stage == "config_compatibility"
+        else _slurm_oom_evidence(root, receipt, receipt_paths)
+    )
+    if execution_stage == "config_compatibility" and preflight_exit != 0:
+        category = "config_compatibility"
+        summary = (
+            "Palace config compatibility preflight exited with status "
+            f"{preflight_exit}; the solver was not invoked."
+        )
+    elif execution_stage == "config_compatibility" and tee_exit != 0:
+        category = "output_capture_error"
+        summary = (
+            "Config compatibility output capture exited with status "
+            f"{tee_exit}; the solver was not invoked."
+        )
+    elif execution_stage == "config_compatibility":
+        category = "unknown"
+        summary = (
+            "The run failed during config compatibility preflight; the solver "
+            "was not invoked."
+        )
+    elif oom_evidence is not None:
         evidence.append(oom_evidence)
         category = "out_of_memory"
         summary = "Slurm reported an out-of-memory event."
@@ -1328,6 +1414,9 @@ def _failure_diagnosis(
     return PalaceFailureDiagnosis(
         category=category,
         exit_code=exit_code,
+        execution_stage=execution_stage,
+        solver_invoked=solver_invoked,
+        preflight_exit_code=preflight_exit,
         solver_exit_code=solver_exit,
         tee_exit_code=tee_exit,
         summary=summary,
@@ -1387,6 +1476,9 @@ def _failure_payload(
     return {
         "category": failure.category,
         "exit_code": failure.exit_code,
+        "execution_stage": failure.execution_stage,
+        "solver_invoked": failure.solver_invoked,
+        "preflight_exit_code": failure.preflight_exit_code,
         "solver_exit_code": failure.solver_exit_code,
         "tee_exit_code": failure.tee_exit_code,
         "summary": failure.summary,

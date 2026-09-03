@@ -12,7 +12,8 @@ Implementation references are:
   gsim portable handoff source SHA: 8cf5fa79fa3abb176940dbfc520ff34a44f4770e
   SGB integrated Core base SHA: e74a343154c6b19b6ba32d6fb297e700cfe08ff2
   SGB junction-sheet development source SHA: f3fd898d6e4eaf31595c9aaca6a0658f0cb7f3b1
-  Palace runtime: v0.16.1; config schema: v0.16.0
+  Palace config schema: v0.16.0; observed native GitTag and, when directly
+  available, runtime-binary SHA-256 are provenance, not eligibility Gates
 
 All adapted files in this candidate must preserve upstream notices and
 document source modifications that are specific to Route-A/Route-B behavior.

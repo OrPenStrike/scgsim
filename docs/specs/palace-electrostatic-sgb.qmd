@@ -31,6 +31,22 @@ execute explicitly and write a receipt that the resolver verifies. Slurm
 scripts bind `#SBATCH --output` and `--error` to `logs/palace-%j.log` so the
 scheduler does not also write `slurm-%j.out`.
 
+Before a generated script starts the solve, the exact copied `config.json` is
+passed to the selected Palace executable with its native `--dry-run` option.
+Only a successful dry-run of those exact bytes establishes config/runtime
+compatibility. The compatibility artifact and returned receipt preserve the
+config hash and observed native GitTag. When the configured executable is
+directly and truthfully resolvable as the Palace binary, its basename and
+SHA-256 are also retained. SCGSim does not inspect behind a wrapper to discover
+its hidden binary. GitTag, commit, and any available binary hash are provenance
+for reproducibility and diagnosis; their presence or value is not a
+runtime-eligibility Gate.
+
+If this preflight fails, the returned receipt records
+`execution_stage="config_compatibility"`, `solver_invoked=false`, its separate
+preflight and pipeline exit codes, and `solver_exit_code=null`. Receipts use
+`execution_stage="solver"` only after the solver command was actually invoked.
+
 | Stage | Candidate method | Intended responsibility |
 |---|---|---|
 | Geometry input | `set_geometry` | Bind the public Component input to the SGB geometry route. |
