@@ -37,6 +37,42 @@ Palace and AEDT resolved quantities remain bound to their exact receipt,
 artifact-hash, handoff, and solver identities. Presentation never weakens those
 bindings and makes no numerical-convergence or cross-solver-agreement claim.
 
+## Multi-margin Surface EPR reading surface
+
+The existing inspection and strict-resolution split also governs native
+multi-margin Surface EPR. `inspect_run_trustworthiness()` may inspect a
+completed, failed, or partial package and marks unavailable mask data as
+unavailable without changing the receipt state. A missing or unreadable mask
+pair makes that source's masked snapshot unavailable while a valid baseline
+snapshot remains readable. A strict completed resolution of a run that
+requested masks requires the sealed `surface-mask-Q.csv` and
+`surface-mask-energy.csv` files from the same required result source. Missing
+mask files prevent strict resolution, and an existing receipt or artifact
+SHA-256 mismatch remains fatal.
+
+`PhysicsQuantitiesReport.snapshots` remains the baseline-only surface. The
+typed `PhysicsQuantitiesReport.masked_snapshots` surface exposes complete
+snapshots for the requested masks while preserving interface identity, margin
+value and ordinal, mode or excitation, refinement pass, native index, and
+source identity. Duplicate requested margins therefore remain separately
+traceable; they are not duplicate contributions to a loss total.
+
+`show_physics_quantities()` presents the latest masked participation versus
+margin for each mode or excitation and exact interface, using the native
+surface traces. Run trustworthiness remains the authority for AMR history and
+evidence; the physics presentation does not reinterpret refinement evidence.
+
+A native zero participation or surface energy means only that the native
+contribution is zero. Without supporting geometry evidence, it does not prove
+that a region was geometrically fully excluded. Infinite surface-loss Q, or Q
+made unavailable by `LossTan=0`, remains nonfinite or unavailable rather than
+being converted into a lifetime claim; participation and energy evidence stay
+visible.
+
+This report surface remains **CONVERGING** and does not add a cumulative
+disjoint edge-band interpretation, portable export format, or scientific
+acceptance claim.
+
 ## Current Palace scope
 
 The support derived from upstream gsim #61 is limited to Domain Energy,

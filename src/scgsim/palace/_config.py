@@ -11,6 +11,8 @@ from typing import Any, Literal
 
 from ._epr import build_surface_epr_postprocessing
 
+_MODEL_L0_M = 1e-6
+
 
 @dataclass(frozen=True)
 class TerminalBinding:
@@ -91,7 +93,7 @@ def build_electrostatic_config(
         materials=materials,
     )
     epr_rows, epr_index_map = build_surface_epr_postprocessing(
-        groups, surface_epr_specs
+        groups, surface_epr_specs, model_l0_m=_MODEL_L0_M
     )
     energy_rows = [
         {
@@ -134,7 +136,7 @@ def build_electrostatic_config(
         "Problem": problem,
         "Model": {
             "Mesh": str(mesh_path.name),
-            "L0": 1e-6,
+            "L0": _MODEL_L0_M,
             "Refinement": _build_refinement(numerical),
         },
         "Solver": {
@@ -205,7 +207,9 @@ def build_eigenmode_config(
         domain_volumes=domain_volumes, materials=materials
     )
     energy_rows, energy_index = _domain_energy_rows(domain_volumes, materials)
-    epr_rows, epr_index = build_surface_epr_postprocessing(groups, surface_epr_specs)
+    epr_rows, epr_index = build_surface_epr_postprocessing(
+        groups, surface_epr_specs, model_l0_m=_MODEL_L0_M
+    )
     lumped_ports, port_info, port_index = _eigenmode_lumped_ports(groups, ports)
     epr_attributes = {
         int(value) for row in epr_rows for value in row.get("Attributes", ())
@@ -251,7 +255,7 @@ def build_eigenmode_config(
         "Problem": problem,
         "Model": {
             "Mesh": mesh_path.name,
-            "L0": 1e-6,
+            "L0": _MODEL_L0_M,
             "Refinement": _build_refinement(numerical),
         },
         "Solver": {

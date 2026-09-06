@@ -14,6 +14,8 @@ from .report import (
     PassCostRecord,
     PhysicsQuantitiesReport,
     SimulationBenchmarkReport,
+    SurfaceMaskEprRecord,
+    SurfaceMaskEprSeriesSnapshot,
     inspect_run_trustworthiness,
 )
 from .resolve import (
@@ -41,6 +43,8 @@ __all__ = [
     "PhysicsQuantitiesReport",
     "ResolvedPalaceResult",
     "SimulationBenchmarkReport",
+    "SurfaceMaskEprRecord",
+    "SurfaceMaskEprSeriesSnapshot",
     "inspect_run_trustworthiness",
     "resolve_palace_result",
 ]

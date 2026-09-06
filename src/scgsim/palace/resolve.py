@@ -326,6 +326,27 @@ def _discover_results(
         table = _read_csv_table(path)
         _validate_table(problem, table, index_counts, config)
         discovered[family] = table
+    mask_entries = _surface_mask_entries(
+        _read_json(root / "metadata" / "palace_index_map.json")
+    )
+    if mask_entries:
+        expected_rows = (
+            _eigenmode_count(config)
+            if problem == "Eigenmode"
+            else index_counts["terminal"]
+        )
+        for name in ("surface-mask-Q", "surface-mask-energy"):
+            path = results_root / f"{name}.csv"
+            if not path.is_file():
+                raise FileNotFoundError(f"required result family is missing: {path}")
+            table = _read_csv_table(path)
+            _validate_surface_mask_table(
+                table,
+                problem=problem,
+                expected_rows=expected_rows,
+                entries=mask_entries,
+            )
+            discovered[name] = table
     return discovered
 
 
@@ -920,6 +941,7 @@ def _validate_config_index_correspondence(
                 raise ValueError(
                     f"config/index Attributes mismatch for {section} {position}."
                 )
+    _validate_surface_mask_config(config, index_map)
 
 
 def _validate_config_problem(config: dict[str, Any], problem: str) -> None:
@@ -1072,6 +1094,263 @@ def _validate_index_entries(index_map: dict[str, Any]) -> None:
     for section, values in indices.items():
         if values and sorted(values) != list(range(1, len(values) + 1)):
             raise ValueError(f"index map {section} entries must be ordered 1..N.")
+    _surface_mask_entries(index_map)
+
+
+def _surface_mask_entries(index_map: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    """Return validated native Inset rows without inferring identity from names."""
+    entries = _expect_list(index_map.get("entries"), "palace_index_map.entries")
+    dielectric = tuple(
+        _expect_mapping(entry, "palace dielectric index entry")
+        for entry in entries
+        if _expect_scalar(_expect_mapping(entry, "palace index entry"), "section", str)
+        == "Boundaries.Postprocessing.Dielectric"
+    )
+    masks = tuple(entry for entry in dielectric if "mask" in entry)
+    if not masks:
+        return ()
+    by_index = {_expect_scalar(entry, "index", int): entry for entry in dielectric}
+    if len(by_index) != len(dielectric):
+        raise ValueError("surface EPR index entries must have unique indices.")
+    baselines = tuple(entry for entry in dielectric if "mask" not in entry)
+    baseline_indexes = sorted(_expect_scalar(entry, "index", int) for entry in baselines)
+    mask_indexes = sorted(_expect_scalar(entry, "index", int) for entry in masks)
+    if baseline_indexes != list(range(1, len(baselines) + 1)):
+        raise ValueError("surface EPR baselines must retain the initial contiguous indices.")
+    if mask_indexes != list(range(len(baselines) + 1, len(dielectric) + 1)):
+        raise ValueError("surface EPR masks must append after all baseline rows.")
+    for baseline in baselines:
+        metadata = _expect_mapping(baseline.get("metadata"), "surface EPR metadata")
+        if metadata.get("interface_type") not in {"MA", "MS", "SA"}:
+            raise ValueError("surface EPR interface_type must be MA, MS, or SA.")
+        for field in ("surface_id", "face_kind"):
+            if not isinstance(metadata.get(field), str) or not metadata[field]:
+                raise ValueError(f"surface EPR {field} must be non-empty text.")
+        owners = _expect_list(
+            metadata.get("owner_semantic_ids"), "surface EPR owner semantic ids"
+        )
+        if not owners or not all(isinstance(owner, str) and owner for owner in owners):
+            raise ValueError("surface EPR owners must be non-empty text.")
+        _expect_mapping(metadata.get("source_provenance"), "surface EPR provenance")
+        epr_spec = _expect_mapping(baseline.get("epr_spec"), "surface EPR spec")
+        for field, positive in (
+            ("thickness", True),
+            ("permittivity", True),
+            ("loss_tangent", False),
+        ):
+            value = epr_spec.get(field)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or (value <= 0 if positive else value < 0)
+            ):
+                raise ValueError(f"surface EPR {field} has an invalid value.")
+    for entry in dielectric:
+        index = _expect_scalar(entry, "index", int)
+        baseline_index = _expect_scalar(entry, "baseline_index", int)
+        if baseline_index < 1 or baseline_index not in by_index:
+            raise ValueError("surface EPR baseline_index must identify a dielectric row.")
+        if "mask" not in entry and baseline_index != index:
+            raise ValueError("unmasked surface EPR row baseline_index must equal index.")
+    for entry in masks:
+        index = _expect_scalar(entry, "index", int)
+        baseline_index = _expect_scalar(entry, "baseline_index", int)
+        if index == baseline_index or "mask" in by_index[baseline_index]:
+            raise ValueError("masked surface EPR row must bind one unmasked baseline.")
+        mask = _expect_mapping(entry.get("mask"), "surface EPR mask")
+        if mask.get("type") != "Inset":
+            raise ValueError("surface EPR mask type must be Inset.")
+        margin_index = _expect_scalar(mask, "margin_index", int)
+        if margin_index < 0:
+            raise ValueError("surface EPR mask margin_index must be non-negative.")
+        for field in ("margin_um", "native_margin", "model_l0_m"):
+            value = mask.get(field)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or value < 0
+            ):
+                raise ValueError(f"surface EPR mask {field} must be finite non-negative.")
+        if float(mask["model_l0_m"]) <= 0:
+            raise ValueError("surface EPR mask model_l0_m must be positive.")
+        expected_native_margin = float(mask["margin_um"]) * 1e-6 / float(
+            mask["model_l0_m"]
+        )
+        if float(mask["native_margin"]) != expected_native_margin:
+            raise ValueError("surface EPR mask native margin disagrees with Model.L0.")
+        baseline = by_index[baseline_index]
+        for field in ("attributes", "physical_names", "metadata", "epr_spec"):
+            if entry.get(field) != baseline.get(field):
+                raise ValueError("masked surface EPR row must retain baseline provenance.")
+    for baseline_index in baseline_indexes:
+        baseline = by_index[baseline_index]
+        epr_spec = _expect_mapping(baseline.get("epr_spec"), "surface EPR spec")
+        if "inset_margins_um" in epr_spec:
+            expected_margins = _expect_list(
+                epr_spec.get("inset_margins_um"), "surface EPR inset margins"
+            )
+            if not expected_margins:
+                raise ValueError("surface EPR inset margins must be non-empty when present.")
+            for margin in expected_margins:
+                if (
+                    isinstance(margin, bool)
+                    or not isinstance(margin, (int, float))
+                    or not math.isfinite(float(margin))
+                    or margin < 0
+                ):
+                    raise ValueError(
+                        "surface EPR inset margins must be finite non-negative reals."
+                    )
+        else:
+            expected_margins = []
+        masked_for_baseline = sorted(
+            (
+                entry
+                for entry in masks
+                if _expect_scalar(entry, "baseline_index", int) == baseline_index
+            ),
+            key=lambda entry: _expect_scalar(
+                _expect_mapping(entry["mask"], "surface EPR mask"), "margin_index", int
+            ),
+        )
+        ordinals = [
+            _expect_scalar(_expect_mapping(entry["mask"], "surface EPR mask"), "margin_index", int)
+            for entry in masked_for_baseline
+        ]
+        if ordinals != list(range(len(expected_margins))):
+            raise ValueError("surface EPR mask ordinals must match the configured margin sequence.")
+        margins = [
+            _expect_mapping(entry["mask"], "surface EPR mask").get("margin_um")
+            for entry in masked_for_baseline
+        ]
+        if margins != expected_margins:
+            raise ValueError("surface EPR mask margins must match the configured margin sequence.")
+    return tuple(sorted(masks, key=lambda entry: _expect_scalar(entry, "index", int)))
+
+
+def _validate_surface_mask_config(config: dict[str, Any], index_map: dict[str, Any]) -> None:
+    masks = _surface_mask_entries(index_map)
+    boundaries = _optional_dict(config.get("Boundaries")) or {}
+    postprocessing = _optional_dict(boundaries.get("Postprocessing")) or {}
+    declared_rows = postprocessing.get("Dielectric")
+    config_declares_masks = isinstance(declared_rows, list) and any(
+        isinstance(row, dict) and "Mask" in row for row in declared_rows
+    )
+    if not masks:
+        if config_declares_masks:
+            raise ValueError("config contains unindexed surface EPR masks.")
+        return
+    rows = _expect_list(
+        postprocessing.get("Dielectric"),
+        "config.Boundaries.Postprocessing.Dielectric",
+        allow_empty=True,
+    )
+    configured = {
+        _expect_scalar(_expect_mapping(row, "config dielectric row"), "Index", int): _expect_mapping(
+            row, "config dielectric row"
+        )
+        for row in rows
+    }
+    model = _expect_mapping(config.get("Model"), "config.Model")
+    model_l0_m = model.get("L0")
+    if (
+        isinstance(model_l0_m, bool)
+        or not isinstance(model_l0_m, (int, float))
+        or not math.isfinite(float(model_l0_m))
+        or model_l0_m <= 0
+    ):
+        raise ValueError("config Model.L0 must be a finite positive length.")
+    dielectric_entries = [
+        _expect_mapping(entry, "palace dielectric index entry")
+        for entry in _expect_list(index_map.get("entries"), "palace_index_map.entries")
+        if _expect_mapping(entry, "palace index entry").get("section")
+        == "Boundaries.Postprocessing.Dielectric"
+    ]
+    indexed_dielectric_indexes = {
+        _expect_scalar(entry, "index", int) for entry in dielectric_entries
+    }
+    if (
+        len(configured) != len(rows)
+        or set(configured) != indexed_dielectric_indexes
+        or len(rows) != len(dielectric_entries)
+    ):
+        raise ValueError("config and index evidence disagree on dielectric rows.")
+    indexed_mask_indexes = {_expect_scalar(entry, "index", int) for entry in masks}
+    configured_mask_indexes = {
+        index for index, row in configured.items() if "Mask" in row
+    }
+    if configured_mask_indexes != indexed_mask_indexes:
+        raise ValueError("config and index evidence disagree on masked surface rows.")
+    for entry in dielectric_entries:
+        index = _expect_scalar(entry, "index", int)
+        row = configured.get(index)
+        if row is None:
+            raise ValueError("surface EPR index is absent from config.")
+        if _expect_list(row.get("Attributes"), "config dielectric Attributes") != _expect_list(
+            entry.get("attributes"), "surface EPR index attributes"
+        ):
+            raise ValueError("config surface EPR attributes do not match index evidence.")
+        metadata = _expect_mapping(entry.get("metadata"), "surface EPR metadata")
+        epr_spec = _expect_mapping(entry.get("epr_spec"), "surface EPR spec")
+        expected_fields = {
+            "Type": metadata.get("interface_type"),
+            "Thickness": epr_spec.get("thickness"),
+            "Permittivity": epr_spec.get("permittivity"),
+            "LossTan": epr_spec.get("loss_tangent"),
+        }
+        if any(key not in row or row[key] != value for key, value in expected_fields.items()):
+            raise ValueError("config surface EPR fields do not match source index evidence.")
+        if index not in indexed_mask_indexes:
+            continue
+        mask = _expect_mapping(row.get("Mask"), "config dielectric Mask")
+        evidence = _expect_mapping(entry.get("mask"), "surface EPR mask")
+        if mask != {"Type": "Inset", "Margin": evidence["native_margin"]}:
+            raise ValueError("config surface EPR mask does not match index evidence.")
+        if float(evidence["model_l0_m"]) != float(model_l0_m):
+            raise ValueError("surface EPR mask Model.L0 disagrees with config.")
+
+
+def _validate_surface_mask_table(
+    table: ParsedTable,
+    *,
+    problem: str,
+    expected_rows: int,
+    entries: tuple[dict[str, Any], ...],
+) -> None:
+    index_name = "m" if problem == "Eigenmode" else "i"
+    indexes = [_expect_scalar(entry, "index", int) for entry in entries]
+    if table.name == "surface-mask-Q":
+        expected_headers = (index_name, *(
+            header
+            for index in indexes
+            for header in (f"p_surf_mask[{index}]", f"Q_surf_mask[{index}]")
+        ))
+    elif table.name == "surface-mask-energy":
+        expected_headers = (index_name, *(f"E_surf_mask[{index}] (J)" for index in indexes))
+    else:
+        raise ValueError(f"unsupported surface mask table {table.name!r}.")
+    if table.headers != expected_headers:
+        raise ValueError(f"{table.path} native mask headers are malformed.")
+    if len(table.rows) != expected_rows:
+        raise ValueError(f"{table.path} must contain {expected_rows} result rows.")
+    _require_ordered_index(table, index_name, expected_rows)
+    for row in table.rows:
+        for header in table.headers[1:]:
+            value = row.get(header)
+            if (
+                value is None
+                or isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or math.isnan(value)
+            ):
+                raise ValueError(f"{table.path} contains an invalid mask value.")
+            if header.startswith("Q_surf_mask["):
+                if value <= 0 or (math.isinf(value) and value < 0):
+                    raise ValueError(f"{table.path} mask Q must be positive finite or +inf.")
+            elif not math.isfinite(value) or value < 0:
+                raise ValueError(f"{table.path} mask values must be finite and non-negative.")
 
 
 def _validate_table(
@@ -1449,7 +1728,10 @@ def _validate_receipt_payload(
 
     output_files = _expect_list(receipt_payload.get("output_files"), "output_files")
     output_map = _extract_hash_map(output_files)
-    required_outputs = _required_output_records(problem)
+    required_outputs = _required_output_records(
+        problem,
+        masks_configured=bool(_surface_mask_entries(_read_json(root / "metadata" / "palace_index_map.json"))),
+    )
     for expected in required_outputs:
         rel = expected["path"]
         if rel not in output_map:
@@ -1625,12 +1907,19 @@ def _validate_returned_state_agreement(
             raise ValueError(f"{label} job identity does not match returned receipt.")
 
 
-def _required_output_records(problem: str) -> tuple[dict[str, Any], ...]:
+def _required_output_records(
+    problem: str, *, masks_configured: bool = False
+) -> tuple[dict[str, Any], ...]:
     families = _PROBLEM_FAMILIES[problem]
     records: list[dict[str, Any]] = []
     for family in families:
         rel = f"results/palace/{family}.csv"
         records.append({"path": rel, "bytes": 0, "sha256": ""})
+    if masks_configured:
+        for name in ("surface-mask-Q", "surface-mask-energy"):
+            records.append(
+                {"path": f"results/palace/{name}.csv", "bytes": 0, "sha256": ""}
+            )
     records.append({"path": "results/palace/palace.json", "bytes": 0, "sha256": ""})
     return tuple(records)
 

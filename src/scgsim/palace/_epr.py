@@ -33,6 +33,7 @@ def normalize_surface_epr_specs(
                 "loss_tangent",
                 "face_kinds",
                 "required",
+                "inset_margins_um",
             }
         )
         if unknown:
@@ -96,6 +97,26 @@ def normalize_surface_epr_specs(
         required = raw.get("required", True)
         if not isinstance(required, bool):
             raise TypeError(f"Surface EPR {interface_type} required must be a bool.")
+        if "inset_margins_um" in raw:
+            inset_margins_um = raw["inset_margins_um"]
+            if isinstance(inset_margins_um, (str, bytes)) or not isinstance(
+                inset_margins_um, (list, tuple)
+            ):
+                raise TypeError(
+                    f"Surface EPR {interface_type} inset_margins_um must be an ordered non-empty sequence."
+                )
+            if not inset_margins_um:
+                raise ValueError(
+                    f"Surface EPR {interface_type} inset_margins_um must be non-empty."
+                )
+            normalized_margins = []
+            for margin in inset_margins_um:
+                if not _nonnegative(margin):
+                    raise ValueError(
+                        f"Surface EPR {interface_type} inset_margins_um values must be finite non-negative reals."
+                    )
+                normalized_margins.append(float(margin))
+            resolved["inset_margins_um"] = normalized_margins
         result[interface_type] = {
             "thickness": float(thickness),
             "permittivity": float(numeric),
@@ -109,10 +130,19 @@ def normalize_surface_epr_specs(
 def build_surface_epr_postprocessing(
     groups: Mapping[str, Mapping[str, Mapping[str, Any]]],
     specs: Mapping[str, Mapping[str, Any]],
+    *,
+    model_l0_m: float = 1e-6,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Emit Palace rows using only exact structured surface identity fields."""
+    if not _positive(model_l0_m):
+        raise ValueError("Model.L0 must be a finite positive length in metres.")
     rows: list[dict[str, Any]] = []
     index_map: list[dict[str, Any]] = []
+    mask_requests: list[
+        tuple[int, str, Mapping[str, Any], Mapping[str, Any], list[int], int, float]
+    ]
+    mask_requests = []
+    masks_requested = any("inset_margins_um" in preset for preset in specs.values())
     for interface_type, preset in sorted(specs.items()):
         matches = []
         for name, info in sorted(groups.get("boundary_surfaces", {}).items()):
@@ -141,18 +171,70 @@ def build_surface_epr_postprocessing(
                     "LossTan": preset["loss_tangent"],
                 }
             )
-            index_map.append(
-                {
-                    "section": "Boundaries.Postprocessing.Dielectric",
-                    "index": index,
-                    "entry_name": name,
-                    "role": "surface_epr",
-                    "attributes": attrs,
-                    "physical_names": [name],
-                    "metadata": _structured_metadata(info),
-                    "epr_spec": dict(preset),
-                }
-            )
+            baseline_entry = {
+                "section": "Boundaries.Postprocessing.Dielectric",
+                "index": index,
+                "entry_name": name,
+                "role": "surface_epr",
+                "attributes": attrs,
+                "physical_names": [name],
+                "metadata": _structured_metadata(info),
+                "epr_spec": dict(preset),
+            }
+            if masks_requested:
+                baseline_entry["baseline_index"] = index
+            index_map.append(baseline_entry)
+            for margin_index, margin_um in enumerate(
+                preset.get("inset_margins_um", ())
+            ):
+                mask_requests.append(
+                    (index, name, info, preset, attrs, margin_index, float(margin_um))
+                )
+
+    for (
+        baseline_index,
+        name,
+        info,
+        preset,
+        attrs,
+        margin_index,
+        margin_um,
+    ) in mask_requests:
+        # The input file coordinates are Model.L0 units, despite Palace's
+        # historical MaskData::margin comment claiming metres.
+        native_margin = margin_um * 1e-6 / float(model_l0_m)
+        index = len(rows) + 1
+        rows.append(
+            {
+                "Index": index,
+                "Attributes": attrs,
+                "Type": info["interface_type"],
+                "Thickness": preset["thickness"],
+                "Permittivity": preset["permittivity"],
+                "LossTan": preset["loss_tangent"],
+                "Mask": {"Type": "Inset", "Margin": native_margin},
+            }
+        )
+        index_map.append(
+            {
+                "section": "Boundaries.Postprocessing.Dielectric",
+                "index": index,
+                "entry_name": f"{name}__inset_{margin_index}",
+                "role": "surface_epr",
+                "attributes": attrs,
+                "physical_names": [name],
+                "metadata": _structured_metadata(info),
+                "epr_spec": dict(preset),
+                "baseline_index": baseline_index,
+                "mask": {
+                    "type": "Inset",
+                    "margin_um": margin_um,
+                    "margin_index": margin_index,
+                    "native_margin": native_margin,
+                    "model_l0_m": float(model_l0_m),
+                },
+            }
+        )
     return rows, index_map
 
 

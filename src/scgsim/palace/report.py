@@ -23,6 +23,8 @@ from .resolve import (
     _read_csv_table,
     _read_json,
     _validate_index_entries,
+    _validate_surface_mask_config,
+    _validate_surface_mask_table,
     _validate_surface_table,
 )
 
@@ -141,6 +143,42 @@ class SurfaceEprSeriesSnapshot:
 
 
 @dataclass(frozen=True)
+class SurfaceMaskEprRecord:
+    """One native Inset-mask result, explicitly bound to its unmasked surface."""
+
+    index: int
+    baseline_index: int
+    margin_index: int
+    margin_um: float
+    native_margin: float
+    model_l0_m: float
+    interface_type: str
+    surface_id: str
+    face_kind: str
+    owner_semantic_ids: tuple[str, ...]
+    net_id: str | None
+    equipotential_id: str | None
+    source_provenance: dict[str, Any]
+    participation: float
+    quality_factor: float
+    energy_j: float
+    loss_tangent: float | None
+    contribution_status: Literal["available", "zero_contribution"]
+    retained_area_status: Literal["unavailable"] = "unavailable"
+
+
+@dataclass(frozen=True)
+class SurfaceMaskEprSeriesSnapshot:
+    """Native Inset-mask values for one mode or excitation at one source pass."""
+
+    pass_index: int
+    source: str
+    series_index: int
+    series_kind: Literal["mode", "excitation"]
+    records: tuple[SurfaceMaskEprRecord, ...]
+
+
+@dataclass(frozen=True)
 class AmrPassSnapshot:
     """One solver snapshot from an AMR pass or the parent results folder."""
 
@@ -158,6 +196,7 @@ class AmrPassSnapshot:
     mesh_elements: int | None
     elapsed_total_s: float | None
     peak_node_memory_mb: float | None
+    surface_mask_epr: tuple[SurfaceMaskEprSeriesSnapshot, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -849,6 +888,18 @@ class PhysicsQuantitiesReport:
     def snapshots(self) -> tuple[SurfaceEprSeriesSnapshot, ...]:
         return _surface_snapshots(self.trust.passes)
 
+    @property
+    def masked_snapshots(self) -> tuple[SurfaceMaskEprSeriesSnapshot, ...]:
+        """All readable native mask passes; ``snapshots`` remains baseline-only."""
+        return _surface_mask_snapshots(self.trust.passes)
+
+    @property
+    def masks_configured(self) -> bool:
+        index_map = _read_optional_json(
+            self.trust.run_dir / "metadata" / "palace_index_map.json"
+        )
+        return bool(_read_surface_mask_bindings(index_map))
+
     def _ipython_display_(self) -> None:
         from IPython.display import HTML, display
 
@@ -876,6 +927,31 @@ class PhysicsQuantitiesReport:
             if ranking is not None:
                 _show_figure(ranking)
             display(HTML(_surface_loss_html(latest, self.trust.problem)))
+            mask_latest = _latest_mask_snapshot(
+                self.masked_snapshots,
+                pass_index=latest.pass_index,
+                source=latest.source,
+                series_index=latest.series_index,
+            )
+            if mask_latest is not None:
+                for interface_type in _SURFACE_TYPES:
+                    figure = _surface_mask_participation_figure(
+                        mask_latest,
+                        latest,
+                        interface_type,
+                        self.trust.theme,
+                    )
+                    if figure is not None:
+                        _show_figure(figure)
+                display(HTML(_surface_mask_html(mask_latest)))
+            elif self.masks_configured:
+                display(
+                    HTML(
+                        "<p style='opacity:0.75'>Native masked Surface EPR is "
+                        "unavailable for the selected source/pass; baseline "
+                        "Surface-EPR remains separately readable.</p>"
+                    )
+                )
 
     def _heading_html(self) -> str:
         state = (
@@ -1064,15 +1140,23 @@ def _build_trust_report(
     )
     receipt_paths = _validate_inspection_receipt(root, handoff, receipt)
     refinement = _refinement(config)
-    surface_bindings = _read_surface_bindings(
+    index_map = (
         resolved.provenance.index_map
         if resolved is not None
         else _read_optional_json(root / "metadata" / "palace_index_map.json")
     )
+    if _declares_surface_masks(config, index_map):
+        if not isinstance(config, dict) or not isinstance(index_map, dict):
+            raise ValueError("declared surface masks require config and index evidence.")
+        _validate_index_entries(index_map)
+        _validate_surface_mask_config(config, index_map)
+    surface_bindings = _read_surface_bindings(index_map)
+    surface_mask_bindings = _read_surface_mask_bindings(index_map)
     collected = _collect_amr_passes(
         root,
         problem,
         surface_bindings,
+        surface_mask_bindings,
         failed_attempt=receipt is not None and receipt.get("status") == "failed",
     )
     passes = collected.passes
@@ -1147,6 +1231,26 @@ def _build_trust_report(
         cost=cost,
         provenance=provenance,
         theme=_checked_theme(theme),
+    )
+
+
+def _declares_surface_masks(
+    config: dict[str, Any] | None, index_map: dict[str, Any] | None
+) -> bool:
+    boundaries = config.get("Boundaries") if isinstance(config, dict) else None
+    postprocessing = (
+        boundaries.get("Postprocessing") if isinstance(boundaries, dict) else None
+    )
+    dielectric = (
+        postprocessing.get("Dielectric") if isinstance(postprocessing, dict) else None
+    )
+    if isinstance(dielectric, list) and any(
+        isinstance(row, dict) and "Mask" in row for row in dielectric
+    ):
+        return True
+    entries = index_map.get("entries") if isinstance(index_map, dict) else None
+    return isinstance(entries, list) and any(
+        isinstance(entry, dict) and "mask" in entry for entry in entries
     )
 
 
@@ -1340,7 +1444,11 @@ def _snapshot_artifact_paths(path: Path, problem: str) -> tuple[Path, ...]:
         if problem == "Eigenmode"
         else ("terminal-C.csv", "surface-Q.csv", "error-indicators.csv", "palace.json")
     )
-    return tuple(candidate for name in names if (candidate := path / name).is_file())
+    return tuple(
+        candidate
+        for name in (*names, "surface-mask-Q.csv", "surface-mask-energy.csv")
+        if (candidate := path / name).is_file()
+    )
 
 
 def _failure_diagnosis(
@@ -1490,6 +1598,7 @@ def _collect_amr_passes(
     root: Path,
     problem: str,
     surface_bindings: tuple[dict[str, Any], ...] | None,
+    surface_mask_bindings: tuple[dict[str, Any], ...] | None,
     *,
     failed_attempt: bool,
 ) -> _CollectedSnapshots:
@@ -1510,6 +1619,7 @@ def _collect_amr_passes(
             path=path,
             problem=problem,
             surface_bindings=surface_bindings,
+            surface_mask_bindings=surface_mask_bindings,
         )
         if snapshot is not None:
             snapshots.append(snapshot)
@@ -1521,14 +1631,19 @@ def _collect_amr_passes(
         path=results,
         problem=problem,
         surface_bindings=surface_bindings,
+        surface_mask_bindings=surface_mask_bindings,
     )
     if parent is None:
         return _CollectedSnapshots(tuple(snapshots), "unreadable")
-    if snapshots and _same_physics(snapshots[-1], parent):
+    if snapshots and _same_primary_physics(snapshots[-1], parent):
         if failed_attempt and _problem_size_conflicts(snapshots[-1], parent):
             return _CollectedSnapshots(tuple(snapshots), "unreadable")
-        snapshots[-1] = replace(parent, pass_index=snapshots[-1].pass_index)
-        return _CollectedSnapshots(tuple(snapshots), "readable")
+        parent = replace(parent, pass_index=snapshots[-1].pass_index)
+        if _same_masked_physics(
+            snapshots[-1].surface_mask_epr, parent.surface_mask_epr
+        ):
+            snapshots[-1] = replace(parent, pass_index=snapshots[-1].pass_index)
+            return _CollectedSnapshots(tuple(snapshots), "readable")
     return _CollectedSnapshots((*snapshots, parent), "readable")
 
 
@@ -1539,6 +1654,7 @@ def _load_optional_snapshot(
     path: Path,
     problem: str,
     surface_bindings: tuple[dict[str, Any], ...] | None,
+    surface_mask_bindings: tuple[dict[str, Any], ...] | None,
 ) -> AmrPassSnapshot | None:
     try:
         return _load_snapshot(
@@ -1547,6 +1663,7 @@ def _load_optional_snapshot(
             path=path,
             problem=problem,
             surface_bindings=surface_bindings,
+            surface_mask_bindings=surface_mask_bindings,
         )
     except (OSError, TypeError, ValueError):
         return None
@@ -1559,6 +1676,7 @@ def _load_snapshot(
     path: Path,
     problem: str,
     surface_bindings: tuple[dict[str, Any], ...] | None,
+    surface_mask_bindings: tuple[dict[str, Any], ...] | None,
 ) -> AmrPassSnapshot:
     eig_columns = (
         _read_numeric_table_columns(path / "eig.csv")
@@ -1592,6 +1710,16 @@ def _load_snapshot(
         frequencies_ghz=frequencies,
         expected_rows=expected_rows,
         bindings=surface_bindings,
+        surface_count=len(surface_bindings or ()) + len(surface_mask_bindings or ()),
+    )
+    surface_mask_epr = _read_surface_mask_epr(
+        path / "surface-mask-Q.csv",
+        path / "surface-mask-energy.csv",
+        problem=problem,
+        pass_index=pass_index,
+        source=source,
+        expected_rows=expected_rows,
+        bindings=surface_mask_bindings,
     )
     error_norm = None if error_indicators is None else error_indicators.get("Norm")
     palace_payload = _read_optional_json(path / "palace.json")
@@ -1630,6 +1758,7 @@ def _load_snapshot(
         peak_node_memory_mb=_mapping_max(
             palace_payload.get("PeakNodeMemoryMegabytes") if palace_payload else None
         ),
+        surface_mask_epr=surface_mask_epr,
     )
 
 
@@ -1690,6 +1819,8 @@ def _read_surface_bindings(
         entries.sort(key=lambda entry: entry["index"])
         bindings: list[dict[str, Any]] = []
         for entry in entries:
+            if "mask" in entry:
+                continue
             metadata = entry["metadata"]
             interface_type = metadata.get("interface_type")
             surface_id = metadata.get("surface_id")
@@ -1745,6 +1876,76 @@ def _read_surface_bindings(
         return None
 
 
+def _read_surface_mask_bindings(
+    index_map: dict[str, Any] | None,
+) -> tuple[dict[str, Any], ...] | None:
+    if index_map is None:
+        return None
+    try:
+        _validate_index_entries(index_map)
+        bindings: list[dict[str, Any]] = []
+        for entry in sorted(index_map["entries"], key=lambda item: item["index"]):
+            if (
+                entry.get("section") != "Boundaries.Postprocessing.Dielectric"
+                or "mask" not in entry
+            ):
+                continue
+            metadata = entry["metadata"]
+            mask = entry["mask"]
+            owners = metadata.get("owner_semantic_ids")
+            provenance = metadata.get("source_provenance")
+            if (
+                metadata.get("interface_type") not in _SURFACE_TYPES
+                or not isinstance(metadata.get("surface_id"), str)
+                or not metadata["surface_id"]
+                or not isinstance(metadata.get("face_kind"), str)
+                or not metadata["face_kind"]
+                or not isinstance(owners, list)
+                or not owners
+                or not all(isinstance(owner, str) and owner for owner in owners)
+                or not isinstance(provenance, dict)
+            ):
+                raise ValueError("surface mask provenance is incomplete.")
+            epr_spec = entry.get("epr_spec")
+            loss_tangent = (
+                epr_spec.get("loss_tangent") if isinstance(epr_spec, dict) else None
+            )
+            if loss_tangent is not None and (
+                isinstance(loss_tangent, bool)
+                or not isinstance(loss_tangent, (int, float))
+                or not math.isfinite(float(loss_tangent))
+                or loss_tangent < 0
+            ):
+                raise ValueError(
+                    "surface mask loss_tangent must be finite and non-negative."
+                )
+            bindings.append(
+                {
+                    "index": int(entry["index"]),
+                    "baseline_index": int(entry["baseline_index"]),
+                    "margin_index": int(mask["margin_index"]),
+                    "margin_um": float(mask["margin_um"]),
+                    "native_margin": float(mask["native_margin"]),
+                    "model_l0_m": float(mask["model_l0_m"]),
+                    "interface_type": metadata["interface_type"],
+                    "surface_id": metadata["surface_id"],
+                    "face_kind": metadata["face_kind"],
+                    "owner_semantic_ids": tuple(owners),
+                    "net_id": _optional_string(metadata.get("net_id")),
+                    "equipotential_id": _optional_string(
+                        metadata.get("equipotential_id")
+                    ),
+                    "source_provenance": provenance,
+                    "loss_tangent": (
+                        None if loss_tangent is None else float(loss_tangent)
+                    ),
+                }
+            )
+        return tuple(bindings) or None
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def _read_surface_epr(
     path: Path,
     *,
@@ -1754,12 +1955,17 @@ def _read_surface_epr(
     frequencies_ghz: tuple[float, ...] | None,
     expected_rows: int,
     bindings: tuple[dict[str, Any], ...] | None,
+    surface_count: int | None = None,
 ) -> tuple[SurfaceEprSeriesSnapshot, ...] | None:
     if not path.is_file() or not bindings or expected_rows <= 0:
         return None
     try:
         table = _read_csv_table(path)
-        _validate_surface_table(table, len(bindings), expected_rows)
+        _validate_surface_table(
+            table,
+            len(bindings) if surface_count is None else surface_count,
+            expected_rows,
+        )
         snapshots: list[SurfaceEprSeriesSnapshot] = []
         index_name = "m" if problem == "Eigenmode" else "i"
         for row in table.rows:
@@ -1811,6 +2017,76 @@ def _read_surface_epr(
         return None
 
 
+def _read_surface_mask_epr(
+    q_path: Path,
+    energy_path: Path,
+    *,
+    problem: str,
+    pass_index: int,
+    source: str,
+    expected_rows: int,
+    bindings: tuple[dict[str, Any], ...] | None,
+) -> tuple[SurfaceMaskEprSeriesSnapshot, ...] | None:
+    """Load both native mask tables as one source-local, all-or-nothing snapshot."""
+    if (
+        not q_path.is_file()
+        or not energy_path.is_file()
+        or not bindings
+        or expected_rows <= 0
+    ):
+        return None
+    try:
+        q_table = _read_csv_table(q_path)
+        energy_table = _read_csv_table(energy_path)
+        _validate_surface_mask_table(
+            q_table,
+            problem=problem,
+            expected_rows=expected_rows,
+            entries=bindings,
+        )
+        _validate_surface_mask_table(
+            energy_table,
+            problem=problem,
+            expected_rows=expected_rows,
+            entries=bindings,
+        )
+        index_name = "m" if problem == "Eigenmode" else "i"
+        snapshots: list[SurfaceMaskEprSeriesSnapshot] = []
+        for q_row, energy_row in zip(q_table.rows, energy_table.rows, strict=True):
+            series_index = int(q_row[index_name])
+            if energy_row[index_name] != q_row[index_name]:
+                raise ValueError("native mask Q and energy rows do not align.")
+            records = tuple(
+                SurfaceMaskEprRecord(
+                    **binding,
+                    participation=float(q_row[f"p_surf_mask[{binding['index']}]"]),
+                    quality_factor=float(q_row[f"Q_surf_mask[{binding['index']}]"]),
+                    energy_j=float(
+                        energy_row[f"E_surf_mask[{binding['index']}] (J)"]
+                    ),
+                    contribution_status=(
+                        "zero_contribution"
+                        if q_row[f"p_surf_mask[{binding['index']}]"] == 0
+                        or energy_row[f"E_surf_mask[{binding['index']}] (J)"] == 0
+                        else "available"
+                    ),
+                )
+                for binding in bindings
+            )
+            snapshots.append(
+                SurfaceMaskEprSeriesSnapshot(
+                    pass_index=pass_index,
+                    source=source,
+                    series_index=series_index,
+                    series_kind="mode" if problem == "Eigenmode" else "excitation",
+                    records=records,
+                )
+            )
+        return tuple(snapshots)
+    except (KeyError, OSError, TypeError, ValueError):
+        return None
+
+
 def _surface_inverse_loss(records: Sequence[SurfaceEprRecord]) -> float | None:
     if any(record.loss_tangent is None for record in records):
         return None
@@ -1854,6 +2130,125 @@ def _surface_snapshots(
     passes: Sequence[AmrPassSnapshot],
 ) -> tuple[SurfaceEprSeriesSnapshot, ...]:
     return tuple(snapshot for pass_ in passes for snapshot in (pass_.surface_epr or ()))
+
+
+def _surface_mask_snapshots(
+    passes: Sequence[AmrPassSnapshot],
+) -> tuple[SurfaceMaskEprSeriesSnapshot, ...]:
+    return tuple(
+        snapshot for pass_ in passes for snapshot in (pass_.surface_mask_epr or ())
+    )
+
+
+def _latest_mask_snapshot(
+    snapshots: Sequence[SurfaceMaskEprSeriesSnapshot],
+    *,
+    pass_index: int,
+    source: str,
+    series_index: int,
+) -> SurfaceMaskEprSeriesSnapshot | None:
+    return next(
+        (
+            snapshot
+            for snapshot in reversed(snapshots)
+            if snapshot.pass_index == pass_index
+            and snapshot.source == source
+            and snapshot.series_index == series_index
+        ),
+        None,
+    )
+
+
+def _surface_mask_participation_figure(
+    snapshot: SurfaceMaskEprSeriesSnapshot,
+    baseline: SurfaceEprSeriesSnapshot,
+    interface_type: str,
+    theme: ReportTheme,
+) -> Any | None:
+    records = [record for record in snapshot.records if record.interface_type == interface_type]
+    if not records:
+        return None
+    baseline_by_index = {record.index: record for record in baseline.records}
+    go = _plotly()
+    figure = go.Figure()
+    grouped: dict[int, list[SurfaceMaskEprRecord]] = {}
+    for record in records:
+        grouped.setdefault(record.baseline_index, []).append(record)
+    for color_index, (baseline_index, series) in enumerate(sorted(grouped.items())):
+        ordered = sorted(series, key=lambda item: item.margin_index)
+        first = ordered[0]
+        label = f"#{baseline_index} {first.face_kind} · {first.owner_semantic_ids[0]}"
+        figure.add_scatter(
+            x=[record.margin_um for record in ordered],
+            y=[record.participation for record in ordered],
+            mode="lines+markers",
+            name=label,
+            line={"color": _COLORWAY[color_index % len(_COLORWAY)]},
+            customdata=[
+                [
+                    record.index,
+                    record.margin_index,
+                    record.energy_j,
+                    (
+                        "unavailable / +inf"
+                        if math.isinf(record.quality_factor)
+                        else f"{record.quality_factor:.6g}"
+                    ),
+                    record.contribution_status,
+                    record.retained_area_status,
+                    record.surface_id,
+                    ", ".join(record.owner_semantic_ids),
+                ]
+                for record in ordered
+            ],
+            hovertemplate=(
+                "margin=%{x:.6g} µm<br>participation=%{y:.6g}"
+                "<br>masked index=%{customdata[0]}<br>ordinal=%{customdata[1]}"
+                "<br>energy=%{customdata[2]:.6g} J<br>native Q=%{customdata[3]}"
+                "<br>contribution=%{customdata[4]}<br>retained area=%{customdata[5]}"
+                "<br>surface=%{customdata[6]}<br>owners=%{customdata[7]}"
+                "<extra>%{fullData.name}</extra>"
+            ),
+        )
+        baseline_record = baseline_by_index.get(baseline_index)
+        if baseline_record is not None:
+            figure.add_scatter(
+                x=[0.0],
+                y=[baseline_record.participation],
+                mode="markers",
+                name=f"baseline {label}",
+                marker={"symbol": "diamond", "size": 9, "color": _COLORWAY[color_index % len(_COLORWAY)]},
+                hovertemplate="baseline participation=%{y:.6g}<extra>%{fullData.name}</extra>",
+            )
+    _style_figure(
+        figure,
+        title=(
+            f"{_series_label(snapshot)}: {interface_type} native Inset-mask participation "
+            f"vs margin ({snapshot.source})"
+        ),
+        height=460,
+        margin={"l": 78, "r": 220, "t": 72, "b": 64},
+        hovermode="closest",
+        showlegend=True,
+        theme=theme,
+    )
+    figure.update_xaxes(title="Inset margin (µm)", rangemode="tozero")
+    figure.update_yaxes(title="participation", rangemode="tozero")
+    figure.update_layout(legend={"x": 1.02, "xanchor": "left", "y": 1})
+    return figure
+
+
+def _surface_mask_html(snapshot: SurfaceMaskEprSeriesSnapshot) -> str:
+    zeroes = sum(
+        record.contribution_status == "zero_contribution" for record in snapshot.records
+    )
+    return (
+        "<p style='opacity:0.75'>Native mask Q and energy remain available in "
+        "<code>masked_snapshots</code>. The native Inset output does not retain "
+        "surface area support; zero participation or energy is reported as "
+        "<code>zero_contribution</code>, not as proof of excluded geometry. "
+        f"This snapshot contains {zeroes} zero-contribution mask record(s).</p>"
+    )
 
 
 def _surface_percentage_figure(
@@ -1999,7 +2394,9 @@ def _surface_loss_html(snapshot: SurfaceEprSeriesSnapshot, problem: str) -> str:
     )
 
 
-def _series_label(snapshot: SurfaceEprSeriesSnapshot) -> str:
+def _series_label(
+    snapshot: SurfaceEprSeriesSnapshot | SurfaceMaskEprSeriesSnapshot,
+) -> str:
     noun = "Mode" if snapshot.series_kind == "mode" else "Excitation"
     return f"{noun} {snapshot.series_index}"
 
@@ -2037,11 +2434,32 @@ def _parent_has_physics(results: Path, problem: str) -> bool:
 
 
 def _same_physics(left: AmrPassSnapshot, right: AmrPassSnapshot) -> bool:
+    return _same_primary_physics(left, right) and _same_masked_physics(
+        left.surface_mask_epr, right.surface_mask_epr
+    )
+
+
+def _same_primary_physics(left: AmrPassSnapshot, right: AmrPassSnapshot) -> bool:
     if left.frequencies_ghz is not None and right.frequencies_ghz is not None:
         return left.frequencies_ghz == right.frequencies_ghz
     if left.capacitance_matrix_f is not None and right.capacitance_matrix_f is not None:
         return left.capacitance_matrix_f == right.capacitance_matrix_f
     return False
+
+
+def _same_masked_physics(
+    left: tuple[SurfaceMaskEprSeriesSnapshot, ...] | None,
+    right: tuple[SurfaceMaskEprSeriesSnapshot, ...] | None,
+) -> bool:
+    if left is None or right is None:
+        return left is right
+    return tuple(
+        (snapshot.series_index, snapshot.series_kind, snapshot.records)
+        for snapshot in left
+    ) == tuple(
+        (snapshot.series_index, snapshot.series_kind, snapshot.records)
+        for snapshot in right
+    )
 
 
 def _problem_size_conflicts(left: AmrPassSnapshot, right: AmrPassSnapshot) -> bool:

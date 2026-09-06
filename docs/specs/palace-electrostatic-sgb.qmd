@@ -61,6 +61,69 @@ preflight and pipeline exit codes, and `solver_exit_code=null`. Receipts use
 
 These methods are reachable candidate APIs.
 
+## Native multi-margin Surface EPR
+
+The Electrostatic and Eigenmode `set_surface_epr(...)` specifications for each
+MA, MS, or SA interface may include `inset_margins_um`. When present, its value
+is an ordered, nonempty list or tuple of finite, nonnegative real values.
+Request order is preserved, and equal values at different ordinals remain
+distinct requested observations. Omitting the field preserves the existing
+unmasked behavior.
+
+For each exact source interface, SCGSim retains one logical unmasked baseline
+and lowers every requested margin ordinal to a separate native masked
+dielectric index that refers back to that baseline index. Masking does not
+change the source interface attributes, type, thickness, relative
+permittivity, or loss tangent. The generated native mask is
+`{Type: Inset, Margin: ...}`.
+
+Palace reads `Margin` in the same coordinate units as the input mesh: units of
+`Model.L0`. SCGSim uses `Model.L0 = 1e-6 m`, so the configured input value is
+
+$$
+\mathrm{Margin}
+= \frac{\texttt{margin\_um}\,10^{-6}\ \mathrm{m}}{\mathrm{Model.L0}}.
+$$
+
+Palace then nondimensionalizes both mesh coordinates and `Margin` by the same
+relative mesh-length scale, $L_c / \mathrm{Model.L0}$. It does not divide the
+configured `Margin` by `Model.L0` as a separate conversion.
+
+At each retained pass, all baseline and masked coefficients are evaluated from
+the same field solution; no margin requests another PDE solve. At quadrature
+points, a positive `Inset` margin selects by distance from the perimeter of the
+exact chosen surface patch. It does not alter the PDE, mesh, or notebook model.
+A zero margin uses the native full-integration coefficient and must equal the
+unmasked integration for the same interface. A positive margin requires an
+open three-dimensional selected patch with a perimeter; the native
+no-perimeter error remains a truthful failure rather than an approximated
+result.
+
+A complete masked snapshot requires both native files from the same retained
+`final` or `iterationNN` result source:
+
+- `surface-mask-Q.csv`, whose indexed columns are `p_surf_mask[Index]` and
+  `Q_surf_mask[Index]`; and
+- `surface-mask-energy.csv`, whose indexed columns are
+  `E_surf_mask[Index] (J)`.
+
+Both files use `m` as the first column for Eigenmode or `i` for Electrostatic.
+If either file is missing or unreadable, the masked snapshot for that source is
+unavailable; a valid baseline snapshot remains readable.
+
+The index map and receipt bind every masked index to its exact baseline index,
+interface owner and type, requested margin value and ordinal, mode or
+excitation, refinement pass, and retained result source. Required masked files
+are artifact-hash sealed for a completed result that requested masks; a hash
+mismatch remains fatal. Repeated unmasked values or columns in native
+`surface-Q.csv` are one logical baseline, not additional loss terms. Neither
+repeated baselines nor alternative margins may be summed into the physical
+loss total.
+
+This multi-margin Surface EPR surface remains **CONVERGING**. It is not a
+cumulative disjoint edge-band contract and introduces no scientific
+acceptance, convergence threshold, or geometry-exclusion claim.
+
 ## SGB and Palace ownership
 
 SGB is the only semantic geometry and topology authority. The first

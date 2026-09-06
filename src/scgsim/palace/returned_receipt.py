@@ -62,18 +62,43 @@ def _read_json(path: Path) -> dict[str, Any]:
     return data
 
 
-def _required_output_paths(problem: str, log_path: str | None) -> list[str]:
+def _mask_outputs_configured(root: Path) -> bool:
+    config = _read_json(root / "config.json")
+    boundaries = config.get("Boundaries")
+    if not isinstance(boundaries, dict):
+        raise TypeError("config Boundaries must be a JSON object.")
+    postprocessing = boundaries.get("Postprocessing", {})
+    if not isinstance(postprocessing, dict):
+        raise TypeError("config Boundaries.Postprocessing must be a JSON object.")
+    dielectric = postprocessing.get("Dielectric", [])
+    if not isinstance(dielectric, list):
+        raise TypeError("config dielectric postprocessing must be a list.")
+    return any(isinstance(row, dict) and "Mask" in row for row in dielectric)
+
+
+def _required_output_paths(
+    problem: str, log_path: str | None, *, masks_configured: bool = False
+) -> list[str]:
     families = _REQUIRED_OUTPUT_FAMILIES.get(problem)
     if not families:
         raise ValueError("unsupported problem")
     paths = [f"results/palace/{family}.csv" for family in families]
+    if masks_configured:
+        paths.extend(
+            (
+                "results/palace/surface-mask-Q.csv",
+                "results/palace/surface-mask-energy.csv",
+            )
+        )
     paths.append("results/palace/palace.json")
     if log_path:
         paths.append(log_path)
     return paths
 
 
-def _iteration_output_paths(root: Path, problem: str) -> list[str]:
+def _iteration_output_paths(
+    root: Path, problem: str, *, masks_configured: bool = False
+) -> list[str]:
     families = _REQUIRED_OUTPUT_FAMILIES.get(problem)
     if not families:
         raise ValueError("unsupported problem")
@@ -91,7 +116,10 @@ def _iteration_output_paths(root: Path, problem: str) -> list[str]:
         ),
         key=lambda path: int(path.name.removeprefix("iteration")),
     ):
-        for name in (*families, "palace"):
+        names = [*families, "palace"]
+        if masks_configured:
+            names.extend(("surface-mask-Q", "surface-mask-energy"))
+        for name in names:
             path = directory / f"{name}.{'json' if name == 'palace' else 'csv'}"
             if path.is_file():
                 paths.append(path.relative_to(root).as_posix())
@@ -271,9 +299,12 @@ def main() -> int:
     solver_identity = _solver_identity(root)
     runtime_compatibility = _runtime_compatibility(root, handoff_metadata)
     compatibility_required = _compatibility_required(handoff_metadata)
+    masks_configured = _mask_outputs_configured(root)
     output_paths = [
-        *_required_output_paths(problem, args.log_path),
-        *_iteration_output_paths(root, problem),
+        *_required_output_paths(
+            problem, args.log_path, masks_configured=masks_configured
+        ),
+        *_iteration_output_paths(root, problem, masks_configured=masks_configured),
         *(
             [RUNTIME_COMPATIBILITY_PATH]
             if compatibility_required is not None
