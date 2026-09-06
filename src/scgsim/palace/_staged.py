@@ -82,8 +82,46 @@ def apply_route_a_thin_film_to_stack(
     normalized = normalize_route_a_thin_film("A", variant)
     if not isinstance(stack, Mapping) or not isinstance(source_stack, Mapping):
         raise TypeError("Route-A thin-film lowering requires mapping stacks.")
-    facts = _route_a_thin_film_facts(stack)
+    facts = _route_a_thin_film_facts(
+        stack, allow_single_face=normalized == "substrate_face"
+    )
     work = copy.deepcopy(dict(stack))
+    if len(facts["physical_face_metal_z_ranges_um"]) == 1:
+        source_hash = _canonical_mapping_sha256(source_stack)
+        side = next(iter(facts["physical_face_metal_z_ranges_um"]))
+        provenance = {
+            "schema_version": 1,
+            "variant": normalized,
+            "display_label": "A_PRIME",
+            "source_stack": {
+                "revision": f"sha256:{source_hash}",
+                "sha256": source_hash,
+            },
+            "host_solution_volume_id": facts["host_solution_volume_id"],
+            "physical_substrate_z_ranges_um": facts[
+                "physical_substrate_z_ranges_um"
+            ],
+            "physical_face_metal_z_ranges_um": facts[
+                "physical_face_metal_z_ranges_um"
+            ],
+            "physical_substrate_face_gap_um": None,
+            "physical_metal_gap_um": None,
+            "effective_sheet_z_um": {side: facts["physical_face_z_um"]},
+            "effective_gap_um": None,
+            "collapsed_thickness_um": 0.0,
+            "mapping": {
+                "kind": "identity_thin_sheet",
+                "summary": "Physical Z coordinates are preserved; face films lower to sheets at their substrate faces.",
+            },
+        }
+        metadata = work.get("metadata", {})
+        if not isinstance(metadata, Mapping):
+            raise TypeError("stack metadata must be a mapping.")
+        if "route_a_thin_film" in metadata:
+            raise ValueError("stack already defines route_a_thin_film provenance.")
+        work["metadata"] = {**dict(metadata), "route_a_thin_film": provenance}
+        return work
+
     collapsed = 0.0
     if normalized == "metal_gap_equivalent":
         collapsed = (
@@ -147,7 +185,9 @@ def apply_route_a_thin_film_to_stack(
     return work
 
 
-def _route_a_thin_film_facts(stack: Mapping[str, Any]) -> dict[str, Any]:
+def _route_a_thin_film_facts(
+    stack: Mapping[str, Any], *, allow_single_face: bool = False
+) -> dict[str, Any]:
     layers = stack.get("layers")
     regions = stack.get("solution_regions")
     materials = stack.get("materials")
@@ -161,6 +201,7 @@ def _route_a_thin_film_facts(stack: Mapping[str, Any]) -> dict[str, Any]:
             "Route-A thin-film lowering requires layers, solution_regions, and materials."
         )
     faces: list[tuple[str, str, float, float]] = []
+    face_records: dict[str, Mapping[str, Any]] = {}
     for record in layers:
         if not isinstance(record, Mapping):
             raise TypeError("stack layers must contain mappings.")
@@ -181,6 +222,7 @@ def _route_a_thin_film_facts(stack: Mapping[str, Any]) -> dict[str, Any]:
                 f"{semantic_id} physical face-metal thickness must be > 0."
             )
         faces.append((semantic_id, host_id, z_min, z_max))
+        face_records[semantic_id] = record
     if not faces:
         raise ValueError("Route A requires typed face_metal layers.")
     host_ids = {record[1] for record in faces}
@@ -190,6 +232,13 @@ def _route_a_thin_film_facts(stack: Mapping[str, Any]) -> dict[str, Any]:
         )
     host_id = next(iter(host_ids))
     face_ranges = _group_z_ranges(faces)
+    if len(face_ranges) == 1 and allow_single_face:
+        _validate_single_face_metal_records(
+            face_ranges[0][2], records=face_records, materials=materials
+        )
+        return _single_face_route_a_thin_film_facts(
+            face_ranges[0], regions=regions, materials=materials, host_id=host_id
+        )
     if len(face_ranges) != 2:
         raise ValueError("Route A requires exactly two physical face-metal Z ranges.")
     lower, upper = face_ranges
@@ -237,6 +286,84 @@ def _route_a_thin_film_facts(stack: Mapping[str, Any]) -> dict[str, Any]:
                 "z_min_um": upper[0],
                 "z_max_um": upper[1],
             },
+        },
+    }
+
+
+def _validate_single_face_metal_records(
+    semantic_ids: Sequence[str],
+    *,
+    records: Mapping[str, Mapping[str, Any]],
+    materials: Mapping[str, Any],
+) -> None:
+    """Require explicit conductor material authority for the new single-face case."""
+    for semantic_id in semantic_ids:
+        record = records[semantic_id]
+        if record.get("role") != "metal":
+            raise ValueError(f"{semantic_id} face_metal must have role='metal'.")
+        material_id = validate_nonempty_string(
+            record.get("material_id"), f"{semantic_id} material_id"
+        )
+        material = materials.get(material_id)
+        if not isinstance(material, Mapping) or material.get("kind") != "conductor":
+            raise ValueError(
+                f"{semantic_id} face_metal must reference an explicit conductor material."
+            )
+
+
+def _single_face_route_a_thin_film_facts(
+    face: tuple[float, float, list[str]],
+    *,
+    regions: Mapping[str, Any],
+    materials: Mapping[str, Any],
+    host_id: str,
+) -> dict[str, Any]:
+    """Return Route-A facts for one explicitly boundary-adjacent face film."""
+    host = regions.get(host_id)
+    if host is None:
+        raise ValueError(f"Route A host solution {host_id!r} is missing.")
+    if not isinstance(host, Mapping):
+        raise TypeError(f"Route A host solution {host_id!r} must be a mapping.")
+    host_material_id = validate_nonempty_string(
+        host.get("material_id", host_id),
+        f"Route A host solution {host_id!r} material_id",
+    )
+    host_material = materials.get(host_material_id)
+    if not isinstance(host_material, Mapping) or host_material.get("kind") != "vacuum":
+        raise ValueError(
+            f"Route A host solution {host_id!r} must reference an explicit vacuum material."
+        )
+    host_min, host_max = _geometry_z_range(_record_geometry(host, host_id), host_id)
+    z_min, z_max, semantic_ids = face
+    if z_min < host_min - _Z_TOLERANCE_UM or z_max > host_max + _Z_TOLERANCE_UM:
+        raise ValueError(
+            "Route A single face-metal interval must be contained within its host solution."
+        )
+    at_lower_boundary = _same_z(host_min, z_min)
+    at_upper_boundary = _same_z(host_max, z_max)
+    if at_lower_boundary == at_upper_boundary:
+        raise ValueError(
+            "Route A single face-metal interval must share exactly one host solution boundary."
+        )
+    if at_lower_boundary:
+        side: Literal["lower", "upper"] = "lower"
+        face_z_um = host_min
+    else:
+        side = "upper"
+        face_z_um = host_max
+    substrate = _adjacent_dielectric_region(
+        regions, materials, host_id=host_id, z_um=face_z_um, side=side
+    )
+    return {
+        "host_solution_volume_id": host_id,
+        "physical_face_z_um": face_z_um,
+        "physical_substrate_z_ranges_um": {side: substrate},
+        "physical_face_metal_z_ranges_um": {
+            side: {
+                "semantic_ids": semantic_ids,
+                "z_min_um": z_min,
+                "z_max_um": z_max,
+            }
         },
     }
 

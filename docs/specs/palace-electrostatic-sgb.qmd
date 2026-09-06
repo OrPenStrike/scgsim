@@ -139,6 +139,20 @@ Route A follows through the same pipeline; it is not a second runner or
 topology system. SCGSim owns only Palace-specific lowering, mesh/config,
 handoff, resolve, and report behavior built on SGB identities.
 
+For representation A, `route_a_thin_film="substrate_face"` preserves the
+physical source Z coordinate. When the source supplies one typed physical
+face-metal interval at the boundary of its explicitly declared vacuum host
+solution, with exactly one adjacent typed dielectric, that single interval is
+sufficient: SCGSim does not fabricate an opposing face or second substrate, and
+it does not collapse the source coordinate. Its provenance records only the
+physical side and sheet that exist. The inter-face gap is `null` and not
+applicable; it is neither zero nor an inferred airbox distance.
+
+Existing two-face `substrate_face` behavior is unchanged.
+`metal_gap_equivalent` still requires two opposing physical face intervals.
+The source `LayerStack` remains immutable. This single-face case changes no
+mask, Port, Surface-EPR, or Route B semantics.
+
 The candidate has no native-geometry fallback, physical-name semantic parsing,
 replacement topology reconstruction, or external gdsfactory/cloud execution
 fallback. Terminal selection is exact SGB net identity; legacy center/name
