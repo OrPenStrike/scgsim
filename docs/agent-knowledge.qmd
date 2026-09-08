@@ -1,0 +1,111 @@
+---
+title: "Package Usage Knowledge"
+---
+
+## Scope and source of truth
+
+SCGSim owns reusable **layout/EM** geometry, preparation, execution, resolution,
+and report procedure. It does not own component designs, circuit/quantum
+runtime, project Notebook placement, or permission to execute a solver.
+The package is an independent downstream toolkit, not official gsim.
+
+Usage knowledge is authored in the documentation pages below. The offline
+bundle is a build-generated view of those same sources, bound to the installed
+distribution version and content digests. It is not a second editable recipe
+set. Reading installed knowledge must not import a solver, start a session,
+access a source checkout, or require MCP. MCP may expose these installed
+resources but does not own or rewrite their meaning.
+
+This knowledge-distribution surface is **CONVERGING**. Capability descriptions
+are not scientific acceptance, solver convergence, or stable-release claims.
+
+## Build and installed discovery
+
+The build-only `_build_backend.py` wraps setuptools' `build_sdist` and
+`build_wheel` hooks and generates
+`scgsim/_agent_knowledge/manifest.json` plus the declared QMD resources. The
+manifest implements `scq-mcp-akb-1.0` (schema `"1.0"`): exact distribution
+version, stable resource IDs, titles/kinds/summaries/status, source-relative
+provenance, SHA-256 of each source/resource, and a canonical `bundle_id`.
+QMD is preserved as UTF-8 source text; it is never executed during generation.
+
+Run `uv build --no-sources` from the package repository to build the sdist and
+its wheel. The sdist includes generated bundle data, this build hook and the
+canonical public sources; rebuilding it requires neither a checkout nor a
+solver import. Standard Python build dependencies must already be available
+for a network-disabled build. Generated files are ignored locally and must
+not be edited as documentation authority. Repeated builds of the same version
+and sources produce identical manifest/resource bytes; archive timestamps are
+not part of the bundle identity.
+
+Install the **built wheel**, not an editable checkout, in the consumer/MCP
+Python environment. MCP discovers files through
+`importlib.metadata.distribution("scgsim")`, the installed file list and
+`locate_file`; it does not import SCGSim to discover knowledge. Every bundled
+file has an ordinary wheel `RECORD` hash and size. The reader verifies those
+along with manifest identity, installed version and resource hashes.
+
+An absent bundle, unsupported editable installation, missing resource, version
+mismatch, unsafe path or byte drift is an explicit unavailable/error result,
+not permission to fall back to a workspace, web recipe or solver import.
+MCP search/read may enforce its documented transport size limits; these are
+not scientific eligibility rules. No MCP dependency, producer entry point,
+runtime parser or solver capability is added by this distribution mechanism.
+
+## Canonical resource inventory
+
+| Reader task | Editable package authority | Boundary |
+|---|---|---|
+| Choose a supported backend | [Backend support](backend-support.qmd) | Implemented candidate versus planned or excluded; not inferred from a namespace. |
+| Supply geometry semantics | [SGB geometry](geometry-sgb.qmd) | PDK fabrication facts plus source-authored component nets/ports/topology. |
+| Organize stage-local calls | [Notebook UX](notebook-ux.qmd) | Package call order and immutable runs; consumer repository owns Notebook files and pairing. |
+| Configure Palace | [Palace + SGB](specs/palace-electrostatic-sgb.qmd) | Electrostatic/Eigenmode, Route A/B, terminals, physical/exterior ground, native masked Surface EPR. |
+| Configure AEDT | [AEDT families](specs/aedt-runtime.qmd) | Typed family-specific model/setup controls, native exports and readback. |
+| Prepare or execute | [Execution profiles](execution-profiles.qmd) | Explicit preparation versus launch; copied inputs and exact compatibility evidence. |
+| Interpret a run | [Report model](report-model.qmd) | Strict resolution, failed/partial inspection, selected-snapshot integrity, solver-specific quantities. |
+| Inspect geometry | [Geometry preview](geometry-preview.qmd) | Semantic mapping and preview availability, not solver evidence. |
+| Preserve evidence | [Provenance](provenance.qmd) | Receipt/hash identity and public/private data boundaries. |
+
+The inventory deliberately excludes project component notebooks, runs, meshes,
+native projects, screenshots, machine configuration, and maintainer routing.
+Existing paired documentation/Notebook sources and Human-executed outputs are
+not converted or overwritten by knowledge generation.
+
+## Prerequisites by operation
+
+| Operation | Python dependencies | External requirement |
+|---|---|---|
+| Read this installed knowledge | Installed SCGSim distribution; Python 3.12 | None; no network or solver import. |
+| Palace geometry-to-handoff and Plotly reports | `scgsim[palace]` | Gmsh's platform libraries for meshing; a Palace executable is **not** a pip extra. |
+| Execute a Palace handoff | Same exact SCGSim installation plus the handoff's runtime environment | Compatible Palace and launch/MPI environment; Slurm only for a Slurm profile. |
+| AEDT typed preparation and results | `scgsim[aedt]` (PyAEDT 1.3.0 and GDS support) | Native execution requires AEDT 2024.2 and an available license. Preparation does not open Desktop. |
+| Geometry previews | `scgsim[visualization]` plus the selected backend's dependencies | Working headless rendering; AEDT project readback additionally requires AEDT/license. |
+
+`--all-extras` is an installation choice, not permission to execute a solver
+and not proof that native libraries, binaries, rendering, or licenses exist.
+Compare the installed distribution version with the consumer's selected exact
+dependency. Do not silently replace it with a newer checkout.
+
+## Procedure migration boundary
+
+The public procedure formerly distributed through layout-simulation Notebook
+profiles is represented here only where SCGSim owns the meaning:
+
+- geometry/stack before Surface-EPR configuration, mesh controls before mesh,
+  numerical controls before config, config before handoff;
+- exact-net terminals and grounds, authored port sheets, and typed AEDT
+  families instead of Notebook-local semantic reconstruction;
+- explicit execution, fresh output identity, sealed native readback, and
+  strict-versus-partial result interpretation;
+- distinct physics and cost surfaces, units, mode/excitation/port ordering,
+  and no local CSV parser, failure classifier, or solver-config patch;
+- read-only Notebook review for those calls and boundaries, not a formatting
+  result presented as scientific validation.
+
+Project-specific headings, file placement, pairing, execution permissions,
+cell IDs, and preservation of existing outputs remain with the consuming
+repository. Legacy central authoring tools remain in place during migration;
+this package does not remove them. Their general solver recipes do not create
+APIs missing from the installed package: for example, the current AEDT runtime
+does not expose a retained-project continuation API. See each backend's
+explicit exclusions rather than constructing a Notebook-local substitute.

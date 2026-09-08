@@ -1,0 +1,7 @@
+include _build_backend.py
+include docs/agent-knowledge.qmd docs/backend-support.qmd
+include docs/geometry-sgb.qmd docs/notebook-ux.qmd
+include docs/specs/palace-electrostatic-sgb.qmd docs/specs/aedt-runtime.qmd
+include docs/execution-profiles.qmd docs/report-model.qmd
+include docs/geometry-preview.qmd docs/provenance.qmd docs/goals-and-upstream.qmd
+recursive-include src/scgsim/_agent_knowledge *.json *.qmd

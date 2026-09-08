@@ -23,6 +23,65 @@ This contract permits Route A or Route B for the current Surface-EPR direction.
 It publishes no private component, selector, dimension, screenshot, config,
 mesh, receipt, or artifact.
 
+### Valid setter sequence
+
+The following is an API fragment, not a standalone component notebook. Its
+inputs (`component`, `stack`, interface specs, net IDs and numerical controls)
+must already come from the consumer's explicit model and environment.
+
+```python
+from scgsim.palace import ElectrostaticSim
+
+sim = ElectrostaticSim()
+sim.set_output_dir(run_dir)
+sim.set_geometry(component)
+sim.set_stack(stack)
+sim.set_vacuum_region(padding=vacuum_padding_um)
+sim.set_surface_epr(representation="B", specs=interface_specs)
+sim.add_terminal(terminal_label, net_id=signal_net_id)
+sim.add_ground(net_id=physical_ground_net_id)
+sim.set_electrostatic(
+    unassigned_conductor_policy="error",
+    exterior_boundary_policy=exterior_policy,
+)
+
+# Build Mesh: these controls belong beside this operation.
+sim.set_mesh(refined_mesh_size=refined_size_um, max_mesh_size=bulk_size_um)
+mesh_path = sim.mesh()
+
+# Generate Config: solver/FEM/AMR controls belong beside this operation.
+sim.set_numerical(**numerical_controls)
+config_path = sim.write_config()
+
+# Prepare Handoff: this does not launch Palace or submit a job.
+handoff = sim.prepare_handoff(
+    profile=launch_profile,
+    executable=palace_executable,
+    resources=resources,
+    setup_commands=setup_commands,
+)
+```
+
+`set_stack()` must precede `set_surface_epr()`. Supply all geometry-affecting
+choices before `mesh()`, including `set_indium_ground_bumps(...)` if used.
+`set_airbox(...)` and `set_vacuum_region(...)` are mutually exclusive. A
+geometry/stack/route/mesh change invalidates the mesh, config and handoff;
+configuration changes invalidate the config and handoff. Regenerate downstream
+artifacts into a fresh run rather than editing a sealed file in place.
+
+For `EigenmodeSim`, use the same stages with
+`set_eigenmode(num_modes=..., target=..., tolerance=..., save=...)` and
+`add_port(name, layer=..., layout_sheet=True, inductance=...)` before mesh.
+Here `target` is in **Hz** and inductance in **H**, not the GHz units used by
+AEDT run controls. The port refers to authored layout geometry; it is not an
+inferred connector. Electrostatic terminals and Eigenmode ports are different
+public contracts.
+
+Route A keeps `representation="A"` and additionally requires
+`route_a_thin_film="substrate_face"` or `"metal_gap_equivalent"`. Route B
+rejects that option. The exact physical/normalized meaning and single-face
+constraints are in the [Palace specification](specs/palace-electrostatic-sgb.qmd).
+
 Notebooks may set `amr_max_passes` (Palace `MaxIts`) and
 `amr_nonconformal` (Palace `Model.Refinement.Nonconformal`).
 `write_config()` always emits the `Nonconformal` key. The SCGSim default is
@@ -35,9 +94,11 @@ argument is `direct-local`, `slurm-single-node`, or `slurm-multi-node`.
 Slurm jobs write stdout and stderr only to `logs/palace-%j.log`. Do not keep a
 duplicate `slurm-%j.out`.
 
-`## Analyze Returned Run` first displays run identity, AMR convergence, and
-simulation cost through `show_run_trustworthiness()`. Physics-result figures
-are a later report layer and are not the first notebook view.
+`## Analyze Returned Run` uses three separate report families: run identity and
+AMR evidence through `show_run_trustworthiness()`, cost/resources through
+`show_simulation_benchmark()`, then physics through `show_physics_quantities()`.
+`show_all_results()` displays these three exactly once in that order and
+returns `None`. Physics-result figures are not the first notebook view.
 `resolve_palace_result()` remains strict and accepts completed runs only;
 `inspect_run_trustworthiness()` represents failed or partial runs without
 changing their receipt status. When the final primary table is missing or
@@ -54,8 +115,81 @@ tables follow the notebook theme. Simulation Benchmark keeps attempted-run
 and selected-snapshot cost data and also records per-AMR-pass wall time, DOFs,
 and seconds per million DOFs so later runs can accumulate cost statistics.
 
+### Analyze without re-executing
+
+These fragments require an existing returned package; neither invokes a solver:
+
+```python
+from scgsim.palace import inspect_run_trustworthiness, resolve_palace_result
+
+# Completed, failed or partial: preserve receipt truth and selected source.
+report = inspect_run_trustworthiness(run_dir)
+report.show_all_results(theme="light", ranking_limit=20, show_details=False)
+
+# Completed only: also bind the expected handoff identity explicitly.
+result = resolve_palace_result(run_dir, expected_handoff_id=handoff_id)
+result.show_all_results(theme="light", ranking_limit=20, show_details=False)
+```
+
+These are alternative loading paths, not a requirement to load twice. Raw
+solver-native parsed tables remain in `result.tables`. `show_details=True`
+opts into full provenance/metadata; the readable benchmark object's `.data`
+remains available for programmatic access. A partial selection does not become
+a completed run, and a hash mismatch is not a reason to bypass the resolver.
+
+### Single runs and sweeps
+
+Only artifact-producing stages need a fresh `RUN_ID` and fresh output location.
+Analysis intentionally reads an existing immutable package. A sweep repeats
+the same staged contract with explicit ordered parameters, units, case IDs
+and failure policy. Never silently discard failed cases or pool distinct modes,
+excitations, reference definitions, or alternative mask margins. SCGSim does
+not currently provide a generic sweep aggregation or continuation engine;
+the consumer owns the case loop without reimplementing runtime/report logic.
+
 ## AEDT notebook contract
 
 AEDT examples use the same stage-local rule. Backend-specific setup remains
 visible, but handoff construction, execution, native readback, hashes, and
 result resolution stay in `scgsim.aedt`, not notebook-local helper code.
+
+Use family-specific immutable specs (`HfssDrivenSpec`, `HfssEigenmodeSpec`,
+`Q3dSpec`, `Q2dSpec`) rather than setting native AEDT properties in the notebook.
+Keep geometry, materials, ports/nets, setup/convergence, execution and results
+visibly distinguishable; the consuming repository chooses its actual cells.
+
+```python
+from scgsim.aedt import prepare_handoff, resolve_results
+
+# spec is a fully specified family-specific model; output_dir must not exist.
+handoff = prepare_handoff(spec=spec, output_dir=fresh_run_dir)
+
+# Only after separately authorized native execution has completed:
+result = resolve_results(returned_run_dir)
+physics_rows = result.physics_results()
+native_or_primary_artifact = result.primary_csv
+convergence = result.convergence
+benchmark = result.simulation_benchmark()
+```
+
+`prepare_handoff()` does not open AEDT. Running its `run_aedt.sh` is a distinct
+explicit execution action requiring AEDT and a license. Unlike Palace
+inspection, AEDT `resolve_results()` accepts only completed receipt-bound
+packages; it does not provide Palace's partial-report object or `show_*` API.
+Do not invent a shared report call across the two families.
+
+## Read-only consumer review checklist
+
+- Check installed version, actual public call signatures and backend status.
+- Check geometry/stack/problem/mesh/config/handoff order and direct controls.
+- Bind PDK facts and component semantics; do not infer nets, ports, materials,
+  or references from names, bounding boxes, physical tags, or render colors.
+- Distinguish prepare, execute, analyze, and any explicitly supported reuse.
+- Use package parsers, index maps and reports; do not patch solver config,
+  normalize solver tables locally, classify failures locally, or import
+  historical gsim/external SGB as a runtime fallback.
+- Review case identity, units, references and baseline/masked EPR separation.
+- Preserve consumer pairing, cell IDs, metadata and Human outputs. Clearing
+  outputs or re-executing a notebook requires that repository's authorization.
+- Notebook formatting/audit success proves neither native compatibility nor
+  mesh quality, convergence, solver agreement or scientific acceptance.

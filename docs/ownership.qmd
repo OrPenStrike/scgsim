@@ -6,9 +6,9 @@ title: "Folder Tree and Ownership Boundaries"
 
 ```text
 scgsim/
-├── README.md                 # Documentation-owned project entry
-├── _quarto.yml               # Documentation-owned site configuration
-├── docs/                     # Documentation-owned authored Quarto sources/assets
+├── README.md                 # Package-owned project entry
+├── _quarto.yml               # Package documentation navigation
+├── docs/                     # Canonical authored usage/contract sources
 ├── src/scgsim/               # SCGSim Development-owned product source
 ├── schemas/                  # SCGSim Development-owned product schemas
 ├── scripts/                  # SCGSim Development-owned producers/tooling
@@ -21,14 +21,15 @@ Generated site output is never source authority.
 
 | Owner | Responsibility |
 |---|---|
-| SCGSim Development | Package/build/runtime/report source, schemas, tests, scripts, CI/release, and generated API-reference producers |
+| SCGSim Development | Package/build/runtime/report source, usage documentation, schemas, tests, scripts, CI/release, and generated knowledge/API-reference producers |
 | OrPen SC PDK | Public PDK facts, public Component source, and public component-simulation notebooks |
-| SCQ Documentation | `README.md`, `_quarto.yml`, authored `docs/**`, authored documentation assets, Quarto information architecture and prose, generated-reference placement/presentation |
+| Documentation contributors | Exact delegated prose paths and writing-quality review; no solver/API/scientific semantic decisions |
 | Chip Design EPR | Surface-EPR requirements and private consumer validation only |
-| `scq-ansys-aedt` | Version-locked AEDT/PyAEDT procedure only; no repository path ownership |
 | Integration & Sync | Repository settings, merges, future pins, synchronization, and cleanup |
 
-Generated API reference may be produced from product-owned source, while its
-placement and presentation remain Documentation-owned. No owner listed here may
+The package owns its version-bound usage knowledge. Documentation contributors
+may author an exact leased path; a separate documentation handoff is not
+required for package-owned prose. Generated offline knowledge is derived from
+the same editable documentation sources, not a second set of recipes. No owner listed here may
 infer Human acceptance, publication authority, or merge authority from a green
 build.

@@ -2,12 +2,12 @@
 title: "Headless Geometry Preview"
 ---
 
-::: {.callout-note title="CONVERGING local candidate"}
-The public V1 preview runtime now exists as a local `CONVERGING` candidate.
+::: {.callout-note title="CONVERGING candidate"}
+The public preview runtime is an implemented `CONVERGING` candidate.
 Public Palace and AEDT 2024.2 non-graphical previews have been produced for
-Human visual review. This does not make the scope Human-accepted, stable, or
-delivered. Durable stabilization tests and PR delivery remain pending that
-Human review and acceptance.
+Human visual review. Its presence in an installed package does not make the
+scope Human-accepted or V1 stable. Preview success is not solver or scientific
+acceptance.
 :::
 
 ## Purpose and ownership

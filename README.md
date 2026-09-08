@@ -10,8 +10,9 @@ simulation workflows. It prioritizes reproducible research behavior and stable
 consumer contracts. It is **not official gsim**, does not erase or replace
 upstream work, and does not promise Human review of Agent-driven code changes.
 
-Within SCQ_Design, SCGSim is the sole current reusable solver, runtime, and
-result-production authority. External gsim and historical SGB remain derivation
+Within SCQ_Design, SCGSim is the current reusable layout/EM solver, runtime, and
+result-production authority, not the circuit or quantum runtime. External gsim
+and historical SGB remain derivation
 provenance only: new SCGSim work must not consume them directly or use them as a
 fallback; the in-tree `scgsim.sgb` Core is the current geometry and topology
 authority.
@@ -32,6 +33,7 @@ duplicate notebook source and has no runtime dependency on OrPen.
 - [Architecture and data flow](docs/architecture.qmd)
 - [Backend support matrix](docs/backend-support.qmd)
 - [Notebook UX contracts](docs/notebook-ux.qmd)
+- [Package usage knowledge](docs/agent-knowledge.qmd)
 - [Roadmap and current status](docs/roadmap.qmd)
 
 ## Current nonclaims

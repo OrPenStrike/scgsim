@@ -45,6 +45,8 @@ website:
           href: docs/examples.qmd
         - text: "Notebook UX contracts"
           href: docs/notebook-ux.qmd
+        - text: "Package usage knowledge"
+          href: docs/agent-knowledge.qmd
     - id: architecture
       title: "Architecture"
       style: floating

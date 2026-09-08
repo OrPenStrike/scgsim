@@ -44,6 +44,37 @@ The receipt records direct AEDT state and hashes every resolved output. A
 resolver rejects unsupported families, partial output, mixed run identity,
 unresolved native assignments, and path/hash mismatches.
 
+## Public preparation and setup controls
+
+The public namespace is `scgsim.aedt`. Choose `HfssDrivenSpec` (mode
+`"terminal"` or `"modal"`), `HfssEigenmodeSpec`, `Q3dSpec`, or `Q2dSpec` and
+call `prepare_handoff(spec=..., output_dir=...)`. The output directory must be
+new. Explicit execution uses the generated `run_aedt.sh`; `resolve_results()`
+then verifies the completed receipt. The current runtime has no public
+retained-project continuation entry. A saved project is not, by itself,
+permission or a supported SCGSim API for continuing an old run.
+
+| Family | Typed controls | Convergence meaning |
+|---|---|---|
+| Driven | `HfssRunControl(setup_name, sweep_name, sweep, ...)` | `maximum_delta_s`; pass limits and refinement are separate. |
+| Eigenmode | `EigenmodeRunControl(setup_name, minimum_frequency_ghz, num_modes, maximum_passes, maximum_delta_frequency_percent, ...)` | Relative eigenfrequency change, not Driven delta-S. |
+| Q3D/Q2D | `MatrixRunControl(setup_name, frequency_ghz, maximum_passes, convergence_percent=..., ...)` | Native matrix convergence percent, applied/read back for each enabled extraction family. |
+
+All three expose `minimum_passes`, `minimum_converged_passes`, and
+`percent_refinement`. HFSS `FrequencySweepSpec(start_ghz, stop_ghz, points=20000)`
+currently requires exactly 20,000 Fast-sweep points. That count is not an
+adaptive-convergence threshold. API defaults and requested tolerances are not
+evidence that a solved run converged: inspect `ResolvedRun.convergence` and
+the receipt-bound native final pass, error/delta and stop reason.
+
+HFSS and Q3D take a GDS source with exact `LayerImport`, `ObjectBinding` and
+`PdkMaterial` records. Q2D instead uses `Q2dRectangleSpec` and
+`Q2dConductorSpec` inside `Q2dSpec`; it requires no GDS or layout ports. Port,
+source/sink and reference conventions stay solver-specific. Terminal
+Touchstone impedance is not a substitute for independently extracted modal
+wave-port characteristic impedance; no standalone Terminal `PortZo` product
+is promised by this package.
+
 ## Q2D native combined matrix export
 
 For new Q2D runs, the canonical result set contains exactly one matrix
@@ -115,7 +146,7 @@ sheets there, and rebuilds the final native Region with zero additional offset.
 The final Region has the requested expanded bounds; the receipt records both
 the requested padding and this zero-offset finalization explicitly.
 
-The prior failed `_01` project remains immutable diagnostic evidence. There is
+Prior failed projects remain immutable diagnostic evidence. There is
 no compatibility fallback, physical bridge, or unite path. This replacement
 contract remains `CONVERGING`.
 

@@ -1,7 +1,8 @@
 # SCGSim Agent Guide
 
-`OrPenStrike/scgsim` is SCQ_Design's sole current reusable solver, runtime,
-and result-production authority. The SCGSim Development Lead is the sole owner
+`OrPenStrike/scgsim` is SCQ_Design's current reusable layout/EM solver, runtime,
+and result-production authority, not its circuit or quantum runtime.
+The SCGSim Development Lead is the sole owner
 of tracked source in this repository.
 
 Use the `develop-main` delivery profile. Route collaboration,

@@ -12,6 +12,23 @@ conductor/solution roles, and exact host volumes. Component annotations supply
 nets, ports, functional conductor regions, and topology selectors. Notebook
 authors supply neither record set manually.
 
+The public composition entry is
+`build_component_stack(component=..., layer_stack=..., material_records=...,
+coupon_padding_um=...)`. Padding is finite and nonnegative, in micrometres;
+zero preserves the exact authored coupon. The component must carry structured
+`info["component_semantics"]` with schema version 1, and the LayerStack must
+declare the included solution regions and material/host facts. Missing or
+ambiguous records fail rather than triggering name/bounding-box inference.
+
+The adapter entries `build_gdsfactory_geometry_input(...)` and
+`build_gds_stack_geometry_input(...)` consume the canonical component or GDS
+plus its semantic stack. `SemanticGeometryBuilder` owns the lowering and
+topology validation. Use the staged Palace API when a Palace mesh/config/
+handoff is wanted; do not reconstruct the compiler's semantic layer records
+in a notebook. Explicit component geometry may contain several disconnected
+residual conductors with shared net/equipotential identity; no selector should
+discard legitimate source-authored Ground regions.
+
 ## Current Surface-EPR direction
 
 | Route | Public intent | Current state |
