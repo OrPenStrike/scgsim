@@ -11,7 +11,9 @@ identity, or common provenance.
 flowchart LR
   PDK["PDK material, layer, fabrication, and 3D-integration semantics"] --> COMPILER["SCGSim semantic compiler"]
   COMPONENT["Component net, port, and topology semantics"] --> COMPILER
-  COMPILER --> SGB["SGB geometry, topology, and physical groups"]
+  COMPILER --> CORE["Immutable stdlib semantic facts"]
+  CORE --> SGB
+  SGB["SGB geometry, topology, and physical groups"]
   SGB --> BACKEND["Solver-specific backend preparation"]
   BACKEND --> HANDOFF["Common run-and-handoff contract"]
   HANDOFF --> PROFILE["Selected machine profile"]
@@ -26,6 +28,7 @@ flowchart LR
 |---|---|
 | Material, layer, fabrication, Z/thickness, and 3D host facts | PDK |
 | Component nets, ports, functional regions, and topology selectors | Component designer |
+| Revision-bound material, interface, owner, side, and evidence facts | `scgsim.semantics` internal stdlib core |
 | Geometry names, topology, Route A/B surfaces | SGB |
 | Palace and AEDT implementation | `scgsim.palace` and `scgsim.aedt` |
 | Solver-bound geometry inspection and preview evidence | `scgsim.visualization` |
@@ -33,6 +36,27 @@ flowchart LR
 | Physical result meaning | Solver-specific, never flattened into a false common quantity |
 | Report navigation, provenance, cost presentation | SCGSim report/resolver surfaces |
 | Public component-simulation notebook source | OrPen SC PDK |
+
+## Semantic facts boundary
+
+`scgsim.semantics` is a solver-independent internal boundary. It accepts plain
+values, has only standard-library dependencies, and returns recursively
+immutable snapshots. A snapshot binds its source revision, geometry revision,
+projection version, and canonical content hash. Detached serialization creates
+new plain containers so a consumer cannot mutate the retained snapshot.
+
+The core records sourced patch identity, source and aggregate owners, declared
+material and effective domains, explicit side meaning, sheet owner, and
+outer/hole/seam provenance. Evidence states remain distinct as declared,
+planned, or observed. Native observations enter only as opaque, detached facts;
+Gmsh and solver bindings remain outside the core. Repeated observations of one
+contribution do not create additional contributions, and missing evidence stays
+unknown rather than becoming guessed contact.
+
+Material identity, geometry approximation, PEC approximation, and native
+implementation are separate facts. The core classifies already-valid values;
+the existing SGB and Palace adapters retain their source-specific validation,
+error messages, and call order.
 
 ## Current truth
 

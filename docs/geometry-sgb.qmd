@@ -21,6 +21,30 @@ authors supply neither record set manually.
 
 Only Route A and Route B are in the current direction.
 
+## Internal semantic projection
+
+SGB projects already-validated source facts once per source/model revision into
+`scgsim.semantics`. The immutable projection is reused while planning a model;
+it is not rebuilt by deep-copying a full stack for every interface pair.
+Interface classification and each owner projection remain distinct operations:
+solution solid/vacuum ordering is not interchangeable with declared surface
+owners, legacy two-owner records, sheet owners, or aggregate physical-group
+owners.
+
+The projection can express finite PEC, surface-sheet MA/MS, local MM/MA patch
+evidence, explicit side meaning, and outer/hole/seam provenance without
+claiming that classification proves contact. Declared, planned, and observed
+records remain distinguishable. Native tags and groups are opaque observations,
+not reconstructed successes, and duplicate observations do not multiply one
+semantic contribution.
+
+Route-A profile selection is optional for a direct semantic-core consumer.
+Existing explicit Palace Route-A entry points still require
+`substrate_face` or `metal_gap_equivalent`, and Route B still rejects either
+profile. With no core profile, coordinates remain unchanged and no collapse is
+recorded. `metal_gap_equivalent` remains the existing effective coordinate
+normalization; no reversible-collapse claim is made.
+
 ## Identity requirements
 
 A handoff preserves:

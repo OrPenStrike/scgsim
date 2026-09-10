@@ -80,6 +80,22 @@ from itertools import pairwise
 from math import hypot, isfinite, sqrt
 from typing import Any
 
+from scgsim.semantics import (
+    EvidenceResult,
+    SemanticEvidenceFacade,
+    conductor_solution_interface_kind,
+    is_vacuum_material_kind,
+    solution_interface_kind,
+    solution_interface_owner_ids,
+)
+from scgsim.semantics.ownership import (
+    interface_surface_owner_ids,
+    physical_group_owner_ids,
+    project_legacy_interface_record_owners,
+    surface_declared_owner_ids,
+    surface_physical_owner_ids,
+)
+
 from scgsim.sgb.models import (
     HIGH_COUNT_LOCAL_CONDUCTOR_PART_ROLES,
     ConstructionBodyPlanRecord,
@@ -121,6 +137,12 @@ from scgsim.sgb.validation import (
     validate_surface_use_counts,
     validate_tag_plan_coverage,
     validate_volume_surface_closure,
+)
+from scgsim.sgb.semantics import (
+    build_semantic_evidence_facade,
+    conductor_solution_evidence,
+    metal_metal_evidence,
+    solution_solution_evidence,
 )
 
 _GEOMETRY_REF_METADATA_KEYS = (
@@ -672,6 +694,7 @@ def build_route_construction_plan(
         "validate_selected_route",
         lambda: validate_selected_route(build_input, route),
     )
+    semantic_facts = build_semantic_evidence_facade(build_input, route=route)
     interfaces = _timed(
         timings,
         "recognize_route_interfaces",
@@ -726,6 +749,7 @@ def build_route_construction_plan(
             surface_partitions=surface_partitions,
             construction_bodies=construction_bodies,
             mm_contacts=mm_contacts,
+            semantic_facts=semantic_facts,
         ),
     )
     surfaces = _timed(
@@ -762,6 +786,7 @@ def build_route_construction_plan(
         lambda: _merge_solution_sidewall_interfaces(
             build_input,
             surfaces=surfaces,
+            semantic_facts=semantic_facts,
         ),
     )
     interfaces = _timed(
@@ -1000,31 +1025,23 @@ def _surface_interface_record_owners(
     owners: tuple[str, ...],
 ) -> tuple[str, ...]:
     """Project structured sheet ownership onto the legacy two-owner record."""
-    if len(owners) <= 2:
-        return owners
-    return _structured_surface_boundary_volume_ids(surface, owners)
+    return project_legacy_interface_record_owners(
+        owners,
+        surface.metadata.get("boundary_volume_ids", ()),
+        surface_id=surface.surface_id,
+    )
 
 
 def _structured_surface_boundary_volume_ids(
     surface: SurfacePlanRecord,
     owners: tuple[str, ...],
 ) -> tuple[str, str]:
-    raw_boundary_ids = surface.metadata.get("boundary_volume_ids", ())
-    boundary_ids = (
-        ()
-        if isinstance(raw_boundary_ids, str)
-        else tuple(str(value) for value in raw_boundary_ids)
+    projected = project_legacy_interface_record_owners(
+        owners,
+        surface.metadata.get("boundary_volume_ids", ()),
+        surface_id=surface.surface_id,
     )
-    if (
-        len(boundary_ids) != 2
-        or len(set(boundary_ids)) != 2
-        or not set(boundary_ids).issubset(owners)
-    ):
-        raise ValueError(
-            f"{surface.surface_id} structured interface requires exactly two "
-            "distinct boundary_volume_ids from its owners"
-        )
-    return (boundary_ids[0], boundary_ids[1])
+    return (projected[0], projected[1])
 
 
 def plan_canonical_topology(
@@ -1518,12 +1535,10 @@ def _segment_candidate_points(
 
 
 def _surface_owner_ids(surface: SurfacePlanRecord) -> tuple[str, ...]:
-    owner_ids = surface.metadata.get("owner_semantic_ids", (surface.owner_semantic_id,))
-    if isinstance(owner_ids, str):
-        return (owner_ids,)
-    if isinstance(owner_ids, Sequence):
-        return tuple(str(owner_id) for owner_id in owner_ids)
-    return (surface.owner_semantic_id,)
+    return surface_declared_owner_ids(
+        surface.metadata.get("owner_semantic_ids", (surface.owner_semantic_id,)),
+        surface.owner_semantic_id,
+    )
 
 
 def recognize_route_interfaces(
@@ -2326,6 +2341,7 @@ def plan_route_surfaces(
     surface_partitions: tuple[SurfacePartitionRecord, ...],
     construction_bodies: tuple[ConstructionBodyPlanRecord, ...],
     mm_contacts: tuple[MMContactRecord, ...] = (),
+    semantic_facts: SemanticEvidenceFacade | None = None,
 ) -> tuple[SurfacePlanRecord, ...]:
     """Plan route-specific surfaces without building geometry.
 
@@ -2349,7 +2365,11 @@ def plan_route_surfaces(
         ).append(partition)
 
     records: list[SurfacePlanRecord] = []
-    records.extend(_plan_substrate_air_surfaces(build_input, route=route))
+    records.extend(
+        _plan_substrate_air_surfaces(
+            build_input, route=route, semantic_facts=semantic_facts
+        )
+    )
     contact_faces = _contact_patches_by_entity_face(interfaces)
     sheet_contacts_by_face = (
         _route_a_sheet_contacts_by_face_metal(build_input, mm_contacts)
@@ -2371,11 +2391,7 @@ def plan_route_surfaces(
             "source_polygon_ids": interface.source_polygon_ids,
             **_geometry_ref_from_metadata(interface.metadata),
         }
-        surface_interface_id = _surface_interface_id(
-            build_input,
-            route=route,
-            interface=interface,
-        )
+        route_a_sheet_evidence: tuple[EvidenceResult, ...] = ()
         if _is_route_a_sheet_interface(route, interface):
             sheet_entity = _entity_by_id(
                 build_input,
@@ -2391,6 +2407,12 @@ def plan_route_surfaces(
                     ),
                 },
             }
+            route_a_sheet_evidence = _route_a_sheet_interface_evidence(
+                build_input,
+                interface=interface,
+                sheet_entity=sheet_entity,
+                semantic_facts=semantic_facts,
+            )
             sheet_contacts = sheet_contacts_by_face.get(sheet_entity.semantic_id, ())
             sheet_contact_loops = tuple(record.outer_loop for record in sheet_contacts)
             if sheet_contacts:
@@ -2409,11 +2431,32 @@ def plan_route_surfaces(
                         sheet_entity,
                         cap_face,
                     )
-                    cap_owner_ids = (sheet_entity.semantic_id, cap_solution_id)
+                    if semantic_facts is None:
+                        cap_kind = _conductor_solution_interface_kind(
+                            _entity_by_id(build_input, cap_solution_id)
+                        )
+                        cap_owner_ids = (sheet_entity.semantic_id, cap_solution_id)
+                    else:
+                        cap_evidence = conductor_solution_evidence(
+                            semantic_facts,
+                            contribution_id=(
+                                f"route-a-sheet-cap:{contact.contact_id}:"
+                                f"{cap_face}:{cap_solution_id}"
+                            ),
+                            patch_id=(
+                                f"planned:route-a-sheet-cap:{contact.contact_id}:"
+                                f"{contact_index:04d}"
+                            ),
+                            conductor_id=sheet_entity.semantic_id,
+                            solution_id=cap_solution_id,
+                            side=cap_face,
+                        )
+                        cap_kind = cap_evidence.classification
+                        cap_owner_ids = cap_evidence.source_owner_ids
                     records.append(
                         SurfacePlanRecord(
                             surface_id=(
-                                f"SURF__MS__{sheet_entity.semantic_id}__"
+                                f"SURF__{cap_kind}__{sheet_entity.semantic_id}__"
                                 f"SHEET_CONTACT_CAP__{contact_index:04d}"
                             ),
                             owner_semantic_id=sheet_entity.semantic_id,
@@ -2431,16 +2474,16 @@ def plan_route_surfaces(
                                 ),
                             },
                             interface_id=(
-                                f"MS__{sheet_entity.semantic_id}__"
+                                f"{cap_kind}__{sheet_entity.semantic_id}__"
                                 f"SHEET_CONTACT_CAP__{contact_index:04d}"
                             ),
                             valid_routes=(route,),
                             metadata={
                                 "physical_name": (
-                                    f"MS__{_entity_physical_group_id(sheet_entity)}"
+                                    f"{cap_kind}__{_entity_physical_group_id(sheet_entity)}"
                                     "__SHEET_CONTACT_CAP"
                                 ),
-                                "interface_kinds": ("MS",),
+                                "interface_kinds": (cap_kind,),
                                 "owner_semantic_ids": cap_owner_ids,
                                 "physical_owner_semantic_ids": (
                                     _physical_group_owner_ids(
@@ -2470,20 +2513,38 @@ def plan_route_surfaces(
                         "split produced multiple sheet remainders"
                     )
                 geometry_ref = geometry_refs[0]
+        primary_kind = next(
+            (
+                result.classification
+                for result in route_a_sheet_evidence
+                if interface.owner_semantic_ids[1]
+                in (result.effective_domain_ids or ())
+            ),
+            None,
+        )
+        surface_interface_id = _surface_interface_id(
+            build_input,
+            route=route,
+            interface=interface,
+            primary_kind=primary_kind,
+        )
         interface_kinds = _interface_surface_kinds(
             build_input,
             route=route,
             interface=interface,
+            route_a_evidence=route_a_sheet_evidence,
         )
         owner_semantic_ids = _interface_surface_owner_ids(
             build_input,
             route=route,
             interface=interface,
+            route_a_evidence=route_a_sheet_evidence,
         )
         boundary_volume_ids = _interface_boundary_volume_ids(
             build_input,
             route=route,
             interface=interface,
+            route_a_evidence=route_a_sheet_evidence,
         )
         physical_owner_semantic_ids = _physical_group_owner_ids(
             build_input,
@@ -2588,9 +2649,20 @@ def plan_route_surfaces(
                     entity,
                     shell_part,
                 )
-                interface_kind = _conductor_solution_interface_kind(
-                    _entity_by_id(build_input, adjacent_id)
+                interface_evidence = conductor_solution_evidence(
+                    semantic_facts,
+                    contribution_id=(
+                        f"conductor-solution:{entity.semantic_id}:"
+                        f"{adjacent_id}:{shell_part}"
+                    ),
+                    patch_id=(
+                        f"planned:{entity.semantic_id}:{adjacent_id}:{shell_part}"
+                    ),
+                    conductor_id=entity.semantic_id,
+                    solution_id=adjacent_id,
+                    side=shell_part,
                 )
+                interface_kind = interface_evidence.classification
                 for face_index, face_geometry_ref in enumerate(face_geometry_refs):
                     surface_id = (
                         base_surface_id
@@ -2600,7 +2672,7 @@ def plan_route_surfaces(
                     body = construction_body_by_surface_id.get(surface_id)
                     if body is None:
                         body = construction_body_by_surface_id.get(base_surface_id)
-                    face_owner_ids = (entity.semantic_id, adjacent_id)
+                    face_owner_ids = interface_evidence.source_owner_ids
                     records.append(
                         SurfacePlanRecord(
                             surface_id=surface_id,
@@ -2693,13 +2765,29 @@ def plan_route_surfaces(
                     raise ValueError(
                         f"{entity.semantic_id} sidewall lacks exact adjacent solution provenance."
                     )
-                sidewall_interface_kind = (
-                    "MM"
-                    if "adjacent_conductor_semantic_id" in geometry_ref
-                    else _conductor_solution_interface_kind(
-                        _entity_by_id(build_input, sidewall_adjacent_owner_id)
-                    )
+                contribution_id = (
+                    f"sidewall:{entity.semantic_id}:"
+                    f"{sidewall_adjacent_owner_id}:{shell_part}"
                 )
+                if "adjacent_conductor_semantic_id" in geometry_ref:
+                    sidewall_evidence = metal_metal_evidence(
+                        semantic_facts,
+                        contribution_id=contribution_id,
+                        patch_id=f"planned:{contribution_id}",
+                        lower_id=entity.semantic_id,
+                        upper_id=sidewall_adjacent_owner_id,
+                        side=shell_part,
+                    )
+                else:
+                    sidewall_evidence = conductor_solution_evidence(
+                        semantic_facts,
+                        contribution_id=contribution_id,
+                        patch_id=f"planned:{contribution_id}",
+                        conductor_id=entity.semantic_id,
+                        solution_id=sidewall_adjacent_owner_id,
+                        side=shell_part,
+                    )
+                sidewall_interface_kind = sidewall_evidence.classification
                 sidewall_interface_id = (
                     None
                     if geometry_ref.get("solution_exterior_boundary")
@@ -2721,7 +2809,7 @@ def plan_route_surfaces(
                 sidewall_owner_ids = (
                     (entity.semantic_id,)
                     if geometry_ref.get("solution_exterior_boundary")
-                    else (entity.semantic_id, sidewall_adjacent_owner_id)
+                    else sidewall_evidence.source_owner_ids
                 )
                 sidewall_physical_owner_ids = _physical_group_owner_ids(
                     build_input,
@@ -4598,15 +4686,28 @@ def _interface_surface_kinds(
     *,
     route: RouteLiteral,
     interface: InterfacePlanRecord,
+    route_a_evidence: tuple[EvidenceResult, ...] = (),
 ) -> tuple[str, ...]:
-    del build_input
+    if _is_route_a_sheet_interface(route, interface):
+        derived = (
+            tuple(result.classification for result in route_a_evidence)
+            if route_a_evidence
+            else tuple(
+                _conductor_solution_interface_kind(
+                    _entity_by_id(build_input, boundary_id)
+                )
+                for boundary_id in _route_a_sheet_boundary_volume_ids(
+                    build_input,
+                    _entity_by_id(build_input, interface.owner_semantic_ids[0]),
+                )
+            )
+        )
+        return tuple(kind for kind in _INTERFACE_KIND_ORDER if kind in set(derived))
     raw_kinds = interface.metadata.get("interface_kinds")
     if raw_kinds is not None:
         if isinstance(raw_kinds, str):
             raw_kinds = (raw_kinds,)
         return tuple(kind for kind in _INTERFACE_KIND_ORDER if kind in set(raw_kinds))
-    if _is_route_a_sheet_interface(route, interface):
-        return ("MS", "MA")
     kinds = set(_interface_kinds(interface))
     return tuple(kind for kind in _INTERFACE_KIND_ORDER if kind in kinds)
 
@@ -4616,21 +4717,27 @@ def _interface_surface_owner_ids(
     *,
     route: RouteLiteral,
     interface: InterfacePlanRecord,
+    route_a_evidence: tuple[EvidenceResult, ...] = (),
 ) -> tuple[str, ...]:
     raw_owner_ids = interface.metadata.get("surface_owner_semantic_ids")
-    if raw_owner_ids is not None:
-        if isinstance(raw_owner_ids, str):
-            return (raw_owner_ids,)
-        return _unique_ids(raw_owner_ids)
+    route_a_owner_ids = None
     if _is_route_a_sheet_interface(route, interface):
-        entity = _entity_by_id(build_input, interface.owner_semantic_ids[0])
-        return _unique_ids(
-            (
+        route_a_owner_ids = _unique_ids(
+            owner_id
+            for result in route_a_evidence
+            for owner_id in result.source_owner_ids
+        )
+        if not route_a_owner_ids:
+            entity = _entity_by_id(build_input, interface.owner_semantic_ids[0])
+            route_a_owner_ids = (
                 entity.semantic_id,
                 *_route_a_sheet_boundary_volume_ids(build_input, entity),
             )
-        )
-    return tuple(interface.owner_semantic_ids)
+    return interface_surface_owner_ids(
+        raw_owner_ids,
+        route_a_sheet_owner_ids=route_a_owner_ids,
+        fallback_owner_ids=interface.owner_semantic_ids,
+    )
 
 
 def _interface_boundary_volume_ids(
@@ -4638,6 +4745,7 @@ def _interface_boundary_volume_ids(
     *,
     route: RouteLiteral,
     interface: InterfacePlanRecord,
+    route_a_evidence: tuple[EvidenceResult, ...] = (),
 ) -> tuple[str, ...]:
     raw_boundary_ids = interface.metadata.get("boundary_volume_ids")
     if raw_boundary_ids is not None:
@@ -4645,6 +4753,12 @@ def _interface_boundary_volume_ids(
             return (raw_boundary_ids,)
         return _unique_ids(raw_boundary_ids)
     if _is_route_a_sheet_interface(route, interface):
+        if route_a_evidence:
+            return _unique_ids(
+                domain_id
+                for result in route_a_evidence
+                for domain_id in (result.effective_domain_ids or ())
+            )
         return _route_a_sheet_boundary_volume_ids(
             build_input,
             _entity_by_id(build_input, interface.owner_semantic_ids[0]),
@@ -4657,13 +4771,50 @@ def _surface_interface_id(
     *,
     route: RouteLiteral,
     interface: InterfacePlanRecord,
+    primary_kind: str | None = None,
 ) -> str:
     if not _is_route_a_sheet_interface(route, interface):
         return interface.interface_id
     entity = _entity_by_id(build_input, interface.owner_semantic_ids[0])
     boundary_ids = _route_a_sheet_boundary_volume_ids(build_input, entity)
     suffix = interface.interface_id.rsplit("__", 1)[-1]
-    return f"MA__{entity.semantic_id}__{'__'.join(boundary_ids)}__{suffix}"
+    return (
+        f"{primary_kind or interface.kind}__{entity.semantic_id}__"
+        f"{'__'.join(boundary_ids)}__{suffix}"
+    )
+
+
+def _route_a_sheet_interface_evidence(
+    build_input: GeometryBuildInput,
+    *,
+    interface: InterfacePlanRecord,
+    sheet_entity: SemanticEntitySpec,
+    semantic_facts: SemanticEvidenceFacade | None,
+) -> tuple[EvidenceResult, ...]:
+    if semantic_facts is None:
+        return ()
+    records: list[EvidenceResult] = []
+    for face in ("bottom", "top"):
+        solution_id = _conductor_face_adjacent_solution_id(
+            build_input, sheet_entity, face
+        )
+        records.append(
+            conductor_solution_evidence(
+                semantic_facts,
+                contribution_id=(
+                    f"route-a-sheet:{interface.interface_id}:"
+                    f"{face}:{solution_id}"
+                ),
+                patch_id=(
+                    f"planned:route-a-sheet:{interface.interface_id}:"
+                    f"{face}:{solution_id}"
+                ),
+                conductor_id=sheet_entity.semantic_id,
+                solution_id=solution_id,
+                side=face,
+            )
+        )
+    return tuple(records)
 
 
 def _is_route_a_sheet_interface(
@@ -4792,11 +4943,7 @@ def _surface_role_suffix(value: Any) -> str | None:
 
 def _surface_physical_owner_ids(surface: SurfacePlanRecord) -> tuple[str, ...]:
     owner_ids = surface.metadata.get("physical_owner_semantic_ids")
-    if isinstance(owner_ids, str):
-        return (owner_ids,)
-    if isinstance(owner_ids, Sequence):
-        return tuple(str(owner_id) for owner_id in owner_ids)
-    return _surface_owner_ids(surface)
+    return surface_physical_owner_ids(owner_ids, _surface_owner_ids(surface))
 
 
 def _physical_group_owner_ids(
@@ -4804,11 +4951,14 @@ def _physical_group_owner_ids(
     owner_ids: Sequence[str],
 ) -> tuple[str, ...]:
     entities_by_id = {entity.semantic_id: entity for entity in build_input.entities}
-    return _unique_ids(
-        _entity_physical_group_id(entities_by_id[owner_id])
-        if owner_id in entities_by_id
-        else owner_id
+    resolved = {
+        owner_id: _entity_physical_group_id(entities_by_id[owner_id])
         for owner_id in owner_ids
+        if owner_id in entities_by_id
+    }
+    return physical_group_owner_ids(
+        owner_ids,
+        resolved,
     )
 
 
@@ -4829,6 +4979,7 @@ def _plan_substrate_air_surfaces(
     build_input: GeometryBuildInput,
     *,
     route: RouteLiteral,
+    semantic_facts: SemanticEvidenceFacade | None = None,
 ) -> tuple[SurfacePlanRecord, ...]:
     import gdstk
 
@@ -4837,8 +4988,6 @@ def _plan_substrate_air_surfaces(
     )
     surface_index = 0
     for lower, upper, z_um, bounds in _solution_interface_planes(build_input):
-        kind = _solution_interface_kind(lower, upper)
-        owner_ids = _solution_interface_owner_ids(kind, lower, upper)
         interface_region = _boolean_gdstk_region(
             gdstk,
             _solution_entity_xy_region(gdstk, lower),
@@ -4847,6 +4996,20 @@ def _plan_substrate_air_surfaces(
         )
         if not interface_region:
             continue
+        interface_evidence = solution_solution_evidence(
+            semantic_facts,
+            contribution_id=(
+                f"solution-solution:{lower.semantic_id}:{upper.semantic_id}:z={z_um}"
+            ),
+            patch_id=(
+                f"planned:{lower.semantic_id}:{upper.semantic_id}:z={z_um}"
+            ),
+            lower_id=lower.semantic_id,
+            upper_id=upper.semantic_id,
+            side="shared_plane",
+        )
+        kind = interface_evidence.classification
+        owner_ids = interface_evidence.source_owner_ids
         interface_region = tuple(
             sorted(
                 interface_region,
@@ -5246,6 +5409,7 @@ def _merge_solution_sidewall_interfaces(
     build_input: GeometryBuildInput,
     *,
     surfaces: tuple[SurfacePlanRecord, ...],
+    semantic_facts: SemanticEvidenceFacade | None = None,
 ) -> tuple[SurfacePlanRecord, ...]:
     """Merge coincident solution sidewalls into one shared interface surface."""
     entities = {entity.semantic_id: entity for entity in build_input.entities}
@@ -5316,8 +5480,19 @@ def _merge_solution_sidewall_interfaces(
             )
         lower = entities[all_ids[0]]
         upper = entities[all_ids[1]]
-        kind = _solution_interface_kind(lower, upper)
-        owner_ids = _solution_interface_owner_ids(kind, lower, upper)
+        interface_evidence = solution_solution_evidence(
+            semantic_facts,
+            contribution_id=(
+                f"solution-sidewall:{lower.semantic_id}:{upper.semantic_id}:"
+                f"{group[0].surface_id.rsplit('__', maxsplit=1)[-1]}"
+            ),
+            patch_id=f"planned:merged:{group[0].surface_id}",
+            lower_id=lower.semantic_id,
+            upper_id=upper.semantic_id,
+            side="sidewall",
+        )
+        kind = interface_evidence.classification
+        owner_ids = interface_evidence.source_owner_ids
         edge_suffix = group[0].surface_id.rsplit("__", maxsplit=1)[-1]
         interface_id = f"{kind}__{owner_ids[0]}__{owner_ids[1]}__{edge_suffix}"
         merged = replace(
@@ -6367,8 +6542,19 @@ def _solution_id_for_entity_coverage(
     return candidates[0]
 
 
-def _conductor_solution_interface_kind(solution: SemanticEntitySpec) -> str:
-    return "MA" if _is_vacuum_solution_entity(solution) else "MS"
+def _conductor_solution_interface_kind(
+    solution: SemanticEntitySpec,
+    *,
+    semantic_facts: SemanticEvidenceFacade | None = None,
+) -> str:
+    material_kind = (
+        semantic_facts.material_kind(solution.semantic_id)
+        if semantic_facts is not None
+        else solution.material_kind
+    )
+    if not isinstance(material_kind, str):
+        raise ValueError(f"{solution.semantic_id} has no snapshotted material kind")
+    return conductor_solution_interface_kind(material_kind)
 
 
 def _solution_interface_planes(
@@ -6475,26 +6661,30 @@ def _conductor_entities_on_solution_plane(
 def _solution_interface_kind(
     lower: SemanticEntitySpec,
     upper: SemanticEntitySpec,
+    *,
+    semantic_facts: SemanticEvidenceFacade | None = None,
 ) -> str:
-    if _is_vacuum_solution_entity(lower) or _is_vacuum_solution_entity(upper):
-        return (
-            "AA"
-            if (_is_vacuum_solution_entity(lower) and _is_vacuum_solution_entity(upper))
-            else "SA"
-        )
-    return "SS"
+    lower_kind = semantic_facts.material_kind(lower.semantic_id) if semantic_facts else lower.material_kind
+    upper_kind = semantic_facts.material_kind(upper.semantic_id) if semantic_facts else upper.material_kind
+    if not isinstance(lower_kind, str) or not isinstance(upper_kind, str):
+        raise ValueError("solution interface has no snapshotted material kind")
+    return solution_interface_kind(lower_kind, upper_kind)
 
 
 def _solution_interface_owner_ids(
     kind: str,
     lower: SemanticEntitySpec,
     upper: SemanticEntitySpec,
+    *,
+    semantic_facts: SemanticEvidenceFacade | None = None,
 ) -> tuple[str, str]:
-    if kind == "SA":
-        if _is_vacuum_solution_entity(lower):
-            return (upper.semantic_id, lower.semantic_id)
-        return (lower.semantic_id, upper.semantic_id)
-    return (lower.semantic_id, upper.semantic_id)
+    lower_kind = semantic_facts.material_kind(lower.semantic_id) if semantic_facts else lower.material_kind
+    return solution_interface_owner_ids(
+        kind,
+        lower.semantic_id,
+        upper.semantic_id,
+        lower_is_vacuum=is_vacuum_material_kind(lower_kind),
+    )
 
 
 def _solution_exterior_face_geometry_refs(
