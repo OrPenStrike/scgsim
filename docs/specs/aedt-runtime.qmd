@@ -26,6 +26,61 @@ owned project, and fails closed on missing native evidence or result bytes.
 PDK superconductors lower to PEC. Other materials reference exact PDK-provided
 AEDT library names; SCGSim does not invent numeric material properties.
 
+The public lifecycle has one transaction owner and three private family
+pipelines:
+
+```text
+run.py: validate cohort -> write running receipt -> own Desktop -> dispatch
+family: prepare native model -> solve explicit setup -> export/read back
+run.py: release Desktop -> write final receipt
+```
+
+The normal command and diagnostic instrumentation use the same private family
+preparation functions. There is no public no-solve API, alternative model
+builder, base backend, or second Desktop owner.
+
+## Receipt cohorts and source provenance
+
+New handoffs retain `scgsim.aedt.handoff.v1` and
+`scgsim.aedt.handoff-manifest.v1`. Both records add
+`expected_receipt_schema: scgsim.aedt.receipt.v2`, and the initial receipt is
+V2. It contains `prepared_runtime_source`: a deterministic, sorted manifest of
+the SCGSim transaction, family, common, spec, persistence, and native-readback
+modules, a content digest over that manifest, and a truthful preparation Git
+observation when one is available. Git observation may be explicitly
+unavailable; module hashes and the content digest are mandatory.
+
+Before writing `running`, execution accepts exactly one of two cohorts:
+
+- a new V2 initial receipt with both V2 expectation markers and a canonical
+  manifest; or
+- an exact historical V1 `not_run` receipt with both markers absent and the
+  canonical historical manifest members and hashes.
+
+Unknown versions, mixed or partial markers, noncanonical members, and hash
+mismatches reject before receipt mutation. The verified initial-receipt hash
+and prepared-manifest hash are copied into the mutable V2 receipt. The final
+receipt is intentionally not compared with its initial hash because execution
+must mutate it. A verified historical handoff is upgraded in place to a V2 run
+receipt and records `prepared_runtime_source.status` as
+`legacy_v1_not_recorded`; missing history is never inferred or fabricated.
+
+Every completed V2 receipt has a separate `runtime_source` manifest and content
+digest for the code that actually executed it, while retaining the historical
+`revision`, `run_py_sha256`, `spec_py_sha256`, convergence, and matrix-helper
+keys. Execution provenance failure therefore produces a failed receipt, never a
+strict-resolvable completed one. Preparation and execution hashes are evidence
+with different timing, not an equality requirement, and historical hashes are
+not compared to the currently installed package.
+
+`resolve_results()` preserves the existing rules for genuine historical
+completed V1 receipts. A V1 receipt carrying either V2 expectation marker is an
+inconsistent downgrade and rejects. V2 resolution verifies its exact cohort,
+markers, canonical prepared manifest, initial-receipt binding, and complete
+actual runtime manifest before applying the existing family result checks.
+These unsigned consistency checks do not authenticate an artifact set against
+an actor able to rewrite every member.
+
 ## Solver-specific contracts
 
 The following semantics remain separate even though they share packaging,

@@ -11,10 +11,21 @@ from .interfaces import (
     solution_interface_kind,
     solution_interface_owner_ids,
 )
-from .snapshot import SemanticFactsSnapshot, canonical_sha256, freeze_plain
+from .snapshot import (
+    SemanticFactsSnapshot,
+    SemanticSnapshotReference,
+    canonical_sha256,
+    freeze_plain,
+)
 
 EvidenceStage = Literal["declared", "planned", "observed"]
 _STAGE_ORDER = ("declared", "planned", "observed")
+_INTERFACE_INTENTS = (
+    "conductor_solution",
+    "solution_solution",
+    "metal_metal_contact",
+    "unknown",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +45,7 @@ class SourcedPatch:
     seam_source_ids: tuple[str, ...] | None
     evidence_stage: EvidenceStage
     observation: Mapping[str, Any] | None = None
+    snapshot_reference: SemanticSnapshotReference | None = None
 
     def __post_init__(self) -> None:
         if self.evidence_stage not in _STAGE_ORDER:
@@ -53,6 +65,12 @@ class SourcedPatch:
                 object.__setattr__(self, field_name, tuple(value))
         if self.observation is not None:
             object.__setattr__(self, "observation", freeze_plain(self.observation))
+        if self.snapshot_reference is not None and not isinstance(
+            self.snapshot_reference, SemanticSnapshotReference
+        ):
+            raise TypeError(
+                "snapshot_reference must be a SemanticSnapshotReference or None"
+            )
 
     def semantic_identity(self) -> tuple[Any, ...]:
         return (
@@ -88,6 +106,28 @@ class EvidenceResult:
     seam_source_ids: tuple[str, ...] | None
     evidence_stages: tuple[EvidenceStage, ...]
     observation_hashes: tuple[str, ...]
+    snapshot_reference: SemanticSnapshotReference
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.snapshot_reference, SemanticSnapshotReference):
+            raise TypeError("snapshot_reference must be a SemanticSnapshotReference")
+        for field_name in (
+            "patch_ids",
+            "source_owner_ids",
+            "aggregate_owner_ids",
+            "evidence_stages",
+            "observation_hashes",
+        ):
+            object.__setattr__(self, field_name, tuple(getattr(self, field_name)))
+        for field_name in (
+            "effective_domain_ids",
+            "outer_source_ids",
+            "hole_source_ids",
+            "seam_source_ids",
+        ):
+            value = getattr(self, field_name)
+            if value is not None:
+                object.__setattr__(self, field_name, tuple(value))
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,8 +159,14 @@ class SemanticEvidenceFacade:
     def results(
         self, patches: Sequence[SourcedPatch] = ()
     ) -> tuple[EvidenceResult, ...]:
+        records_to_evaluate = (*self._patches, *tuple(patches))
+        for patch in records_to_evaluate:
+            _validate_interface_intent(patch)
+        expected_reference = self.snapshot.reference()
+        for patch in records_to_evaluate:
+            _validate_snapshot_reference(patch, expected_reference)
         grouped: dict[str, list[SourcedPatch]] = {}
-        for patch in (*self._patches, *tuple(patches)):
+        for patch in records_to_evaluate:
             grouped.setdefault(patch.contribution_id, []).append(patch)
         results: list[EvidenceResult] = []
         for contribution_id, records in sorted(grouped.items()):
@@ -161,9 +207,27 @@ class SemanticEvidenceFacade:
                     seam_source_ids=first.seam_source_ids,
                     evidence_stages=stages,  # type: ignore[arg-type]
                     observation_hashes=observation_hashes,
+                    snapshot_reference=expected_reference,
                 )
             )
         return tuple(results)
+
+
+def _validate_interface_intent(patch: SourcedPatch) -> None:
+    if patch.interface_intent not in _INTERFACE_INTENTS:
+        raise ValueError(f"unsupported interface intent {patch.interface_intent!r}")
+
+
+def _validate_snapshot_reference(
+    patch: SourcedPatch,
+    expected_reference: SemanticSnapshotReference,
+) -> None:
+    if patch.snapshot_reference is None:
+        raise ValueError(f"semantic evidence {patch.patch_id!r} has no snapshot reference")
+    if patch.snapshot_reference != expected_reference:
+        raise ValueError(
+            f"semantic evidence {patch.patch_id!r} belongs to a different snapshot"
+        )
 
 
 def _classify_patch(
@@ -196,7 +260,7 @@ def _classify_patch(
         return "MM", patch.source_owner_ids
     if patch.interface_intent == "unknown":
         return "unknown", patch.source_owner_ids
-    raise ValueError(f"unsupported interface intent {patch.interface_intent!r}")
+    raise AssertionError(f"unvalidated interface intent {patch.interface_intent!r}")
 
 
 def _material_kind(snapshot: SemanticFactsSnapshot, semantic_id: str) -> str:

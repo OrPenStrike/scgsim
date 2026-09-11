@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from ._runtime_provenance import RECEIPT_V2, prepared_runtime_source
 from .spec import OFFICIAL_PYAEDT_SOURCE_URL, AedtSpec, Q2dSpec
 from .util import file_sha256, write_json
 
@@ -68,6 +69,7 @@ def prepare_handoff(*, spec: AedtSpec, output_dir: str | Path) -> HandoffPlan:
     archive_path = run_dir / "aedt_handoff.tar.gz"
     prepared_at = _utc_now()
     started = time.perf_counter()
+    prepared_source = prepared_runtime_source()
 
     _write_script(script_path)
     payload = portable_spec.to_payload()
@@ -78,6 +80,7 @@ def prepare_handoff(*, spec: AedtSpec, output_dir: str | Path) -> HandoffPlan:
     }
     metadata = {
         "schema_version": "scgsim.aedt.handoff.v1",
+        "expected_receipt_schema": RECEIPT_V2,
         "status": "prepared",
         "mode": spec.mode,
         "project": payload["project"],
@@ -111,7 +114,7 @@ def prepare_handoff(*, spec: AedtSpec, output_dir: str | Path) -> HandoffPlan:
     write_json(
         receipt_path,
         {
-            "schema_version": "scgsim.aedt.receipt.v1",
+            "schema_version": RECEIPT_V2,
             "status": "not_run",
             "mode": spec.mode,
             "requested": {
@@ -122,6 +125,7 @@ def prepare_handoff(*, spec: AedtSpec, output_dir: str | Path) -> HandoffPlan:
             "pdk_materials": payload["materials"],
             "vacuum_material_id": payload["vacuum_material_id"],
             "source": source,
+            "prepared_runtime_source": prepared_source,
             "outputs": {},
             "prepared_at_utc": prepared_at,
         },
@@ -142,6 +146,7 @@ def prepare_handoff(*, spec: AedtSpec, output_dir: str | Path) -> HandoffPlan:
         manifest_path,
         {
             "schema_version": "scgsim.aedt.handoff-manifest.v1",
+            "expected_receipt_schema": RECEIPT_V2,
             "allowed_paths": [path.relative_to(run_dir).as_posix() for path in allowed],
             "members": [
                 _member(path, run_dir) for path in allowed if path != manifest_path

@@ -142,6 +142,7 @@ from scgsim.sgb.semantics import (
     build_semantic_evidence_facade,
     conductor_solution_evidence,
     metal_metal_evidence,
+    require_semantic_evidence_facade,
     solution_solution_evidence,
 )
 
@@ -2357,6 +2358,11 @@ def plan_route_surfaces(
     must appear as interface-owned `MS`, `MA`, `MM`, or `SA` surfaces, so metal
     coverage replaces the bare substrate-air interface instead of overlapping it.
     """
+    semantic_facts = require_semantic_evidence_facade(
+        build_input,
+        route=route,
+        facade=semantic_facts,
+    )
     partitions_by_interface: dict[str, list[SurfacePartitionRecord]] = {}
     for partition in surface_partitions:
         partitions_by_interface.setdefault(
@@ -4688,6 +4694,11 @@ def _interface_surface_kinds(
     interface: InterfacePlanRecord,
     route_a_evidence: tuple[EvidenceResult, ...] = (),
 ) -> tuple[str, ...]:
+    raw_kinds = interface.metadata.get("interface_kinds")
+    if raw_kinds is not None:
+        if isinstance(raw_kinds, str):
+            raw_kinds = (raw_kinds,)
+        return tuple(kind for kind in _INTERFACE_KIND_ORDER if kind in set(raw_kinds))
     if _is_route_a_sheet_interface(route, interface):
         derived = (
             tuple(result.classification for result in route_a_evidence)
@@ -4703,11 +4714,6 @@ def _interface_surface_kinds(
             )
         )
         return tuple(kind for kind in _INTERFACE_KIND_ORDER if kind in set(derived))
-    raw_kinds = interface.metadata.get("interface_kinds")
-    if raw_kinds is not None:
-        if isinstance(raw_kinds, str):
-            raw_kinds = (raw_kinds,)
-        return tuple(kind for kind in _INTERFACE_KIND_ORDER if kind in set(raw_kinds))
     kinds = set(_interface_kinds(interface))
     return tuple(kind for kind in _INTERFACE_KIND_ORDER if kind in kinds)
 

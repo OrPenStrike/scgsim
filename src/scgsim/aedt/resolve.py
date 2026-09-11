@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +13,11 @@ from typing import Any, Literal
 from ._hfss_convergence import read_hfss_convergence
 from ._matrix_export import parse_matrix_export, read_q2d_rlgc_matrix
 from ._q2d_convergence import read_q2d_convergence, read_q3d_convergence
+from ._runtime_provenance import (
+    RECEIPT_V1,
+    RECEIPT_V2,
+    validate_runtime_source,
+)
 from .spec import (
     HfssDrivenSpec,
     HfssEigenmodeSpec,
@@ -96,13 +103,17 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
     if not receipt_path.is_file():
         raise FileNotFoundError(f"run receipt is missing: {receipt_path}")
     receipt = read_json(receipt_path)
-    if (
-        not isinstance(receipt, dict)
-        or receipt.get("schema_version") != "scgsim.aedt.receipt.v1"
-    ):
+    if not isinstance(receipt, dict) or receipt.get("schema_version") not in {
+        RECEIPT_V1,
+        RECEIPT_V2,
+    }:
         raise RuntimeError("handoff receipt schema is invalid")
     if receipt.get("status") != "completed":
         raise RuntimeError("handoff has not completed successfully")
+    if receipt["schema_version"] == RECEIPT_V1:
+        _reject_legacy_v2_markers(root, receipt)
+    else:
+        _validate_v2_completion_cohort(root, receipt)
     save = receipt.get("save")
     if (
         not isinstance(save, dict)
@@ -231,6 +242,160 @@ def _contained(root: Path, relative: str) -> Path:
     if not resolved.is_relative_to(root):
         raise RuntimeError(f"receipt path escapes handoff root: {relative!r}")
     return resolved
+
+
+def _reject_legacy_v2_markers(root: Path, receipt: dict[str, Any]) -> None:
+    """Reject partial receipt downgrades without burdening historical v1 runs."""
+    if "expected_receipt_schema" in receipt or "prepared_runtime_source" in receipt:
+        raise RuntimeError("legacy receipt conflicts with v2 expectation markers")
+    for relative in (
+        "metadata/aedt_handoff_metadata.json",
+        "metadata/aedt_handoff_manifest.json",
+    ):
+        path = _contained(root, relative)
+        if not path.is_file():
+            continue
+        try:
+            candidate = read_json(path)
+        except (OSError, TypeError, ValueError):
+            # Historical v1 resolution never required either preparation file.
+            continue
+        if isinstance(candidate, dict) and "expected_receipt_schema" in candidate:
+            raise RuntimeError("legacy receipt conflicts with v2 expectation markers")
+
+
+def _validate_v2_completion_cohort(root: Path, receipt: dict[str, Any]) -> None:
+    """Verify the immutable preparation cohort and complete execution provenance."""
+    if receipt.get("expected_receipt_schema") != RECEIPT_V2:
+        raise RuntimeError("completed v2 receipt expectation marker is invalid")
+    mode = receipt.get("mode")
+    if mode not in {"terminal", "modal", "eigenmode", "q3d", "q2d"}:
+        raise RuntimeError("AEDT receipt mode is invalid")
+
+    metadata_path = _contained(root, "metadata/aedt_handoff_metadata.json")
+    manifest_path = _contained(root, "metadata/aedt_handoff_manifest.json")
+    if not metadata_path.is_file() or not manifest_path.is_file():
+        raise RuntimeError("completed v2 receipt lacks preparation cohort files")
+    metadata = read_json(metadata_path)
+    manifest = read_json(manifest_path)
+    if (
+        not isinstance(metadata, dict)
+        or metadata.get("schema_version") != "scgsim.aedt.handoff.v1"
+        or metadata.get("status") != "prepared"
+        or metadata.get("mode") != mode
+        or not isinstance(manifest, dict)
+        or manifest.get("schema_version") != "scgsim.aedt.handoff-manifest.v1"
+    ):
+        raise RuntimeError("completed v2 preparation cohort is invalid")
+
+    expected_files = {
+        "spec": "aedt_spec.json",
+        "receipt": "metadata/aedt_run_receipt.json",
+    }
+    if mode != "q2d":
+        expected_files["gds"] = "geometry/design.gds"
+    if metadata.get("files") != expected_files:
+        raise RuntimeError("completed v2 preparation file map is not canonical")
+
+    metadata_has = "expected_receipt_schema" in metadata
+    manifest_has = "expected_receipt_schema" in manifest
+    preparation_cohort = receipt.get("preparation_cohort")
+    prepared_source = receipt.get("prepared_runtime_source")
+    if preparation_cohort == "prepared_v2":
+        if (
+            metadata.get("expected_receipt_schema") != RECEIPT_V2
+            or manifest.get("expected_receipt_schema") != RECEIPT_V2
+        ):
+            raise RuntimeError("completed v2 preparation markers are inconsistent")
+        validate_runtime_source(prepared_source, stage="prepared")
+    elif preparation_cohort == "verified_legacy_v1":
+        if metadata_has or manifest_has:
+            raise RuntimeError("verified legacy cohort contains v2 preparation markers")
+        if prepared_source != {"status": "legacy_v1_not_recorded"}:
+            raise RuntimeError("verified legacy preparation provenance is invalid")
+    else:
+        raise RuntimeError("completed v2 preparation cohort is invalid")
+
+    validate_runtime_source(receipt.get("runtime_source"), stage="actual")
+    prepared_receipt_sha = receipt.get("prepared_receipt_sha256")
+    verified_manifest_sha = receipt.get("verified_prepared_manifest_sha256")
+    if (
+        not isinstance(prepared_receipt_sha, str)
+        or not _sha256_text(prepared_receipt_sha)
+        or not isinstance(verified_manifest_sha, str)
+        or not _sha256_text(verified_manifest_sha)
+        or file_sha256(manifest_path) != verified_manifest_sha
+        or _initial_receipt_sha256(receipt, preparation_cohort) != prepared_receipt_sha
+    ):
+        raise RuntimeError("completed v2 preparation hash bindings are invalid")
+
+    expected_paths = ["run_aedt.sh", "aedt_spec.json"]
+    if mode != "q2d":
+        expected_paths.append("geometry/design.gds")
+    expected_paths += [
+        "metadata/aedt_handoff_metadata.json",
+        "metadata/aedt_run_receipt.json",
+        "metadata/aedt_handoff_manifest.json",
+    ]
+    if manifest.get("allowed_paths") != expected_paths:
+        raise RuntimeError("completed v2 manifest allowed paths are not canonical")
+    members = manifest.get("members")
+    if (
+        not isinstance(members, list)
+        or len(members) != len(expected_paths) - 1
+        or [item.get("path") if isinstance(item, dict) else None for item in members]
+        != expected_paths[:-1]
+    ):
+        raise RuntimeError("completed v2 manifest members are not canonical")
+    for member in members:
+        if (
+            not isinstance(member, dict)
+            or set(member) != {"path", "bytes", "sha256"}
+            or not isinstance(member.get("bytes"), int)
+            or isinstance(member.get("bytes"), bool)
+            or member["bytes"] < 0
+            or not isinstance(member.get("sha256"), str)
+            or not _sha256_text(member["sha256"])
+        ):
+            raise RuntimeError("completed v2 manifest member is invalid")
+        relative = member["path"]
+        if relative == "metadata/aedt_run_receipt.json":
+            if member["sha256"] != prepared_receipt_sha:
+                raise RuntimeError("completed v2 initial receipt binding is invalid")
+            continue
+        path = _contained(root, relative)
+        if (
+            not path.is_file()
+            or path.stat().st_size != member["bytes"]
+            or file_sha256(path) != member["sha256"]
+        ):
+            raise RuntimeError(f"completed v2 manifest member mismatch: {relative}")
+
+
+def _sha256_text(value: str) -> bool:
+    return len(value) == 64 and all(
+        character in "0123456789abcdef" for character in value
+    )
+
+
+def _initial_receipt_sha256(receipt: dict[str, Any], preparation_cohort: Any) -> str:
+    initial: dict[str, Any] = {
+        "schema_version": (
+            RECEIPT_V2 if preparation_cohort == "prepared_v2" else RECEIPT_V1
+        ),
+        "status": "not_run",
+        "mode": receipt.get("mode"),
+        "requested": receipt.get("requested"),
+        "pdk_materials": receipt.get("pdk_materials"),
+        "vacuum_material_id": receipt.get("vacuum_material_id"),
+        "source": receipt.get("source"),
+    }
+    if preparation_cohort == "prepared_v2":
+        initial["prepared_runtime_source"] = receipt.get("prepared_runtime_source")
+    initial["outputs"] = {}
+    initial["prepared_at_utc"] = receipt.get("prepared_at_utc")
+    encoded = (json.dumps(initial, indent=2) + "\n").encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _validate_readback(root: Path, receipt: dict[str, Any], spec: Any) -> None:

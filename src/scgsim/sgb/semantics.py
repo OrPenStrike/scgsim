@@ -37,12 +37,22 @@ def _string_tuple(value: object) -> tuple[str, ...] | None:
     return None
 
 
-def build_semantic_evidence_facade(
+def _upstream_plain(value: Any) -> Any:
+    """Preserve legacy source fingerprinting outside strict core mappings."""
+    if isinstance(value, Mapping):
+        return {str(key): _upstream_plain(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return [_upstream_plain(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        return sorted((_upstream_plain(item) for item in value), key=repr)
+    return value
+
+
+def _project_semantic_facts(
     build_input: GeometryBuildInput,
     *,
     route: str,
-) -> SemanticEvidenceFacade:
-    """Snapshot one effective build input for reuse during one planning call."""
+) -> dict[str, Any]:
     polygon_by_id = {polygon.polygon_id: polygon for polygon in build_input.polygons}
     entities: dict[str, dict[str, Any]] = {}
     for entity in build_input.entities:
@@ -128,22 +138,39 @@ def build_semantic_evidence_facade(
         }
         for port in build_input.port_sheet_regions
     }
+    return {
+        "route": route,
+        "entities": entities,
+        "polygons": polygons,
+        "solution_regions": build_input.solution_regions,
+        "port_sheet_regions": ports,
+    }
+
+
+def _source_revision(
+    build_input: GeometryBuildInput,
+) -> tuple[str, Literal["declared_revision", "content_hash_fallback"]]:
     declared_source_revision = _optional_revision(
         build_input.metadata, "source_revision", "upstream_revision"
     )
-    source_revision = declared_source_revision
-    source_revision_kind = None
-    if source_revision is None:
-        source_revision = f"sha256:{canonical_sha256(asdict(build_input))}"
-        source_revision_kind = "content_hash_fallback"
+    if declared_source_revision is not None:
+        return declared_source_revision, "declared_revision"
+    return (
+        f"sha256:{canonical_sha256(_upstream_plain(asdict(build_input)))}",
+        "content_hash_fallback",
+    )
+
+
+def build_semantic_evidence_facade(
+    build_input: GeometryBuildInput,
+    *,
+    route: str,
+) -> SemanticEvidenceFacade:
+    """Snapshot one effective build input for reuse during one planning call."""
+    projected = _project_semantic_facts(build_input, route=route)
+    source_revision, source_revision_kind = _source_revision(build_input)
     snapshot = create_snapshot(
-        {
-            "route": route,
-            "entities": entities,
-            "polygons": polygons,
-            "solution_regions": build_input.solution_regions,
-            "port_sheet_regions": ports,
-        },
+        projected,
         source_revision=source_revision,
         geometry_revision=_optional_revision(
             build_input.metadata, "geometry_revision", "model_revision"
@@ -152,6 +179,45 @@ def build_semantic_evidence_facade(
         source_revision_kind=source_revision_kind,
     )
     return SemanticEvidenceFacade(snapshot)
+
+
+def require_semantic_evidence_facade(
+    build_input: GeometryBuildInput,
+    *,
+    route: str,
+    facade: SemanticEvidenceFacade | None,
+) -> SemanticEvidenceFacade:
+    """Create once when absent, otherwise verify exact projected build identity."""
+    if facade is None:
+        return build_semantic_evidence_facade(build_input, route=route)
+    if not isinstance(facade, SemanticEvidenceFacade):
+        raise TypeError("semantic_facts must be a SemanticEvidenceFacade")
+    projected = _project_semantic_facts(build_input, route=route)
+    expected_digest = canonical_sha256(projected)
+    snapshot = facade.snapshot
+    if snapshot.projection_version != PROJECTION_VERSION:
+        raise ValueError("semantic_facts projection version does not match SGB")
+    if snapshot.canonical_sha256 != expected_digest:
+        raise ValueError("semantic_facts do not match the supplied build input and route")
+    expected_source, expected_source_kind = _source_revision(build_input)
+    if (
+        snapshot.source_revision != expected_source
+        or snapshot.source_revision_kind != expected_source_kind
+    ):
+        raise ValueError("semantic_facts source revision does not match build input")
+    declared_geometry = _optional_revision(
+        build_input.metadata, "geometry_revision", "model_revision"
+    )
+    expected_geometry = declared_geometry or f"sha256:{expected_digest}"
+    expected_geometry_kind = (
+        "declared_revision" if declared_geometry else "content_hash_fallback"
+    )
+    if (
+        snapshot.geometry_revision != expected_geometry
+        or snapshot.geometry_revision_kind != expected_geometry_kind
+    ):
+        raise ValueError("semantic_facts geometry revision does not match build input")
+    return facade
 
 
 def conductor_solution_evidence(
@@ -186,6 +252,7 @@ def conductor_solution_evidence(
             hole_source_ids=conductor["hole_source_ids"],
             seam_source_ids=conductor["seam_source_ids"],
             evidence_stage=evidence_stage,
+            snapshot_reference=facade.snapshot.reference(),
         )
     )
 
@@ -222,6 +289,7 @@ def solution_solution_evidence(
             hole_source_ids=None,
             seam_source_ids=None,
             evidence_stage=evidence_stage,
+            snapshot_reference=facade.snapshot.reference(),
         )
     )
 
@@ -258,5 +326,6 @@ def metal_metal_evidence(
             hole_source_ids=lower["hole_source_ids"],
             seam_source_ids=lower["seam_source_ids"],
             evidence_stage=evidence_stage,
+            snapshot_reference=facade.snapshot.reference(),
         )
     )

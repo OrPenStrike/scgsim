@@ -38,6 +38,15 @@ records remain distinguishable. Native tags and groups are opaque observations,
 not reconstructed successes, and duplicate observations do not multiply one
 semantic contribution.
 
+`plan_route_surfaces()` owns the public projection boundary: it creates the
+facade once when omitted, or verifies a supplied facade against the same route
+and build-input fingerprint, then reuses it at the existing adjacency call
+sites. Explicit authored interface kind and owner metadata take precedence
+over derived defaults. Route-A sheet contact footprints remain an `MM`
+topology relation but lower as the existing `MS` cap with its established
+physical-name prefix; the surrounding sheet may still carry its independently
+classified MA/MS evidence.
+
 Route-A profile selection is optional for a direct semantic-core consumer.
 Existing explicit Palace Route-A entry points still require
 `substrate_face` or `metal_gap_equivalent`, and Route B still rejects either

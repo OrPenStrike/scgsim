@@ -16,13 +16,19 @@ from .route_a import (
     derive_thin_film_facts,
     normalize_optional_profile,
 )
-from .snapshot import SemanticFactsSnapshot, canonical_sha256, create_snapshot
+from .snapshot import (
+    SemanticFactsSnapshot,
+    SemanticSnapshotReference,
+    canonical_sha256,
+    create_snapshot,
+)
 
 __all__ = [
     "EvidenceResult",
     "MATERIAL_KINDS",
     "SemanticEvidenceFacade",
     "SemanticFactsSnapshot",
+    "SemanticSnapshotReference",
     "SourcedPatch",
     "apply_thin_film_profile",
     "canonical_sha256",

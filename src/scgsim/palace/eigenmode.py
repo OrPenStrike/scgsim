@@ -10,8 +10,6 @@ from pathlib import Path
 from typing import Any, Literal
 
 from scgsim.sgb import VacuumRegionSpec
-from scgsim.sgb.ground_bumps import _prepare_indium_ground_bump_fill
-
 from ._config import (
     LayoutPortBinding,
     build_eigenmode_config,
@@ -22,19 +20,17 @@ from ._mesh import MeshBuildResult, build_route_mesh
 from ._staged import (
     RouteAThinFilm,
     apply_airbox_to_stack,
-    apply_route_a_thin_film_to_stack,
-    apply_vacuum_region_to_stack,
     normalize_route_a_thin_film,
     validate_non_negative_int,
     validate_nonempty_string,
     validate_positive_number,
 )
 from .electrostatic import (
-    _atomic_json,
     _load_stack,
     _non_negative_number,
     _validate_stack_material_kinds,
 )
+from ._workflow import persist_problem_files, prepare_mesh_input
 from .handoff import HandoffPlan, prepare_handoff
 
 
@@ -322,44 +318,25 @@ class EigenmodeSim:
         if not self.ports:
             raise ValueError("add_port(..., layout_sheet=True) must run before mesh().")
         resolved, source_records = _resolve_layout_ports(self.component, self.ports)
-        prepared_stack = self.stack
-        if self.vacuum_region is not None:
-            prepared_stack = apply_vacuum_region_to_stack(
-                self.stack,
-                self.vacuum_region,
-            )
-        if self.route == "A":
-            prepared_stack = apply_route_a_thin_film_to_stack(
-                prepared_stack,
-                source_stack=self.stack,
-                variant=self.route_a_thin_film,
-            )
-        indium_fill = None
-        mesh_component = self.component
-        if self.indium_ground_bumps is not None:
-            indium_fill = _prepare_indium_ground_bump_fill(
-                component=self.component,
-                stack=prepared_stack,
-                **self.indium_ground_bumps,
-            )
-            mesh_component = indium_fill["component"]
-            prepared_stack = indium_fill["stack"]
-        prepared_materials = prepared_stack.get("materials")
-        if isinstance(prepared_materials, Mapping):
-            self._materials = {
-                str(material_id): dict(material)
-                for material_id, material in prepared_materials.items()
-                if isinstance(material, Mapping)
-            }
+        prepared = prepare_mesh_input(
+            component=self.component,
+            stack=self.stack,
+            route=self.route,
+            route_a_thin_film=self.route_a_thin_film,
+            vacuum_region=self.vacuum_region,
+            indium_ground_bumps=self.indium_ground_bumps,
+        )
+        if prepared.materials is not None:
+            self._materials = prepared.materials
         self._mesh_result = build_route_mesh(
-            component=mesh_component,
-            stack=apply_airbox_to_stack(prepared_stack, self.airbox),
+            component=prepared.component,
+            stack=apply_airbox_to_stack(prepared.stack, self.airbox),
             route=self.route,
             output_dir=self.output_dir,
             refined_mesh_size=self.numerical["refined_mesh_size"],
             max_mesh_size=self.numerical["max_mesh_size"],
             port_sheet_source_layers=source_records,
-            indium_ground_bump_fill=indium_fill,
+            indium_ground_bump_fill=prepared.indium_ground_bump_fill,
         )
         self._resolved_ports = resolved
         return self._mesh_result.mesh_path
@@ -393,21 +370,28 @@ class EigenmodeSim:
         )
         metadata = self._mesh_result.output_dir / "metadata"
         config_path = self._mesh_result.output_dir / "config.json"
-        _atomic_json(
-            metadata / "palace_index_map.json",
-            {"schema_version": 1, "entries": result.index_entries},
+        self.config_path = persist_problem_files(
+            metadata_files=(
+                (
+                    metadata / "palace_index_map.json",
+                    {"schema_version": 1, "entries": result.index_entries},
+                ),
+                (
+                    metadata / "palace_material_resolution.json",
+                    {
+                        "schema_version": 1,
+                        "solution_volumes": result.material_resolution,
+                    },
+                ),
+                (
+                    metadata / "port_information.json",
+                    {"schema_version": 1, "ports": result.port_information},
+                ),
+                (metadata / "palace_numerical_controls.json", self.numerical),
+            ),
+            config_path=config_path,
+            config=result.config,
         )
-        _atomic_json(
-            metadata / "palace_material_resolution.json",
-            {"schema_version": 1, "solution_volumes": result.material_resolution},
-        )
-        _atomic_json(
-            metadata / "port_information.json",
-            {"schema_version": 1, "ports": result.port_information},
-        )
-        _atomic_json(metadata / "palace_numerical_controls.json", self.numerical)
-        _atomic_json(config_path, result.config)
-        self.config_path = config_path
         return config_path
 
     def prepare_handoff(

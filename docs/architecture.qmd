@@ -14,13 +14,21 @@ flowchart LR
   COMPILER --> CORE["Immutable stdlib semantic facts"]
   CORE --> SGB
   SGB["SGB geometry, topology, and physical groups"]
-  SGB --> BACKEND["Solver-specific backend preparation"]
-  BACKEND --> HANDOFF["Common run-and-handoff contract"]
+  SGB --> PALACE["Palace backend preparation"]
+  PDK --> AEDT["Declared AEDT spec and native family preparation"]
+  COMPONENT --> AEDT
+  PALACE --> HANDOFF["Run-and-handoff contracts"]
+  AEDT --> HANDOFF
   HANDOFF --> PROFILE["Selected machine profile"]
   PROFILE --> ARTIFACTS["Immutable artifacts and receipts"]
   ARTIFACTS --> RESULTS["Solver-specific physical results"]
   RESULTS --> REPORT["Unified Plotly report envelope"]
 ```
+
+The SGB path shown here is the current Palace geometry path. AEDT consumes its
+existing declared portable GDS or Q2D inputs and family-specific specs; it does
+not yet consume the semantic-core/SGB geometry flow. A future AEDT semantic
+binding is excluded from this refactor rather than represented as a placeholder.
 
 ## Contract boundaries
 
@@ -45,6 +53,14 @@ immutable snapshots. A snapshot binds its source revision, geometry revision,
 projection version, and canonical content hash. Detached serialization creates
 new plain containers so a consumer cannot mutate the retained snapshot.
 
+Every construction path—factory, direct dataclass construction, and
+`dataclasses.replace()`—applies the same detachment, string-key, revision-kind,
+and canonical-hash checks. Evidence patches and results carry the immutable
+snapshot reference that classified them; a facade rejects missing or different
+revision identity instead of silently rebinding evidence to its own snapshot.
+Unsupported interface intent remains a classification-time error, not a
+constructor-time validation rule.
+
 The core records sourced patch identity, source and aggregate owners, declared
 material and effective domains, explicit side meaning, sheet owner, and
 outer/hole/seam provenance. Evidence states remain distinct as declared,
@@ -66,6 +82,61 @@ SC PDK owns the public component examples and calls the shared runtime directly.
 
 The Palace Electrostatic/Eigenmode and version-locked AEDT runtime families are
 implemented but remain `CONVERGING`, not V1 stable.
+
+## Palace preparation lifecycle
+
+`ElectrostaticSim` and `EigenmodeSim` remain the public owners of their mutable
+mesh, config, resolved-port, and handoff state. Their shared private workflow
+only prepares values and persists caller-supplied JSON payloads; it is not a
+base simulation object and does not receive callbacks into simulation state.
+
+Both public `mesh()` methods invalidate derived state before checking
+prerequisites. Geometry preparation then applies the existing vacuum, Route-A,
+and indium-bump transformations in order and returns the prepared component,
+stack, bump-fill record, and optional material mapping before airbox lowering.
+The simulation conditionally stores that mapping at the existing point, so an
+earlier transform failure or a non-mapping `materials` value retains the prior
+mapping, while an airbox or mesh-construction failure retains the newly prepared
+mapping. Eigenmode resolves authored ports before those transformations and
+caches the resolved ports only after mesh construction succeeds.
+
+Both public `write_config()` methods invalidate config and handoff state before
+their existing prerequisite and mesh-existence checks. Solver-specific lowering
+still occurs before persistence. A shared private writer replaces each
+caller-ordered metadata file independently and replaces `config.json` last;
+earlier files therefore remain after a later write failure, and `config_path` is
+cached only after the final replacement succeeds. In-memory invalidation does
+not remove an older config file from disk, and this per-file behavior is not a
+whole-workflow transaction guarantee.
+
+## AEDT execution lifecycle
+
+`scgsim.aedt.run` is the sole command-line and AEDT Desktop transaction owner.
+It validates one prepared handoff before changing its receipt, imports PyAEDT
+only after that transition, opens and releases the owned Desktop, dispatches one
+solver family, and gives the original family failure precedence over a later
+release failure. Private HFSS, Q3D, and Q2D modules each own their native model
+preparation, explicit solve, and export/readback stages. Families do not import
+the transaction module, and their narrow shared native helpers do not import a
+family or start a Desktop.
+
+New preparation keeps the handoff and handoff-manifest schemas at V1 while both
+declare that the mutable run receipt uses `scgsim.aedt.receipt.v2`. The initial
+V2 receipt records a complete preparation-time SCGSim module manifest and
+content digest. Before mutation, execution verifies the canonical manifest and
+binds the initial-receipt and prepared-manifest hashes. A canonical historical
+V1 `not_run` handoff with neither V2 marker remains executable, but its resulting
+V2 receipt records preparation provenance as `legacy_v1_not_recorded`; it does
+not fabricate history.
+
+Every completed V2 receipt records a separate complete execution-time module
+manifest and digest while retaining the former runtime-source keys. Preparation
+and execution identities are not required to match: their separation records
+what prepared and what actually executed the handoff. Historical completed V1
+receipts remain subject to their old resolution rules, except that a V1 receipt
+combined with either V2 expectation marker is rejected as an inconsistent
+cohort. This consistency contract is not source authenticity for an actor able
+to rewrite the entire unsigned artifact set.
 
 See [Folder tree and ownership](ownership.qmd) for repository placement and
 [Headless Geometry Preview](geometry-preview.qmd) for the static and connected
