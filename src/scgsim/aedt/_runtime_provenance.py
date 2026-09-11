@@ -8,6 +8,7 @@ import re
 import subprocess
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any, Literal
 
 from .util import file_sha256
@@ -16,7 +17,9 @@ RECEIPT_V1 = "scgsim.aedt.receipt.v1"
 RECEIPT_V2 = "scgsim.aedt.receipt.v2"
 SOURCE_SCHEMA = "scgsim.aedt.runtime-source.v1"
 
-_MODULES = (
+# Frozen membership of the public runtime-source.v1 evidence format. Changing
+# producer structure must not silently change what historical readers mean.
+_RUNTIME_SOURCE_V1_MODULES = (
     "_hfss_convergence.py",
     "_hfss_runtime.py",
     "_matrix_export.py",
@@ -31,10 +34,37 @@ _MODULES = (
     "spec.py",
     "util.py",
 )
-_EXPECTED_MODULE_PATHS = tuple(f"scgsim/aedt/{name}" for name in sorted(_MODULES))
+_RUNTIME_SOURCE_V1_PATHS = tuple(
+    f"scgsim/aedt/{name}" for name in sorted(_RUNTIME_SOURCE_V1_MODULES)
+)
+
+# Current producer inventory is intentionally declared separately from the
+# frozen v1 contract. A writer may claim v1 only while these inventories agree.
+_CURRENT_PRODUCER_MODULES = (
+    "_hfss_convergence.py",
+    "_hfss_runtime.py",
+    "_matrix_export.py",
+    "_native_common.py",
+    "_q2d_convergence.py",
+    "_q2d_runtime.py",
+    "_q3d_runtime.py",
+    "_runtime_provenance.py",
+    "handoff.py",
+    "resolve.py",
+    "run.py",
+    "spec.py",
+    "util.py",
+)
 
 
 def _module_manifest() -> list[dict[str, str]]:
+    producer_paths = tuple(
+        f"scgsim/aedt/{name}" for name in sorted(_CURRENT_PRODUCER_MODULES)
+    )
+    if producer_paths != _RUNTIME_SOURCE_V1_PATHS:
+        raise RuntimeError(
+            "current AEDT runtime producer inventory does not match runtime-source.v1"
+        )
     root = Path(__file__).resolve().parent
     return [
         {
@@ -42,7 +72,7 @@ def _module_manifest() -> list[dict[str, str]]:
             "path": f"scgsim/aedt/{name}",
             "sha256": file_sha256(root / name),
         }
-        for name in sorted(_MODULES)
+        for name in sorted(_CURRENT_PRODUCER_MODULES)
     ]
 
 
@@ -140,7 +170,7 @@ def validate_runtime_source(
         value.get("schema_version") != SOURCE_SCHEMA
         or value.get("stage") != stage
         or not isinstance(modules, list)
-        or len(modules) != len(_EXPECTED_MODULE_PATHS)
+        or len(modules) != len(_RUNTIME_SOURCE_V1_PATHS)
     ):
         raise RuntimeError(f"{stage} runtime source provenance is invalid")
     paths: list[str] = []
@@ -161,7 +191,7 @@ def validate_runtime_source(
         ):
             raise RuntimeError(f"{stage} runtime source module manifest is invalid")
         paths.append(item["path"])
-    if tuple(paths) != _EXPECTED_MODULE_PATHS:
+    if tuple(paths) != _RUNTIME_SOURCE_V1_PATHS:
         raise RuntimeError(f"{stage} runtime source module manifest is invalid")
     if value.get("content_sha256") != _content_digest(modules):
         raise RuntimeError(f"{stage} runtime source content digest is invalid")
@@ -225,6 +255,66 @@ def validate_runtime_source(
         }
         if any(value[key] != digest for key, digest in expected_legacy.items()):
             raise RuntimeError("actual runtime source legacy identity is invalid")
+
+
+def initial_receipt_payload(
+    *,
+    schema_version: str,
+    mode: Any,
+    requested: Any,
+    pdk_materials: Any,
+    vacuum_material_id: Any,
+    source: Any,
+    outputs: Any,
+    prepared_at_utc: Any,
+    prepared_runtime_source_value: Any = None,
+) -> dict[str, Any]:
+    """Build the canonical field order for an initial v1 or v2 receipt."""
+    if schema_version not in {RECEIPT_V1, RECEIPT_V2}:
+        raise ValueError("initial receipt schema is unsupported")
+    if outputs != {}:
+        raise ValueError("initial receipt outputs must be empty")
+    result = {
+        "schema_version": schema_version,
+        "status": "not_run",
+        "mode": mode,
+        "requested": requested,
+        "pdk_materials": pdk_materials,
+        "vacuum_material_id": vacuum_material_id,
+        "source": source,
+    }
+    if schema_version == RECEIPT_V2:
+        if prepared_runtime_source_value is None:
+            raise ValueError("v2 initial receipt requires prepared runtime source")
+        result["prepared_runtime_source"] = prepared_runtime_source_value
+    elif prepared_runtime_source_value is not None:
+        raise ValueError("v1 initial receipt excludes prepared runtime source")
+    result["outputs"] = outputs
+    result["prepared_at_utc"] = prepared_at_utc
+    return result
+
+
+def encode_initial_receipt(value: Mapping[str, Any]) -> bytes:
+    """Encode exact historical initial-receipt bytes with fixed indentation."""
+    canonical = initial_receipt_payload(
+        schema_version=value.get("schema_version"),
+        mode=value.get("mode"),
+        requested=value.get("requested"),
+        pdk_materials=value.get("pdk_materials"),
+        vacuum_material_id=value.get("vacuum_material_id"),
+        source=value.get("source"),
+        prepared_runtime_source_value=value.get("prepared_runtime_source"),
+        outputs=value.get("outputs"),
+        prepared_at_utc=value.get("prepared_at_utc"),
+    )
+    if dict(value) != canonical:
+        raise ValueError("initial receipt members are not canonical")
+    return (json.dumps(canonical, indent=2) + "\n").encode("utf-8")
+
+
+def initial_receipt_sha256(value: Mapping[str, Any]) -> str:
+    """Hash the exact versioned initial-receipt codec bytes."""
+    return hashlib.sha256(encode_initial_receipt(value)).hexdigest()
 
 
 __all__ = [

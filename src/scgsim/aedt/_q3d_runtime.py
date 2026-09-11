@@ -13,7 +13,9 @@ from typing import Any
 
 from ._matrix_export import parse_matrix_export
 from ._native_common import (
+    BoundAedtRequest,
     create_region as _create_region,
+    detached_data,
     import_and_bind as _import_and_bind,
     native_object_property as _native_object_property,
     pyaedt_version as _pyaedt_version,
@@ -33,6 +35,138 @@ _Q3D_REGION_SHEET_NAMES = {
     "+Z": ("SCGSimRegionGroundPZ", "SCGSimRegionGroundPZThinConductor"),
     "-Z": ("SCGSimRegionGroundNZ", "SCGSimRegionGroundNZThinConductor"),
 }
+
+
+@dataclass(frozen=True)
+class PreparedQ3d:
+    """Carrier for one prepared Q3D app and its native readback records."""
+
+    app: Any
+    request: BoundAedtRequest
+    project_path: Path
+    materials: list[dict[str, Any]]
+    region: dict[str, Any]
+    nets: list[dict[str, Any]]
+    setup: dict[str, Any]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.request, BoundAedtRequest):
+            raise TypeError("PreparedQ3d requires a bound AEDT request")
+        for name in ("materials", "region", "nets", "setup"):
+            object.__setattr__(self, name, detached_data(getattr(self, name)))
+
+
+def run_q3d(Q3d: Any, run_dir: Path, spec: Q3dSpec) -> dict[str, Any]:
+    """Use the same preparation stage as diagnostics, then solve and export."""
+    prepared = prepare_q3d(Q3d, run_dir, spec)
+    solve_q3d(prepared)
+    return export_q3d(prepared)
+
+
+def prepare_q3d(Q3d: Any, run_dir: Path, spec: Q3dSpec) -> PreparedQ3d:
+    """Construct and read back the Q3D model before the explicit solve stage."""
+    request = BoundAedtRequest.bind(run_dir, spec)
+    bound_spec = request.parse()
+    if not isinstance(bound_spec, Q3dSpec):
+        raise TypeError("bound Q3D request did not retain a Q3D spec")
+    run_dir = request.workspace
+    spec = bound_spec
+    project_path = run_dir / f"{spec.project_name}.aedt"
+    app = Q3d(
+        project=str(project_path),
+        design=spec.design_name,
+        new_desktop=False,
+        close_on_exit=False,
+    )
+    if app.desktop_class.aedt_version_id != REQUIRED_AEDT_VERSION:
+        raise RuntimeError("Q3D did not bind the owned AEDT 2024.2 desktop")
+    app.modeler.model_units = "um"
+    materials = _import_and_bind(app, spec)
+    region = _create_region(app, spec)
+    nets = _assign_q3d_nets(app, spec)
+    if spec.grounded_region_net is not None:
+        grounded_region = _seal_q3d_region(app, spec)
+        region["native_region_object_id"] = grounded_region["native_region_object_id"]
+        region["native_bounding_box_um"] = grounded_region["native_bounding_box_um"]
+        region["grounded_region"] = grounded_region
+    _setup_q3d(app, spec)
+    if not app.save_project() or not project_path.is_file():
+        raise RuntimeError("Q3D project was not saved before solve")
+    setup = _read_q3d_setup(app, spec)
+    if spec.grounded_region_net is not None:
+        region["grounded_region"] = _read_q3d_region_ground(app, spec, region)
+        region["native_region_object_id"] = region["grounded_region"][
+            "native_region_object_id"
+        ]
+        region["native_bounding_box_um"] = region["grounded_region"][
+            "native_bounding_box_um"
+        ]
+        if app.validate_simple() != 1:
+            raise RuntimeError("Q3D grounded Region failed native ValidateDesign")
+        region["grounded_region"]["native_design_validation"] = {
+            "method": "ValidateDesign",
+            "ok": True,
+        }
+    return PreparedQ3d(
+        app,
+        request,
+        project_path,
+        materials,
+        region,
+        nets,
+        setup,
+    )
+
+
+def solve_q3d(prepared: PreparedQ3d) -> None:
+    """Run the one explicit Q3D setup solve."""
+    spec = prepared.request.parse()
+    if not isinstance(spec, Q3dSpec):
+        raise TypeError("bound Q3D request did not retain a Q3D spec")
+    if not prepared.app.analyze_setup(name=spec.run_control.setup_name, blocking=True):
+        raise RuntimeError(
+            f"Q3D failed to analyze setup {spec.run_control.setup_name!r}"
+        )
+
+
+def export_q3d(prepared: PreparedQ3d) -> dict[str, Any]:
+    """Export, perform the final save, and bind convergence readback."""
+    run_dir = prepared.request.workspace
+    spec = prepared.request.parse()
+    if not isinstance(spec, Q3dSpec):
+        raise TypeError("bound Q3D request did not retain a Q3D spec")
+    outputs, result_readback = _export_q3d(prepared.app, run_dir, spec)
+    outputs = detached_data(outputs)
+    result_readback = detached_data(result_readback)
+    if not prepared.app.save_project() or not prepared.project_path.is_file():
+        raise RuntimeError("Q3D project was not saved")
+    region = detached_data(prepared.region)
+    if spec.grounded_region_net is not None:
+        region["grounded_region"] = _read_q3d_region_ground(prepared.app, spec, region)
+        region["native_region_object_id"] = region["grounded_region"][
+            "native_region_object_id"
+        ]
+        region["native_bounding_box_um"] = region["grounded_region"][
+            "native_bounding_box_um"
+        ]
+    convergence = read_q3d_convergence(run_dir, spec)
+    relative = prepared.project_path.relative_to(run_dir).as_posix()
+    outputs[relative] = file_sha256(prepared.project_path)
+    return {
+        "outputs": outputs,
+        "connected": {
+            "aedt_version": prepared.app.desktop_class.aedt_version_id,
+            "pyaedt_version": _pyaedt_version(),
+        },
+        "project": relative,
+        "nets": detached_data(prepared.nets),
+        "materials": detached_data(prepared.materials),
+        "region": region,
+        "setup": detached_data(prepared.setup),
+        "convergence": convergence,
+        "result_readback": result_readback,
+        "save": {"ok": True, "project_sha256": outputs[relative]},
+    }
 
 
 def _q3d_region_faces(
@@ -679,109 +813,6 @@ def _export_q3d(
             "normalized_rows": len(normalized),
         }
     }
-
-
-@dataclass(frozen=True)
-class PreparedQ3d:
-    """Carrier for one prepared Q3D app and its native readback records."""
-
-    app: Any
-    project_path: Path
-    materials: list[dict[str, Any]]
-    region: dict[str, Any]
-    nets: list[dict[str, Any]]
-    setup: dict[str, Any]
-
-
-def prepare_q3d(Q3d: Any, run_dir: Path, spec: Q3dSpec) -> PreparedQ3d:
-    """Construct and read back the Q3D model before the explicit solve stage."""
-    project_path = run_dir / f"{spec.project_name}.aedt"
-    app = Q3d(
-        project=str(project_path),
-        design=spec.design_name,
-        new_desktop=False,
-        close_on_exit=False,
-    )
-    if app.desktop_class.aedt_version_id != REQUIRED_AEDT_VERSION:
-        raise RuntimeError("Q3D did not bind the owned AEDT 2024.2 desktop")
-    app.modeler.model_units = "um"
-    materials = _import_and_bind(app, spec)
-    region = _create_region(app, spec)
-    nets = _assign_q3d_nets(app, spec)
-    if spec.grounded_region_net is not None:
-        grounded_region = _seal_q3d_region(app, spec)
-        region["native_region_object_id"] = grounded_region["native_region_object_id"]
-        region["native_bounding_box_um"] = grounded_region["native_bounding_box_um"]
-        region["grounded_region"] = grounded_region
-    _setup_q3d(app, spec)
-    if not app.save_project() or not project_path.is_file():
-        raise RuntimeError("Q3D project was not saved before solve")
-    setup = _read_q3d_setup(app, spec)
-    if spec.grounded_region_net is not None:
-        region["grounded_region"] = _read_q3d_region_ground(app, spec, region)
-        region["native_region_object_id"] = region["grounded_region"][
-            "native_region_object_id"
-        ]
-        region["native_bounding_box_um"] = region["grounded_region"][
-            "native_bounding_box_um"
-        ]
-        if app.validate_simple() != 1:
-            raise RuntimeError("Q3D grounded Region failed native ValidateDesign")
-        region["grounded_region"]["native_design_validation"] = {
-            "method": "ValidateDesign",
-            "ok": True,
-        }
-    return PreparedQ3d(app, project_path, materials, region, nets, setup)
-
-
-def solve_q3d(prepared: PreparedQ3d, spec: Q3dSpec) -> None:
-    """Run the one explicit Q3D setup solve."""
-    if not prepared.app.analyze_setup(name=spec.run_control.setup_name, blocking=True):
-        raise RuntimeError(
-            f"Q3D failed to analyze setup {spec.run_control.setup_name!r}"
-        )
-
-
-def export_q3d(prepared: PreparedQ3d, run_dir: Path, spec: Q3dSpec) -> dict[str, Any]:
-    """Export, perform the final save, and bind convergence readback."""
-    outputs, result_readback = _export_q3d(prepared.app, run_dir, spec)
-    if not prepared.app.save_project() or not prepared.project_path.is_file():
-        raise RuntimeError("Q3D project was not saved")
-    if spec.grounded_region_net is not None:
-        prepared.region["grounded_region"] = _read_q3d_region_ground(
-            prepared.app, spec, prepared.region
-        )
-        prepared.region["native_region_object_id"] = prepared.region["grounded_region"][
-            "native_region_object_id"
-        ]
-        prepared.region["native_bounding_box_um"] = prepared.region["grounded_region"][
-            "native_bounding_box_um"
-        ]
-    convergence = read_q3d_convergence(run_dir, spec)
-    relative = prepared.project_path.relative_to(run_dir).as_posix()
-    outputs[relative] = file_sha256(prepared.project_path)
-    return {
-        "outputs": outputs,
-        "connected": {
-            "aedt_version": prepared.app.desktop_class.aedt_version_id,
-            "pyaedt_version": _pyaedt_version(),
-        },
-        "project": relative,
-        "nets": prepared.nets,
-        "materials": prepared.materials,
-        "region": prepared.region,
-        "setup": prepared.setup,
-        "convergence": convergence,
-        "result_readback": result_readback,
-        "save": {"ok": True, "project_sha256": outputs[relative]},
-    }
-
-
-def run_q3d(Q3d: Any, run_dir: Path, spec: Q3dSpec) -> dict[str, Any]:
-    """Use the same preparation stage as diagnostics, then solve and export."""
-    prepared = prepare_q3d(Q3d, run_dir, spec)
-    solve_q3d(prepared, spec)
-    return export_q3d(prepared, run_dir, spec)
 
 
 __all__ = ["PreparedQ3d", "export_q3d", "prepare_q3d", "run_q3d", "solve_q3d"]

@@ -6,10 +6,75 @@ This module never imports a family or owns a Desktop transaction.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
+from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
-from .spec import LOCKED_PYAEDT, HfssSpec, Q3dSpec
+from .spec import AedtSpec, LOCKED_PYAEDT, HfssSpec, Q3dSpec, parse_aedt_spec
+
+
+def _freeze_payload(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        if any(not isinstance(key, str) for key in value):
+            raise TypeError("bound AEDT payload keys must be strings")
+        return MappingProxyType(
+            {key: _freeze_payload(item) for key, item in value.items()}
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_payload(item) for item in value)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    raise TypeError(f"bound AEDT payload contains unsupported {type(value).__name__}")
+
+
+def _thaw_payload(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw_payload(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_payload(item) for item in value]
+    return value
+
+
+@dataclass(frozen=True)
+class BoundAedtRequest:
+    """One detached spec payload bound to one absolute execution workspace."""
+
+    workspace: Path
+    payload: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        workspace = Path(self.workspace).expanduser().resolve()
+        payload = _freeze_payload(self.payload)
+        object.__setattr__(self, "workspace", workspace)
+        object.__setattr__(self, "payload", payload)
+        parse_aedt_spec(_thaw_payload(payload), base_dir=workspace)
+
+    @classmethod
+    def bind(cls, run_dir: str | Path, spec: AedtSpec) -> BoundAedtRequest:
+        """Detach an already validated DTO without retaining caller containers."""
+        return cls(Path(run_dir), spec.to_payload())
+
+    def parse(self) -> AedtSpec:
+        """Parse a fresh DTO using only the retained payload and bound root."""
+        return parse_aedt_spec(_thaw_payload(self.payload), base_dir=self.workspace)
+
+    def payload_copy(self) -> dict[str, Any]:
+        """Return detached plain data for diagnostics and hashing."""
+        return _thaw_payload(self.payload)
+
+
+def detached_data(value: Any) -> Any:
+    """Copy nested plain readback data without traversing native app handles."""
+    if isinstance(value, Mapping):
+        return {key: detached_data(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [detached_data(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(detached_data(item) for item in value)
+    return value
 
 
 def import_and_bind(hfss: Any, spec: HfssSpec | Q3dSpec) -> list[dict[str, Any]]:

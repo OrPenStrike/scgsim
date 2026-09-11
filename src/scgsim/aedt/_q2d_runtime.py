@@ -12,6 +12,8 @@ from typing import Any
 
 from ._matrix_export import read_q2d_rlgc_matrix
 from ._native_common import (
+    BoundAedtRequest,
+    detached_data,
     native_object_property as _native_object_property,
     pyaedt_version as _pyaedt_version,
     saved_setup_properties as _saved_setup_properties,
@@ -19,6 +21,110 @@ from ._native_common import (
 from ._q2d_convergence import read_q2d_convergence
 from .spec import REQUIRED_AEDT_VERSION, Q2dSpec
 from .util import file_sha256
+
+
+@dataclass(frozen=True)
+class PreparedQ2d:
+    """Carrier for one prepared Q2D app and its native readback records."""
+
+    app: Any
+    request: BoundAedtRequest
+    project_path: Path
+    materials: list[dict[str, Any]]
+    region: dict[str, Any]
+    conductors: list[dict[str, Any]]
+    setup: dict[str, Any]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.request, BoundAedtRequest):
+            raise TypeError("PreparedQ2d requires a bound AEDT request")
+        for name in ("materials", "region", "conductors", "setup"):
+            object.__setattr__(self, name, detached_data(getattr(self, name)))
+
+
+def run_q2d(Q2d: Any, run_dir: Path, spec: Q2dSpec) -> dict[str, Any]:
+    """Use the same preparation stage as diagnostics, then solve and export."""
+    prepared = prepare_q2d(Q2d, run_dir, spec)
+    solve_q2d(prepared)
+    return export_q2d(prepared)
+
+
+def prepare_q2d(Q2d: Any, run_dir: Path, spec: Q2dSpec) -> PreparedQ2d:
+    """Construct and read back the Q2D model before the explicit solve stage."""
+    request = BoundAedtRequest.bind(run_dir, spec)
+    bound_spec = request.parse()
+    if not isinstance(bound_spec, Q2dSpec):
+        raise TypeError("bound Q2D request did not retain a Q2D spec")
+    run_dir = request.workspace
+    spec = bound_spec
+    project_path = run_dir / f"{spec.project_name}.aedt"
+    app = Q2d(
+        project=str(project_path),
+        design=spec.design_name,
+        new_desktop=False,
+        close_on_exit=False,
+    )
+    if app.desktop_class.aedt_version_id != REQUIRED_AEDT_VERSION:
+        raise RuntimeError("Q2D did not bind the owned AEDT 2024.2 desktop")
+    app.modeler.model_units = "um"
+    materials, objects = _create_q2d_geometry(app, spec)
+    region = _create_q2d_region(app, spec)
+    conductors = _assign_q2d_conductors(app, spec, objects)
+    _setup_q2d(app, spec)
+    if not app.save_project() or not project_path.is_file():
+        raise RuntimeError("Q2D project was not saved before solve")
+    setup = _read_q2d_setup(app, spec)
+    return PreparedQ2d(
+        app,
+        request,
+        project_path,
+        materials,
+        region,
+        conductors,
+        setup,
+    )
+
+
+def solve_q2d(prepared: PreparedQ2d) -> None:
+    """Run the one explicit Q2D setup solve."""
+    spec = prepared.request.parse()
+    if not isinstance(spec, Q2dSpec):
+        raise TypeError("bound Q2D request did not retain a Q2D spec")
+    if not prepared.app.analyze_setup(name=spec.run_control.setup_name, blocking=True):
+        raise RuntimeError(
+            f"Q2D failed to analyze setup {spec.run_control.setup_name!r}"
+        )
+
+
+def export_q2d(prepared: PreparedQ2d) -> dict[str, Any]:
+    """Export, perform the final save, and bind convergence readback."""
+    run_dir = prepared.request.workspace
+    spec = prepared.request.parse()
+    if not isinstance(spec, Q2dSpec):
+        raise TypeError("bound Q2D request did not retain a Q2D spec")
+    outputs, result_readback = _export_q2d(prepared.app, run_dir, spec)
+    outputs = detached_data(outputs)
+    result_readback = detached_data(result_readback)
+    if not prepared.app.save_project() or not prepared.project_path.is_file():
+        raise RuntimeError("Q2D project was not saved")
+    convergence = read_q2d_convergence(run_dir, spec)
+    relative = prepared.project_path.relative_to(run_dir).as_posix()
+    outputs[relative] = file_sha256(prepared.project_path)
+    return {
+        "outputs": outputs,
+        "connected": {
+            "aedt_version": prepared.app.desktop_class.aedt_version_id,
+            "pyaedt_version": _pyaedt_version(),
+        },
+        "project": relative,
+        "conductors": detached_data(prepared.conductors),
+        "materials": detached_data(prepared.materials),
+        "region": detached_data(prepared.region),
+        "setup": detached_data(prepared.setup),
+        "convergence": convergence,
+        "result_readback": result_readback,
+        "save": {"ok": True, "project_sha256": outputs[relative]},
+    }
 
 
 def _create_q2d_geometry(
@@ -233,80 +339,6 @@ def _export_q2d(
             "primary_rows": len(rows),
         }
     }
-
-
-@dataclass(frozen=True)
-class PreparedQ2d:
-    """Carrier for one prepared Q2D app and its native readback records."""
-
-    app: Any
-    project_path: Path
-    materials: list[dict[str, Any]]
-    region: dict[str, Any]
-    conductors: list[dict[str, Any]]
-    setup: dict[str, Any]
-
-
-def prepare_q2d(Q2d: Any, run_dir: Path, spec: Q2dSpec) -> PreparedQ2d:
-    """Construct and read back the Q2D model before the explicit solve stage."""
-    project_path = run_dir / f"{spec.project_name}.aedt"
-    app = Q2d(
-        project=str(project_path),
-        design=spec.design_name,
-        new_desktop=False,
-        close_on_exit=False,
-    )
-    if app.desktop_class.aedt_version_id != REQUIRED_AEDT_VERSION:
-        raise RuntimeError("Q2D did not bind the owned AEDT 2024.2 desktop")
-    app.modeler.model_units = "um"
-    materials, objects = _create_q2d_geometry(app, spec)
-    region = _create_q2d_region(app, spec)
-    conductors = _assign_q2d_conductors(app, spec, objects)
-    _setup_q2d(app, spec)
-    if not app.save_project() or not project_path.is_file():
-        raise RuntimeError("Q2D project was not saved before solve")
-    setup = _read_q2d_setup(app, spec)
-    return PreparedQ2d(app, project_path, materials, region, conductors, setup)
-
-
-def solve_q2d(prepared: PreparedQ2d, spec: Q2dSpec) -> None:
-    """Run the one explicit Q2D setup solve."""
-    if not prepared.app.analyze_setup(name=spec.run_control.setup_name, blocking=True):
-        raise RuntimeError(
-            f"Q2D failed to analyze setup {spec.run_control.setup_name!r}"
-        )
-
-
-def export_q2d(prepared: PreparedQ2d, run_dir: Path, spec: Q2dSpec) -> dict[str, Any]:
-    """Export, perform the final save, and bind convergence readback."""
-    outputs, result_readback = _export_q2d(prepared.app, run_dir, spec)
-    if not prepared.app.save_project() or not prepared.project_path.is_file():
-        raise RuntimeError("Q2D project was not saved")
-    convergence = read_q2d_convergence(run_dir, spec)
-    relative = prepared.project_path.relative_to(run_dir).as_posix()
-    outputs[relative] = file_sha256(prepared.project_path)
-    return {
-        "outputs": outputs,
-        "connected": {
-            "aedt_version": prepared.app.desktop_class.aedt_version_id,
-            "pyaedt_version": _pyaedt_version(),
-        },
-        "project": relative,
-        "conductors": prepared.conductors,
-        "materials": prepared.materials,
-        "region": prepared.region,
-        "setup": prepared.setup,
-        "convergence": convergence,
-        "result_readback": result_readback,
-        "save": {"ok": True, "project_sha256": outputs[relative]},
-    }
-
-
-def run_q2d(Q2d: Any, run_dir: Path, spec: Q2dSpec) -> dict[str, Any]:
-    """Use the same preparation stage as diagnostics, then solve and export."""
-    prepared = prepare_q2d(Q2d, run_dir, spec)
-    solve_q2d(prepared, spec)
-    return export_q2d(prepared, run_dir, spec)
 
 
 __all__ = ["PreparedQ2d", "export_q2d", "prepare_q2d", "run_q2d", "solve_q2d"]

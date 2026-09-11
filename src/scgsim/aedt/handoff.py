@@ -8,7 +8,12 @@ import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from ._runtime_provenance import RECEIPT_V2, prepared_runtime_source
+from ._runtime_provenance import (
+    RECEIPT_V2,
+    encode_initial_receipt,
+    initial_receipt_payload,
+    prepared_runtime_source,
+)
 from .spec import OFFICIAL_PYAEDT_SOURCE_URL, AedtSpec, Q2dSpec
 from .util import file_sha256, write_json
 
@@ -111,24 +116,24 @@ def prepare_handoff(*, spec: AedtSpec, output_dir: str | Path) -> HandoffPlan:
         source["gds"] = "geometry/design.gds"
         source["gds_sha256"] = file_sha256(copied_gds)
     write_json(metadata_path, metadata)
-    write_json(
-        receipt_path,
-        {
-            "schema_version": RECEIPT_V2,
-            "status": "not_run",
-            "mode": spec.mode,
-            "requested": {
-                "aedt_version": spec.aedt_version,
-                "pyaedt_version": spec.pyaedt_version,
-                "official_source": OFFICIAL_PYAEDT_SOURCE_URL,
-            },
-            "pdk_materials": payload["materials"],
-            "vacuum_material_id": payload["vacuum_material_id"],
-            "source": source,
-            "prepared_runtime_source": prepared_source,
-            "outputs": {},
-            "prepared_at_utc": prepared_at,
-        },
+    receipt_path.write_bytes(
+        encode_initial_receipt(
+            initial_receipt_payload(
+                schema_version=RECEIPT_V2,
+                mode=spec.mode,
+                requested={
+                    "aedt_version": spec.aedt_version,
+                    "pyaedt_version": spec.pyaedt_version,
+                    "official_source": OFFICIAL_PYAEDT_SOURCE_URL,
+                },
+                pdk_materials=payload["materials"],
+                vacuum_material_id=payload["vacuum_material_id"],
+                source=source,
+                prepared_runtime_source_value=prepared_source,
+                outputs={},
+                prepared_at_utc=prepared_at,
+            )
+        )
     )
     allowed = tuple(
         path

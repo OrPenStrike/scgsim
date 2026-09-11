@@ -109,6 +109,13 @@ cached only after the final replacement succeeds. In-memory invalidation does
 not remove an older config file from disk, and this per-file behavior is not a
 whole-workflow transaction guarantee.
 
+The shared stack loader, non-negative-number validator, and stack-material-kind
+validator live in one private Palace input module. Electrostatic and eigenmode
+call that module directly while retaining their public methods, invalidation
+timing, shallow top-level stack copy, nested aliases, and problem-specific
+orchestration. The older problem-module names are private aliases, not duplicate
+implementations.
+
 ## AEDT execution lifecycle
 
 `scgsim.aedt.run` is the sole command-line and AEDT Desktop transaction owner.
@@ -119,6 +126,14 @@ release failure. Private HFSS, Q3D, and Q2D modules each own their native model
 preparation, explicit solve, and export/readback stages. Families do not import
 the transaction module, and their narrow shared native helpers do not import a
 family or start a Desktop.
+
+At family entry, one private bound request fixes the absolute run workspace and
+detaches the parsed spec payload. Relative source paths are interpreted against
+that bound workspace even if the process working directory later changes;
+absolute source paths retain their authored lexical identity. Preparation reads
+only this bound request after entry. Its carrier retains the mutable native app
+handle together with detached preparation readback; solve and export consume the
+carrier and cannot reinterpret a caller spec or workspace.
 
 New preparation keeps the handoff and handoff-manifest schemas at V1 while both
 declare that the mutable run receipt uses `scgsim.aedt.receipt.v2`. The initial
@@ -137,6 +152,15 @@ receipts remain subject to their old resolution rules, except that a V1 receipt
 combined with either V2 expectation marker is rejected as an inconsistent
 cohort. This consistency contract is not source authenticity for an actor able
 to rewrite the entire unsigned artifact set.
+
+The frozen `runtime-source.v1` reader contract is distinct from the current
+producer inventory used to emit it. One pure, versioned initial-receipt codec
+owns the historical V1 and current V2 JSON member order, indentation, and final
+newline; handoff writing and V2 initial-receipt reconstruction use that same
+codec. A producer may emit the frozen schema only while its current inventory
+matches the declared thirteen-module contract. Historical receipt hashes are
+never compared with installed source, and prepared and actual identities remain
+independent evidence.
 
 See [Folder tree and ownership](ownership.qmd) for repository placement and
 [Headless Geometry Preview](geometry-preview.qmd) for the static and connected

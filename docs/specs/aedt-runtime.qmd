@@ -39,6 +39,16 @@ The normal command and diagnostic instrumentation use the same private family
 preparation functions. There is no public no-solve API, alternative model
 builder, base backend, or second Desktop owner.
 
+Each family binds its request once before native preparation. The private bound
+request fixes the absolute run workspace and a detached immutable spec payload;
+relative spec paths remain relative to that workspace across later `chdir`,
+while absolute source paths retain their lexical identity. Family preparation
+parses only the bound payload, then returns a carrier containing the native app
+handle and detached preparation readback. Solve and export accept only that
+carrier. Export helpers work on separate copies, so helper failure or mutation
+of a returned result cannot alter the preparation evidence retained by the
+carrier.
+
 ## Receipt cohorts and source provenance
 
 New handoffs retain `scgsim.aedt.handoff.v1` and
@@ -80,6 +90,19 @@ markers, canonical prepared manifest, initial-receipt binding, and complete
 actual runtime manifest before applying the existing family result checks.
 These unsigned consistency checks do not authenticate an artifact set against
 an actor able to rewrite every member.
+
+`runtime-source.v1` is a frozen thirteen-module receipt contract, not a live
+enumeration rule. The current producer inventory is maintained separately and
+must match that frozen contract before a new receipt can claim it. A pure
+initial-receipt codec owns exact V1/V2 member order, two-space JSON indentation,
+and the trailing newline. V1 omits prepared provenance; V2 inserts it between
+`source` and `outputs`. Reading historical V1 evidence uses the declared frozen
+schema and does not compare historical hashes with the installed package.
+
+The family save contract remains fail-closed. `save_project()` returning false
+before solve aborts before native execution; returning false after export aborts
+before completion is reported. SCGSim does not turn either state into a new
+partial-success receipt or infer that native project bytes are usable.
 
 ## Solver-specific contracts
 

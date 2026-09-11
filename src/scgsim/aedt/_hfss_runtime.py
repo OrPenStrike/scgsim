@@ -15,7 +15,9 @@ from typing import Any
 
 from ._hfss_convergence import read_hfss_convergence
 from ._native_common import (
+    BoundAedtRequest,
     create_region as _create_region,
+    detached_data,
     import_and_bind as _import_and_bind,
     native_boundary_names as _native_boundary_names,
     pyaedt_version as _pyaedt_version,
@@ -31,6 +33,123 @@ from .spec import (
     TerminalPort,
 )
 from .util import file_sha256, write_csv
+
+
+@dataclass(frozen=True)
+class PreparedHfss:
+    """Carrier for one prepared HFSS app and its native readback records."""
+
+    app: Any
+    request: BoundAedtRequest
+    project_path: Path
+    materials: list[dict[str, Any]]
+    region: dict[str, Any]
+    mesh: dict[str, Any]
+    ports: list[dict[str, Any]]
+    setup: dict[str, Any]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.request, BoundAedtRequest):
+            raise TypeError("PreparedHfss requires a bound AEDT request")
+        for name in ("materials", "region", "mesh", "ports", "setup"):
+            object.__setattr__(self, name, detached_data(getattr(self, name)))
+
+
+def run_hfss(Hfss: Any, run_dir: Path, spec: HfssSpec) -> dict[str, Any]:
+    """Use the same preparation stage as diagnostics, then solve and export."""
+    prepared = prepare_hfss(Hfss, run_dir, spec)
+    solve_hfss(prepared)
+    return export_hfss(prepared)
+
+
+def prepare_hfss(Hfss: Any, run_dir: Path, spec: HfssSpec) -> PreparedHfss:
+    """Construct and read back the HFSS model before the explicit solve stage."""
+    request = BoundAedtRequest.bind(run_dir, spec)
+    bound_spec = request.parse()
+    if not isinstance(bound_spec, HfssSpec):
+        raise TypeError("bound HFSS request did not retain an HFSS spec")
+    run_dir = request.workspace
+    spec = bound_spec
+    project_path = run_dir / f"{spec.project_name}.aedt"
+    app = Hfss(
+        project=str(project_path),
+        design=spec.design_name,
+        solution_type={
+            "terminal": "DrivenTerminal",
+            "modal": "DrivenModal",
+            "eigenmode": "Eigenmode",
+        }[spec.mode],
+        new_desktop=False,
+        close_on_exit=False,
+    )
+    if app.desktop_class.aedt_version_id != REQUIRED_AEDT_VERSION:
+        raise RuntimeError("HFSS did not bind the owned AEDT 2024.2 desktop")
+    app.modeler.model_units = "um"
+    materials = _import_and_bind(app, spec)
+    region = _create_region(app, spec)
+    mesh = _assign_mesh(app, spec)
+    ports = _assign_ports(app, spec)
+    _setup(app, spec)
+    if not app.save_project() or not project_path.is_file():
+        raise RuntimeError("HFSS project was not saved before native port readback")
+    setup = _read_hfss_setup(app, spec)
+    ports = _bind_port_evidence(app, spec, ports)
+    return PreparedHfss(
+        app,
+        request,
+        project_path,
+        materials,
+        region,
+        mesh,
+        ports,
+        setup,
+    )
+
+
+def solve_hfss(prepared: PreparedHfss) -> None:
+    """Run the one explicit HFSS setup solve."""
+    spec = prepared.request.parse()
+    if not isinstance(spec, HfssSpec):
+        raise TypeError("bound HFSS request did not retain an HFSS spec")
+    if not prepared.app.analyze_setup(name=spec.run_control.setup_name, blocking=True):
+        raise RuntimeError(
+            f"HFSS failed to analyze setup {spec.run_control.setup_name!r}"
+        )
+
+
+def export_hfss(prepared: PreparedHfss) -> dict[str, Any]:
+    """Export, perform the final save, and bind convergence readback."""
+    run_dir = prepared.request.workspace
+    spec = prepared.request.parse()
+    if not isinstance(spec, HfssSpec):
+        raise TypeError("bound HFSS request did not retain an HFSS spec")
+    outputs, result_readback = _export(
+        prepared.app, run_dir, spec, detached_data(prepared.ports)
+    )
+    outputs = detached_data(outputs)
+    result_readback = detached_data(result_readback)
+    saved = bool(prepared.app.save_project())
+    if not saved or not prepared.project_path.is_file():
+        raise RuntimeError("HFSS project was not saved")
+    convergence = read_hfss_convergence(run_dir, spec)
+    relative = prepared.project_path.relative_to(run_dir).as_posix()
+    outputs[relative] = file_sha256(prepared.project_path)
+    return {
+        "outputs": outputs,
+        "connected": {
+            "aedt_version": prepared.app.desktop_class.aedt_version_id,
+            "pyaedt_version": _pyaedt_version(),
+        },
+        "project": relative,
+        "ports": detached_data(prepared.ports),
+        "mesh": detached_data(prepared.mesh),
+        "materials": detached_data(prepared.materials),
+        "region": detached_data(prepared.region),
+        "setup": detached_data(prepared.setup),
+        "convergence": convergence,
+        "result_readback": result_readback,
+        "save": {"ok": True, "project_sha256": outputs[relative]},
+    }
 
 
 def _assign_mesh(hfss: Any, spec: HfssSpec) -> dict[str, Any]:
@@ -878,92 +997,6 @@ def _text(value: Any, field: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{field} must be non-empty text")
     return value
-
-
-@dataclass(frozen=True)
-class PreparedHfss:
-    """Carrier for one prepared HFSS app and its native readback records."""
-
-    app: Any
-    project_path: Path
-    materials: list[dict[str, Any]]
-    region: dict[str, Any]
-    mesh: dict[str, Any]
-    ports: list[dict[str, Any]]
-    setup: dict[str, Any]
-
-
-def prepare_hfss(Hfss: Any, run_dir: Path, spec: HfssSpec) -> PreparedHfss:
-    """Construct and read back the HFSS model before the explicit solve stage."""
-    project_path = run_dir / f"{spec.project_name}.aedt"
-    app = Hfss(
-        project=str(project_path),
-        design=spec.design_name,
-        solution_type={
-            "terminal": "DrivenTerminal",
-            "modal": "DrivenModal",
-            "eigenmode": "Eigenmode",
-        }[spec.mode],
-        new_desktop=False,
-        close_on_exit=False,
-    )
-    if app.desktop_class.aedt_version_id != REQUIRED_AEDT_VERSION:
-        raise RuntimeError("HFSS did not bind the owned AEDT 2024.2 desktop")
-    app.modeler.model_units = "um"
-    materials = _import_and_bind(app, spec)
-    region = _create_region(app, spec)
-    mesh = _assign_mesh(app, spec)
-    ports = _assign_ports(app, spec)
-    _setup(app, spec)
-    if not app.save_project() or not project_path.is_file():
-        raise RuntimeError("HFSS project was not saved before native port readback")
-    setup = _read_hfss_setup(app, spec)
-    ports = _bind_port_evidence(app, spec, ports)
-    return PreparedHfss(app, project_path, materials, region, mesh, ports, setup)
-
-
-def solve_hfss(prepared: PreparedHfss, spec: HfssSpec) -> None:
-    """Run the one explicit HFSS setup solve."""
-    if not prepared.app.analyze_setup(name=spec.run_control.setup_name, blocking=True):
-        raise RuntimeError(
-            f"HFSS failed to analyze setup {spec.run_control.setup_name!r}"
-        )
-
-
-def export_hfss(
-    prepared: PreparedHfss, run_dir: Path, spec: HfssSpec
-) -> dict[str, Any]:
-    """Export, perform the final save, and bind convergence readback."""
-    outputs, result_readback = _export(prepared.app, run_dir, spec, prepared.ports)
-    saved = bool(prepared.app.save_project())
-    if not saved or not prepared.project_path.is_file():
-        raise RuntimeError("HFSS project was not saved")
-    convergence = read_hfss_convergence(run_dir, spec)
-    relative = prepared.project_path.relative_to(run_dir).as_posix()
-    outputs[relative] = file_sha256(prepared.project_path)
-    return {
-        "outputs": outputs,
-        "connected": {
-            "aedt_version": prepared.app.desktop_class.aedt_version_id,
-            "pyaedt_version": _pyaedt_version(),
-        },
-        "project": relative,
-        "ports": prepared.ports,
-        "mesh": prepared.mesh,
-        "materials": prepared.materials,
-        "region": prepared.region,
-        "setup": prepared.setup,
-        "convergence": convergence,
-        "result_readback": result_readback,
-        "save": {"ok": True, "project_sha256": outputs[relative]},
-    }
-
-
-def run_hfss(Hfss: Any, run_dir: Path, spec: HfssSpec) -> dict[str, Any]:
-    """Use the same preparation stage as diagnostics, then solve and export."""
-    prepared = prepare_hfss(Hfss, run_dir, spec)
-    solve_hfss(prepared, spec)
-    return export_hfss(prepared, run_dir, spec)
 
 
 __all__ = ["PreparedHfss", "export_hfss", "prepare_hfss", "run_hfss", "solve_hfss"]

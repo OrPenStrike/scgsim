@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import csv
-import hashlib
-import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +14,8 @@ from ._q2d_convergence import read_q2d_convergence, read_q3d_convergence
 from ._runtime_provenance import (
     RECEIPT_V1,
     RECEIPT_V2,
+    initial_receipt_payload,
+    initial_receipt_sha256,
     validate_runtime_source,
 )
 from .spec import (
@@ -379,23 +379,24 @@ def _sha256_text(value: str) -> bool:
 
 
 def _initial_receipt_sha256(receipt: dict[str, Any], preparation_cohort: Any) -> str:
-    initial: dict[str, Any] = {
-        "schema_version": (
+    initial = initial_receipt_payload(
+        schema_version=(
             RECEIPT_V2 if preparation_cohort == "prepared_v2" else RECEIPT_V1
         ),
-        "status": "not_run",
-        "mode": receipt.get("mode"),
-        "requested": receipt.get("requested"),
-        "pdk_materials": receipt.get("pdk_materials"),
-        "vacuum_material_id": receipt.get("vacuum_material_id"),
-        "source": receipt.get("source"),
-    }
-    if preparation_cohort == "prepared_v2":
-        initial["prepared_runtime_source"] = receipt.get("prepared_runtime_source")
-    initial["outputs"] = {}
-    initial["prepared_at_utc"] = receipt.get("prepared_at_utc")
-    encoded = (json.dumps(initial, indent=2) + "\n").encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+        mode=receipt.get("mode"),
+        requested=receipt.get("requested"),
+        pdk_materials=receipt.get("pdk_materials"),
+        vacuum_material_id=receipt.get("vacuum_material_id"),
+        source=receipt.get("source"),
+        prepared_runtime_source_value=(
+            receipt.get("prepared_runtime_source")
+            if preparation_cohort == "prepared_v2"
+            else None
+        ),
+        outputs={},
+        prepared_at_utc=receipt.get("prepared_at_utc"),
+    )
+    return initial_receipt_sha256(initial)
 
 
 def _validate_readback(root: Path, receipt: dict[str, Any], spec: Any) -> None:

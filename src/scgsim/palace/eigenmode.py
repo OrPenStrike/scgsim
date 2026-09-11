@@ -25,7 +25,7 @@ from ._staged import (
     validate_nonempty_string,
     validate_positive_number,
 )
-from .electrostatic import (
+from ._inputs import (
     _load_stack,
     _non_negative_number,
     _validate_stack_material_kinds,
