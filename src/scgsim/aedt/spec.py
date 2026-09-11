@@ -30,6 +30,20 @@ def _text(value: Any, field: str) -> str:
     return value.strip()
 
 
+def _project_filename(value: Any, field: str) -> Path:
+    project = Path(_text(value, field))
+    if project.parent != Path(".") or project.name in {".", ".."}:
+        raise ValueError("project_name must be a single project filename")
+    if not project.stem:
+        raise ValueError("project_name must normalize to a non-empty stem")
+    return project
+
+
+def _project_name_from_payload(value: Any) -> str:
+    """Adapt one canonical payload name through constructor normalization."""
+    return f"{_project_filename(value, 'project.name').name}.aedt"
+
+
 def _number(value: Any, field: str) -> float:
     if isinstance(value, bool):
         raise TypeError(f"{field} must be a finite number")
@@ -377,11 +391,7 @@ def _normalize_common_spec(spec: Any) -> dict[str, PdkMaterial]:
         or str(spec.pyaedt_version) != LOCKED_PYAEDT
     ):
         raise ValueError("V1 requires AEDT 2024.2 and PyAEDT 1.3.0")
-    project = Path(_text(spec.project_name, "project_name"))
-    if project.parent != Path(".") or project.name in {".", ".."}:
-        raise ValueError("project_name must be a single project filename")
-    if not project.stem:
-        raise ValueError("project_name must normalize to a non-empty stem")
+    project = _project_filename(spec.project_name, "project_name")
     object.__setattr__(spec, "project_name", project.stem)
     object.__setattr__(spec, "design_name", _text(spec.design_name, "design_name"))
     if not isinstance(spec.materials, Mapping):
@@ -595,7 +605,9 @@ class HfssDrivenSpec:
         return cls(
             mode=mode,  # type: ignore[arg-type]
             gds_path=gds,
-            project_name=_text(payload.get("project", {}).get("name"), "project.name"),
+            project_name=_project_name_from_payload(
+                payload.get("project", {}).get("name")
+            ),
             design_name=_text(
                 payload.get("project", {}).get("design"), "project.design"
             ),
@@ -752,7 +764,9 @@ class HfssEigenmodeSpec:
         length = payload.get("length_mesh")
         return cls(
             gds_path=gds,
-            project_name=_text(payload.get("project", {}).get("name"), "project.name"),
+            project_name=_project_name_from_payload(
+                payload.get("project", {}).get("name")
+            ),
             design_name=_text(
                 payload.get("project", {}).get("design"), "project.design"
             ),
@@ -1004,7 +1018,9 @@ class Q3dSpec:
             raise TypeError("run_control must be a JSON object")
         return cls(
             gds_path=gds,
-            project_name=_text(payload.get("project", {}).get("name"), "project.name"),
+            project_name=_project_name_from_payload(
+                payload.get("project", {}).get("name")
+            ),
             design_name=_text(
                 payload.get("project", {}).get("design"), "project.design"
             ),
@@ -1200,7 +1216,9 @@ class Q2dSpec:
         if not isinstance(run, dict):
             raise TypeError("run_control must be a JSON object")
         return cls(
-            project_name=_text(payload.get("project", {}).get("name"), "project.name"),
+            project_name=_project_name_from_payload(
+                payload.get("project", {}).get("name")
+            ),
             design_name=_text(
                 payload.get("project", {}).get("design"), "project.design"
             ),

@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 import tarfile
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 from ._runtime_provenance import (
@@ -61,11 +61,6 @@ def prepare_handoff(*, spec: AedtSpec, output_dir: str | Path) -> HandoffPlan:
         copied_gds = geometry_dir / "design.gds"
         shutil.copy2(source_gds, copied_gds)
 
-    portable_spec = (
-        spec
-        if isinstance(spec, Q2dSpec)
-        else replace(spec, gds_path=Path("geometry/design.gds"))
-    )
     script_path = run_dir / "run_aedt.sh"
     spec_path = run_dir / "aedt_spec.json"
     metadata_path = metadata_dir / "aedt_handoff_metadata.json"
@@ -77,7 +72,9 @@ def prepare_handoff(*, spec: AedtSpec, output_dir: str | Path) -> HandoffPlan:
     prepared_source = prepared_runtime_source()
 
     _write_script(script_path)
-    payload = portable_spec.to_payload()
+    payload = spec.to_payload()
+    if not isinstance(spec, Q2dSpec):
+        payload["gds"]["path"] = "geometry/design.gds"
     write_json(spec_path, payload)
     files = {
         "spec": spec_path.name,

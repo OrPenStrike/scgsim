@@ -49,6 +49,15 @@ carrier. Export helpers work on separate copies, so helper failure or mutation
 of a returned result cannot alter the preparation evidence retained by the
 carrier.
 
+Project names have two explicit representations. Direct Python authoring keeps
+the existing filename normalization: a supplied filename loses its final
+suffix. The canonical JSON payload stores the already-normalized project name,
+so parsing and serializing that payload repeatedly preserves it byte-for-byte,
+including internal dots and text that itself ends in `.aedt`. Handoff
+preparation copies that canonical name unchanged and binds only the copied GDS
+path in its independent payload. It does not reinterpret old truncated names,
+rewrite existing artifacts, or provide a legacy-name fallback.
+
 ## Receipt cohorts and source provenance
 
 New handoffs retain `scgsim.aedt.handoff.v1` and
