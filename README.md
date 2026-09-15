@@ -32,6 +32,7 @@ duplicate notebook source and has no runtime dependency on OrPen.
 - [Architecture and data flow](docs/architecture.qmd)
 - [Backend support matrix](docs/backend-support.qmd)
 - [Notebook UX contracts](docs/notebook-ux.qmd)
+- [Error archive](docs/errors.qmd)
 - [Roadmap and current status](docs/roadmap.qmd)
 
 ## Current nonclaims

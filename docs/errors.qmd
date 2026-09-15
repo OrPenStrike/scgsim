@@ -1,0 +1,87 @@
+---
+title: "Error Archive"
+---
+
+This page records public, generic diagnostic cases without turning them into
+runtime contracts, acceptance evidence, or prescribed fixes.
+
+## Index
+
+| Date | Case | Status | Earliest confirmed defect |
+|---|---|---|---|
+| 2026-09-15 | [Zero-volume tetrahedra in the Gmsh-generated in-memory mesh](#zero-volume-tetrahedra-in-the-gmsh-generated-in-memory-mesh) | `CONVERGING` / open diagnostic | The Gmsh-generated in-memory mesh contained exactly coplanar, zero-volume tetrahedra before export or Palace processing. |
+
+## Zero-volume tetrahedra in the Gmsh-generated in-memory mesh
+
+A controlled same-XAO, same-installed-backend reproduction produced an exported
+mesh byte-identical to the historical exported file. Pre-export inspection
+found the same exactly coplanar, zero-volume tetrahedra already present in the
+Gmsh-generated in-memory mesh, and reloading the ASCII mesh retained their
+element and connectivity identities. ASCII serialization was therefore not
+their origin in this reproduction. Element counts, coordinates, attributes,
+consumers, and private run data are intentionally omitted.
+
+The inspected public software identities were SCGSim `1.0.0.dev18` at
+`a8ff06f5f568ac2bdfdc4f6a1c686cac59b9ab5d`, Palace source
+`1ea14a84f60f672ffe4ce12dad404bc82896ef11`, and Palace binary SHA-256
+`114157cd73ad45f74927d7840f8b72d8b0a306da7a60e3e93abf5e2c5f0c05e5`.
+Gmsh was version `4.15.2`. These identities are provenance, not eligibility
+criteria.
+
+### What was and was not established
+
+At that SCGSim revision, `_validate_tetrahedral_solution_groups` in
+`src/scgsim/palace/_mesh.py` verifies solution-volume ownership, tetrahedral
+element type, and the presence of 3D elements. It does not check signed
+tetrahedron volume or element Jacobians. Native orientation handling accounts
+for negative orientation; it does not make a zero determinant valid. Palace
+`--dry-run` checks configuration and referenced-file availability, not the
+quality of the constructed runtime mesh.
+
+Later observations included extreme processed-mesh $\kappa$ and $h$ metrics,
+the literal symptom `PCG solver did NOT converge` at 1000 iterations, later
+GMRES failure or slow Arnoldi progress, and anomalous surface energy or
+participation. These are associated symptoms, not proof of one common cause. In
+particular, that PCG solve is the divergence-free projection, not the AMR
+estimator or proof that a preconditioner is broken. `eig.csv` `Error (Abs.)` is
+an algebraic eigenpair residual, distinct from an AMR indicator.
+
+Surface energy, participation, $Q$, units, the zero-margin baseline, and logical
+baseline deduplication were internally consistent in the inspected CSVs. A
+thin-film surrogate can arithmetically produce participation above one, but
+enormous values do not support a credible weak-perturbation $T_1$
+interpretation. No numerical-convergence, causal-fix, or scientific-result
+claim follows.
+
+This reproduction locates the earliest confirmed defect in the Gmsh-generated
+in-memory mesh, but it does not establish why meshing generated the degeneracy.
+Pre-export and post-reload coordinate hashes and some floating summaries differ
+with representation, so the evidence does not claim that all in-memory and
+reloaded bytes or fields are equal. Crack displacement creating thin elements
+is a separate hypothesis that requires full-precision pre-crack versus
+post-crack element lineage. Causal linkage to the full solver and Surface-EPR
+observations also remains unproven.
+
+### Synthetic determinant illustration
+
+For the deliberately synthetic points
+$(0,0,0)$, $(1,0,0)$, $(0,1,0)$, and $(1,1,0)$, all four vertices lie in one
+plane, so
+
+$$
+V = \frac{\left|\det\!\left[\mathbf{p}_1-\mathbf{p}_0,
+\mathbf{p}_2-\mathbf{p}_0,\mathbf{p}_3-\mathbf{p}_0\right]\right|}{6}=0.
+$$
+
+This is an inert algebra example, distinct from the evidence-owner reproduction
+above and not a reproduction of any private solver or Surface-EPR failure.
+
+### Remaining investigation
+
+A bounded finer-edge comparison was performed by the evidence owner, but it is
+not established as a causal fix or an accepted Surface-EPR result.
+Consumer-specific mesh controls, run outcomes, and inspection or relaunch
+procedures remain outside this public archive. Full-precision pre-crack and
+post-crack element lineage and complete solver and Surface-EPR causality remain
+open. This documentation update ran no mesh or solver experiment, adds no
+SCGSim validator, and prescribes no Gate, tuning, deletion, or fallback.
