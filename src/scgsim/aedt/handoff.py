@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ._runtime_provenance import (
-    RECEIPT_V2,
+    RECEIPT_V3,
     encode_initial_receipt,
     initial_receipt_payload,
     prepared_runtime_source,
@@ -82,7 +82,7 @@ def prepare_handoff(*, spec: AedtSpec, output_dir: str | Path) -> HandoffPlan:
     }
     metadata = {
         "schema_version": "scgsim.aedt.handoff.v1",
-        "expected_receipt_schema": RECEIPT_V2,
+        "expected_receipt_schema": RECEIPT_V3,
         "status": "prepared",
         "mode": spec.mode,
         "project": payload["project"],
@@ -116,7 +116,7 @@ def prepare_handoff(*, spec: AedtSpec, output_dir: str | Path) -> HandoffPlan:
     receipt_path.write_bytes(
         encode_initial_receipt(
             initial_receipt_payload(
-                schema_version=RECEIPT_V2,
+                schema_version=RECEIPT_V3,
                 mode=spec.mode,
                 requested={
                     "aedt_version": spec.aedt_version,
@@ -148,7 +148,7 @@ def prepare_handoff(*, spec: AedtSpec, output_dir: str | Path) -> HandoffPlan:
         manifest_path,
         {
             "schema_version": "scgsim.aedt.handoff-manifest.v1",
-            "expected_receipt_schema": RECEIPT_V2,
+            "expected_receipt_schema": RECEIPT_V3,
             "allowed_paths": [path.relative_to(run_dir).as_posix() for path in allowed],
             "members": [
                 _member(path, run_dir) for path in allowed if path != manifest_path

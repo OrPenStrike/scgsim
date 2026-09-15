@@ -15,6 +15,7 @@ from .util import file_sha256
 
 RECEIPT_V1 = "scgsim.aedt.receipt.v1"
 RECEIPT_V2 = "scgsim.aedt.receipt.v2"
+RECEIPT_V3 = "scgsim.aedt.receipt.v3"
 SOURCE_SCHEMA = "scgsim.aedt.runtime-source.v1"
 
 # Frozen membership of the public runtime-source.v1 evidence format. Changing
@@ -269,8 +270,8 @@ def initial_receipt_payload(
     prepared_at_utc: Any,
     prepared_runtime_source_value: Any = None,
 ) -> dict[str, Any]:
-    """Build the canonical field order for an initial v1 or v2 receipt."""
-    if schema_version not in {RECEIPT_V1, RECEIPT_V2}:
+    """Build the canonical field order for an initial v1, v2, or v3 receipt."""
+    if schema_version not in {RECEIPT_V1, RECEIPT_V2, RECEIPT_V3}:
         raise ValueError("initial receipt schema is unsupported")
     if outputs != {}:
         raise ValueError("initial receipt outputs must be empty")
@@ -283,9 +284,12 @@ def initial_receipt_payload(
         "vacuum_material_id": vacuum_material_id,
         "source": source,
     }
-    if schema_version == RECEIPT_V2:
+    if schema_version in {RECEIPT_V2, RECEIPT_V3}:
         if prepared_runtime_source_value is None:
-            raise ValueError("v2 initial receipt requires prepared runtime source")
+            version = schema_version.rsplit(".", 1)[-1]
+            raise ValueError(
+                f"{version} initial receipt requires prepared runtime source"
+            )
         result["prepared_runtime_source"] = prepared_runtime_source_value
     elif prepared_runtime_source_value is not None:
         raise ValueError("v1 initial receipt excludes prepared runtime source")

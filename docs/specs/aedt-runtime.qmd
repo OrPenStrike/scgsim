@@ -23,8 +23,12 @@ PDK geometry and material identities
 The lifecycle fixes AEDT 2024.2 and PyAEDT 1.3.0, copies all required inputs,
 opens a new AEDT Desktop only on explicit execution, saves and releases the
 owned project, and fails closed on missing native evidence or result bytes.
-PDK superconductors lower to PEC. Other materials reference exact PDK-provided
-AEDT library names; SCGSim does not invent numeric material properties.
+PDK superconductors lower to PEC without replacing their source-material
+identity. Native HFSS solids use the `pec` material with Solve Inside disabled;
+native HFSS sheets use the `SCGSimPEC` Perfect E boundary. Completion requires
+fresh native object-type, material or boundary-type, assignment, and complete
+face-coverage readback. Other materials reference exact PDK-provided AEDT
+library names; SCGSim does not invent numeric material properties.
 
 The public lifecycle has one transaction owner and three private family
 pipelines:
@@ -62,29 +66,33 @@ rewrite existing artifacts, or provide a legacy-name fallback.
 
 New handoffs retain `scgsim.aedt.handoff.v1` and
 `scgsim.aedt.handoff-manifest.v1`. Both records add
-`expected_receipt_schema: scgsim.aedt.receipt.v2`, and the initial receipt is
-V2. It contains `prepared_runtime_source`: a deterministic, sorted manifest of
+`expected_receipt_schema: scgsim.aedt.receipt.v3`, and the initial receipt is
+V3. It contains `prepared_runtime_source`: a deterministic, sorted manifest of
 the SCGSim transaction, family, common, spec, persistence, and native-readback
 modules, a content digest over that manifest, and a truthful preparation Git
 observation when one is available. Git observation may be explicitly
 unavailable; module hashes and the content digest are mandatory.
 
-Before writing `running`, execution accepts exactly one of two cohorts:
+Before writing `running`, execution accepts exactly one of three cohorts:
 
-- a new V2 initial receipt with both V2 expectation markers and a canonical
+- a new V3 initial receipt with both V3 expectation markers and a canonical
+  manifest;
+- a historical V2 initial receipt with both V2 expectation markers and a canonical
   manifest; or
 - an exact historical V1 `not_run` receipt with both markers absent and the
   canonical historical manifest members and hashes.
 
 Unknown versions, mixed or partial markers, noncanonical members, and hash
 mismatches reject before receipt mutation. The verified initial-receipt hash
-and prepared-manifest hash are copied into the mutable V2 receipt. The final
+and prepared-manifest hash are copied into the mutable V3 receipt. The final
 receipt is intentionally not compared with its initial hash because execution
-must mutate it. A verified historical handoff is upgraded in place to a V2 run
+must mutate it. A verified historical handoff is upgraded in place to a V3 run
 receipt and records `prepared_runtime_source.status` as
-`legacy_v1_not_recorded`; missing history is never inferred or fabricated.
+`legacy_v1_not_recorded`; missing history is never inferred or fabricated. A
+V2 handoff retains its prepared V2 provenance cohort when execution emits V3;
+it is not relabeled as new V3 preparation.
 
-Every completed V2 receipt has a separate `runtime_source` manifest and content
+Every completed V3 receipt has a separate `runtime_source` manifest and content
 digest for the code that actually executed it, while retaining the historical
 `revision`, `run_py_sha256`, `spec_py_sha256`, convergence, and matrix-helper
 keys. Execution provenance failure therefore produces a failed receipt, never a
@@ -93,20 +101,28 @@ with different timing, not an equality requirement, and historical hashes are
 not compared to the currently installed package.
 
 `resolve_results()` preserves the existing rules for genuine historical
-completed V1 receipts. A V1 receipt carrying either V2 expectation marker is an
-inconsistent downgrade and rejects. V2 resolution verifies its exact cohort,
-markers, canonical prepared manifest, initial-receipt binding, and complete
-actual runtime manifest before applying the existing family result checks.
+completed V1 and V2 receipts. A receipt relabeled below its preparation markers
+is an inconsistent downgrade and rejects. V2 and V3 resolution verify their
+exact cohorts, markers, canonical prepared manifest, initial-receipt binding,
+and complete actual runtime manifest before applying their version-specific
+family result checks. Only V3 HFSS completion requires sealed native PEC binding
+evidence; this requirement is never projected onto historical V1/V2 receipts.
 These unsigned consistency checks do not authenticate an artifact set against
 an actor able to rewrite every member.
 
 `runtime-source.v1` is a frozen thirteen-module receipt contract, not a live
 enumeration rule. The current producer inventory is maintained separately and
 must match that frozen contract before a new receipt can claim it. A pure
-initial-receipt codec owns exact V1/V2 member order, two-space JSON indentation,
-and the trailing newline. V1 omits prepared provenance; V2 inserts it between
-`source` and `outputs`. Reading historical V1 evidence uses the declared frozen
-schema and does not compare historical hashes with the installed package.
+initial-receipt codec owns exact V1/V2/V3 member order, two-space JSON
+indentation, and the trailing newline. V1 omits prepared provenance; V2 and V3
+insert it between `source` and `outputs`. Reading historical evidence uses the
+declared frozen schema and does not compare historical hashes with the installed
+package.
+
+Execution computes mandatory runtime-source provenance inside the receipt-bound
+failure transaction, before importing PyAEDT or constructing Desktop. Missing
+revision or module evidence therefore yields a failed V3 receipt without a
+Desktop launch rather than escaping receipt finalization.
 
 The family save contract remains fail-closed. `save_project()` returning false
 before solve aborts before native execution; returning false after export aborts
@@ -130,6 +146,9 @@ No family may report completion from requested PyAEDT object properties alone.
 The receipt records direct AEDT state and hashes every resolved output. A
 resolver rejects unsupported families, partial output, mixed run identity,
 unresolved native assignments, and path/hash mismatches.
+Likewise, a `completed` label and an `.aedt` file alone do not prove that saved
+fields are present or reusable; only the versioned family evidence sealed and
+checked by the resolver has that meaning.
 
 ## Q2D native combined matrix export
 

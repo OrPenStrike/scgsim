@@ -61,6 +61,14 @@ preflight and pipeline exit codes, and `solver_exit_code=null`. Receipts use
 
 These methods are reachable candidate APIs.
 
+Configuration setters are atomic with respect to this staged state. Airbox,
+Surface EPR, and Eigenmode controls validate every supplied value before
+changing any field. A validation failure therefore preserves the prior
+configuration together with cached mesh, resolved-port, config, and handoff
+state. A successful change retains the existing mesh/config invalidation
+boundary; this does not change operational failures inside `mesh()` or
+`write_config()`.
+
 ## Native multi-margin Surface EPR
 
 The Electrostatic and Eigenmode `set_surface_epr(...)` specifications for each

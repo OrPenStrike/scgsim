@@ -108,14 +108,15 @@ class ElectrostaticSim:
             raise ValueError(
                 "set_airbox is mutually exclusive with set_vacuum_region()."
             )
-        self.airbox = {
+        airbox = {
             "margin_x": validate_positive_number(margin_x, "margin_x"),
             "margin_y": validate_positive_number(margin_y, "margin_y"),
         }
         if z_above is not None:
-            self.airbox["z_above"] = validate_positive_number(z_above, "z_above")
+            airbox["z_above"] = validate_positive_number(z_above, "z_above")
         if z_below is not None:
-            self.airbox["z_below"] = validate_positive_number(z_below, "z_below")
+            airbox["z_below"] = validate_positive_number(z_below, "z_below")
+        self.airbox = airbox
         self._invalidate_mesh()
 
     def set_vacuum_region(
@@ -177,11 +178,10 @@ class ElectrostaticSim:
         if self._materials is None:
             raise ValueError("set_stack() must run before set_surface_epr().")
         normalized_thin_film = normalize_route_a_thin_film(route, route_a_thin_film)
+        normalized_specs = normalize_surface_epr_specs(specs, materials=self._materials)
         self.route = route  # type: ignore[assignment]
         self.route_a_thin_film = normalized_thin_film
-        self.surface_epr_specs = normalize_surface_epr_specs(
-            specs, materials=self._materials
-        )
+        self.surface_epr_specs = normalized_specs
         self._invalidate_mesh()
 
     def set_electrostatic(

@@ -20,6 +20,7 @@ from ._q3d_runtime import run_q3d
 from ._runtime_provenance import (
     RECEIPT_V1,
     RECEIPT_V2,
+    RECEIPT_V3,
     runtime_source_identity,
     validate_runtime_source,
 )
@@ -65,7 +66,7 @@ def _execute(metadata_path: Path) -> int:
     files = _canonical_metadata_files(metadata, metadata_path, run_dir)
     receipt_path = run_dir / files["receipt"]
     receipt = _object(read_json(receipt_path), "receipt")
-    if receipt.get("schema_version") not in {RECEIPT_V1, RECEIPT_V2}:
+    if receipt.get("schema_version") not in {RECEIPT_V1, RECEIPT_V2, RECEIPT_V3}:
         raise RuntimeError("handoff receipt schema is invalid")
     if receipt.get("status") != "not_run":
         raise RuntimeError("one-shot handoff is not in not_run state")
@@ -82,8 +83,8 @@ def _execute(metadata_path: Path) -> int:
     execution_started = time.perf_counter()
     receipt.update(
         {
-            "schema_version": RECEIPT_V2,
-            "expected_receipt_schema": RECEIPT_V2,
+            "schema_version": RECEIPT_V3,
+            "expected_receipt_schema": RECEIPT_V3,
             "preparation_cohort": cohort["preparation_cohort"],
             "prepared_runtime_source": cohort["prepared_runtime_source"],
             "prepared_receipt_sha256": cohort["prepared_receipt_sha256"],
@@ -107,6 +108,7 @@ def _execute(metadata_path: Path) -> int:
         _verify_prepared_hashes(
             metadata, spec_path, None if isinstance(spec, Q2dSpec) else spec.gds_path
         )
+        receipt["runtime_source"] = _runtime_source_identity()
         if _pyaedt_version() != LOCKED_PYAEDT:
             raise RuntimeError("PyAEDT lock mismatch")
         from ansys.aedt.core import Desktop, Hfss, Q2d, Q3d
@@ -119,7 +121,6 @@ def _execute(metadata_path: Path) -> int:
         )
         if desktop.aedt_version_id != REQUIRED_AEDT_VERSION:
             raise RuntimeError(f"AEDT version mismatch: {desktop.aedt_version_id!r}")
-        receipt["runtime_source"] = _runtime_source_identity()
         if isinstance(spec, Q3dSpec):
             result = _solve_q3d(Q3d, run_dir, spec)
         elif isinstance(spec, Q2dSpec):
@@ -244,18 +245,24 @@ def _verify_prepared_cohort(
         "outputs",
         "prepared_at_utc",
     }
-    if schema == RECEIPT_V2:
+    if schema in {RECEIPT_V2, RECEIPT_V3}:
         initial_keys.add("prepared_runtime_source")
-        if markers != (RECEIPT_V2, RECEIPT_V2):
+        if markers != (schema, schema):
             raise RuntimeError("prepared receipt cohort markers are inconsistent")
         validate_runtime_source(
             receipt.get("prepared_runtime_source"), stage="prepared"
         )
-        preparation_cohort = "prepared_v2"
+        preparation_cohort = "prepared_v3" if schema == RECEIPT_V3 else "prepared_v2"
         prepared_source = receipt["prepared_runtime_source"]
     elif schema == RECEIPT_V1:
         if metadata_has or manifest_has:
-            raise RuntimeError("legacy receipt conflicts with v2 expectation markers")
+            if RECEIPT_V2 in markers:
+                raise RuntimeError(
+                    "legacy receipt conflicts with v2 expectation markers"
+                )
+            raise RuntimeError(
+                "legacy receipt conflicts with later expectation markers"
+            )
         if "prepared_runtime_source" in receipt or "expected_receipt_schema" in receipt:
             raise RuntimeError("legacy receipt contains mixed preparation provenance")
         preparation_cohort = "verified_legacy_v1"

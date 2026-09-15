@@ -77,6 +77,98 @@ def detached_data(value: Any) -> Any:
     return value
 
 
+def _native_object_evidence(hfss: Any, object_name: str) -> dict[str, Any]:
+    """Read object identity, shape kind, and faces directly from the editor."""
+    editor = hfss.modeler.oeditor
+    object_id = int(editor.GetObjectIDByName(object_name))
+    memberships = [
+        object_type
+        for object_type, group in (
+            ("Solid", "Solids"),
+            ("Sheet", "Sheets"),
+            ("Line", "Lines"),
+            ("Unclassified", "Unclassified"),
+        )
+        if object_name in {str(name) for name in editor.GetObjectsInGroup(group)}
+    ]
+    if len(memberships) != 1:
+        raise RuntimeError(
+            f"native object type is ambiguous for {object_name!r}: {memberships!r}"
+        )
+    face_ids = [int(face_id) for face_id in editor.GetFaceIDs(object_name)]
+    if len(face_ids) != len(set(face_ids)) or not face_ids:
+        raise RuntimeError(f"native object faces are invalid for {object_name!r}")
+    return {
+        "native_object_id": object_id,
+        "native_object_type": memberships[0],
+        "native_face_ids": face_ids,
+    }
+
+
+def _native_boundary_type(hfss: Any, name: str) -> str:
+    raw = [str(value) for value in hfss.oboundary.GetBoundaries()]
+    if len(raw) % 2:
+        raise RuntimeError("native HFSS boundary list is invalid")
+    matches = [raw[index + 1] for index in range(0, len(raw), 2) if raw[index] == name]
+    if len(matches) != 1:
+        raise RuntimeError(f"native boundary type is unavailable for {name!r}")
+    return matches[0]
+
+
+def _resolve_native_assignment(
+    hfss: Any, raw_ids: list[int]
+) -> tuple[list[dict[str, Any]], set[int], set[str]]:
+    """Resolve AEDT's face-or-object boundary IDs without guessing their kind."""
+    by_object_id: dict[int, tuple[str, list[int]]] = {}
+    by_face_id: dict[int, str] = {}
+    for object_name in [str(name) for name in hfss.modeler.object_names]:
+        native = _native_object_evidence(hfss, object_name)
+        object_id = native["native_object_id"]
+        face_ids = native["native_face_ids"]
+        if object_id in by_object_id:
+            raise RuntimeError(f"duplicate native object ID: {object_id}")
+        by_object_id[object_id] = (object_name, face_ids)
+        for face_id in face_ids:
+            if face_id in by_face_id:
+                raise RuntimeError(f"ambiguous native face ID: {face_id}")
+            by_face_id[face_id] = object_name
+
+    resolved: list[dict[str, Any]] = []
+    covered_faces: set[int] = set()
+    covered_objects: set[str] = set()
+    for raw_id in raw_ids:
+        object_match = by_object_id.get(raw_id)
+        face_match = by_face_id.get(raw_id)
+        if object_match is not None and face_match is not None:
+            raise RuntimeError(f"ambiguous PEC native assignment ID: {raw_id}")
+        if object_match is not None:
+            object_name, face_ids = object_match
+            resolved.append(
+                {
+                    "raw_id": raw_id,
+                    "native_kind": "object",
+                    "object_name": object_name,
+                    "face_ids": list(face_ids),
+                }
+            )
+            covered_faces.update(face_ids)
+            covered_objects.add(object_name)
+        elif face_match is not None:
+            resolved.append(
+                {
+                    "raw_id": raw_id,
+                    "native_kind": "face",
+                    "object_name": face_match,
+                    "face_ids": [raw_id],
+                }
+            )
+            covered_faces.add(raw_id)
+            covered_objects.add(face_match)
+        else:
+            raise RuntimeError(f"unknown PEC native assignment ID: {raw_id}")
+    return resolved, covered_faces, covered_objects
+
+
 def import_and_bind(hfss: Any, spec: HfssSpec | Q3dSpec) -> list[dict[str, Any]]:
     mapping = {
         item.layer: [
@@ -96,7 +188,8 @@ def import_and_bind(hfss: Any, spec: HfssSpec | Q3dSpec) -> list[dict[str, Any]]
         )
     layers = {item.layer: item for item in spec.layer_imports}
     materials = dict(spec.materials)
-    pec: list[str] = []
+    pec_sheets: list[str] = []
+    pec_solids: list[str] = []
     observed: list[dict[str, Any]] = []
     for binding in spec.object_bindings:
         obj = hfss.modeler.get_object_from_name(binding.object_name)
@@ -141,8 +234,63 @@ def import_and_bind(hfss: Any, spec: HfssSpec | Q3dSpec) -> list[dict[str, Any]]
                     "native_material_name": observed_material,
                 }
             else:
-                pec.append(binding.object_name)
-                record["requested_pec_boundary"] = "SCGSimPEC"
+                native = _native_object_evidence(hfss, binding.object_name)
+                if native["native_object_type"] == "Solid":
+                    pec_solids.append(binding.object_name)
+                    obj.material_name = "pec"
+                    obj.solve_inside = False
+                    fresh = _native_object_evidence(hfss, binding.object_name)
+                    if (
+                        fresh["native_object_id"] != native["native_object_id"]
+                        or fresh["native_object_type"] != native["native_object_type"]
+                        or set(fresh["native_face_ids"])
+                        != set(native["native_face_ids"])
+                    ):
+                        raise RuntimeError(
+                            f"HFSS PEC native object identity changed for {binding.object_name!r}"
+                        )
+                    observed_material = native_object_property(obj, "Material").strip(
+                        '"'
+                    )
+                    observed_solve_inside = _native_object_boolean_property(
+                        obj, "Solve Inside"
+                    )
+                    if observed_material.casefold() != "pec" or observed_solve_inside:
+                        raise RuntimeError(
+                            f"HFSS solid PEC readback mismatch for {binding.object_name!r}"
+                        )
+                    record["hfss_pec_binding"] = {
+                        "source_object": binding.object_name,
+                        "source_material_id": material.material_id,
+                        "source_material_kind": material.kind,
+                        "source_library_name": material.library_name,
+                        **fresh,
+                        "implementation": "pec_material_solve_inside_false",
+                        "verified_evidence": {
+                            "native_material_name": observed_material,
+                            "native_solve_inside": False,
+                        },
+                    }
+                    record["observed"] = {
+                        "native_material_name": observed_material,
+                        "native_solve_inside": False,
+                    }
+                elif native["native_object_type"] == "Sheet":
+                    pec_sheets.append(binding.object_name)
+                    record["requested_pec_boundary"] = "SCGSimPEC"
+                    record["hfss_pec_binding"] = {
+                        "source_object": binding.object_name,
+                        "source_material_id": material.material_id,
+                        "source_material_kind": material.kind,
+                        "source_library_name": material.library_name,
+                        **native,
+                        "implementation": "perfect_e_sheet",
+                    }
+                else:
+                    raise RuntimeError(
+                        f"unsupported HFSS PEC native object type for "
+                        f"{binding.object_name!r}: {native['native_object_type']!r}"
+                    )
         else:
             existing = hfss.materials.exists_material(material.library_name)
             if not existing:
@@ -157,29 +305,51 @@ def import_and_bind(hfss: Any, spec: HfssSpec | Q3dSpec) -> list[dict[str, Any]]
                 )
             record["observed"] = {"native_material_name": observed_material}
         observed.append(record)
-    if pec:
-        boundary = hfss.assign_perfect_e(pec, name="SCGSimPEC")
+    if pec_sheets:
+        boundary = hfss.assign_perfect_e(pec_sheets, name="SCGSimPEC")
         if boundary is None or "SCGSimPEC" not in native_boundary_names(hfss):
             raise RuntimeError("PEC assignment readback failed")
-        assigned_face_ids = [
-            int(object_id)
-            for object_id in hfss.oboundary.GetBoundaryAssignment("SCGSimPEC")
+        boundary_type = _native_boundary_type(hfss, "SCGSimPEC")
+        if boundary_type != "Perfect E":
+            raise RuntimeError("PEC native boundary type mismatch")
+        raw_assignment_ids = [
+            int(native_id)
+            for native_id in hfss.oboundary.GetBoundaryAssignment("SCGSimPEC")
         ]
-        face_objects = {
-            int(face.id): object_name
-            for object_name in hfss.modeler.object_names
-            for face in hfss.modeler.get_object_from_name(object_name).faces
+        resolved, covered_faces, covered_objects = _resolve_native_assignment(
+            hfss, raw_assignment_ids
+        )
+        target_faces = {
+            int(face_id)
+            for record in observed
+            if record.get("hfss_pec_binding", {}).get("implementation")
+            == "perfect_e_sheet"
+            for face_id in record["hfss_pec_binding"]["native_face_ids"]
         }
-        assigned_objects = [face_objects[face_id] for face_id in assigned_face_ids]
-        if assigned_objects != pec:
+        if covered_faces != target_faces or covered_objects != set(pec_sheets):
             raise RuntimeError("PEC native assignment mismatch")
         for record in observed:
-            if record["is_superconducting"]:
+            binding = record.get("hfss_pec_binding")
+            if (
+                isinstance(binding, dict)
+                and binding.get("implementation") == "perfect_e_sheet"
+            ):
+                target = set(binding["native_face_ids"])
+                binding["verified_evidence"] = {
+                    "native_boundary_name": "SCGSimPEC",
+                    "native_boundary_type": boundary_type,
+                    "raw_assignment_ids": raw_assignment_ids,
+                    "typed_assignment": resolved,
+                    "covered_face_ids": sorted(covered_faces & target),
+                }
                 record["observed"] = {
                     "native_pec_boundary": "SCGSimPEC",
-                    "native_pec_face_ids": assigned_face_ids,
-                    "native_pec_objects": assigned_objects,
+                    "native_pec_boundary_type": boundary_type,
+                    "native_pec_face_ids": sorted(covered_faces & target),
+                    "native_pec_objects": sorted(covered_objects),
                 }
+    elif pec_solids and "SCGSimPEC" in native_boundary_names(hfss):
+        raise RuntimeError("solid PEC binding unexpectedly has SCGSimPEC boundary")
     return observed
 
 
@@ -268,6 +438,20 @@ def native_object_property(obj: Any, property_name: str) -> str:
             f"AEDT native object property {property_name!r} is unavailable for {obj.name!r}"
         )
     return value
+
+
+def _native_object_boolean_property(obj: Any, property_name: str) -> bool:
+    # Keep boolean readback direct too; AEDT transports it as either bool or text.
+    value = obj._oeditor.GetPropertyValue(
+        "Geometry3DAttributeTab", obj.name, property_name
+    )
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.casefold() in {"true", "false"}:
+        return value.casefold() == "true"
+    raise RuntimeError(
+        f"AEDT native boolean property {property_name!r} is unavailable for {obj.name!r}"
+    )
 
 
 def native_boundary_names(hfss: Any) -> list[str]:

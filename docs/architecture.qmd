@@ -68,6 +68,8 @@ planned, or observed. Native observations enter only as opaque, detached facts;
 Gmsh and solver bindings remain outside the core. Repeated observations of one
 contribution do not create additional contributions, and missing evidence stays
 unknown rather than becoming guessed contact.
+Classification requires an established conductor and solution-domain role;
+an observation by itself is evidence, not proof of physical contact.
 
 Material identity, geometry approximation, PEC approximation, and native
 implementation are separate facts. The core classifies already-valid values;
@@ -136,31 +138,39 @@ handle together with detached preparation readback; solve and export consume the
 carrier and cannot reinterpret a caller spec or workspace.
 
 New preparation keeps the handoff and handoff-manifest schemas at V1 while both
-declare that the mutable run receipt uses `scgsim.aedt.receipt.v2`. The initial
-V2 receipt records a complete preparation-time SCGSim module manifest and
+declare that the mutable run receipt uses `scgsim.aedt.receipt.v3`. The initial
+V3 receipt records a complete preparation-time SCGSim module manifest and
 content digest. Before mutation, execution verifies the canonical manifest and
 binds the initial-receipt and prepared-manifest hashes. A canonical historical
-V1 `not_run` handoff with neither V2 marker remains executable, but its resulting
-V2 receipt records preparation provenance as `legacy_v1_not_recorded`; it does
+V1 `not_run` handoff with neither marker remains executable, but its resulting
+V3 receipt records preparation provenance as `legacy_v1_not_recorded`; it does
 not fabricate history.
 
-Every completed V2 receipt records a separate complete execution-time module
+Every completed V3 receipt records a separate complete execution-time module
 manifest and digest while retaining the former runtime-source keys. Preparation
 and execution identities are not required to match: their separation records
 what prepared and what actually executed the handoff. Historical completed V1
 receipts remain subject to their old resolution rules, except that a V1 receipt
-combined with either V2 expectation marker is rejected as an inconsistent
-cohort. This consistency contract is not source authenticity for an actor able
+combined with either later-version expectation marker is rejected as an
+inconsistent cohort. Historical completed V2 receipts retain their existing
+resolution rules; new V3-only native PEC checks do not reinterpret them. This
+consistency contract is not source authenticity for an actor able
 to rewrite the entire unsigned artifact set.
 
 The frozen `runtime-source.v1` reader contract is distinct from the current
 producer inventory used to emit it. One pure, versioned initial-receipt codec
-owns the historical V1 and current V2 JSON member order, indentation, and final
-newline; handoff writing and V2 initial-receipt reconstruction use that same
+owns the historical V1/V2 and current V3 JSON member order, indentation, and
+final newline; handoff writing and initial-receipt reconstruction use that same
 codec. A producer may emit the frozen schema only while its current inventory
 matches the declared thirteen-module contract. Historical receipt hashes are
 never compared with installed source, and prepared and actual identities remain
 independent evidence.
+
+Runtime-source provenance is computed inside the receipt-owned failure
+transaction before PyAEDT import and Desktop construction. New HFSS V3 receipts
+also keep source material identity distinct from verified native PEC
+implementation: solids are native `pec` with Solve Inside disabled, while
+sheets receive Perfect E and must have complete native face coverage.
 
 See [Folder tree and ownership](ownership.qmd) for repository placement and
 [Headless Geometry Preview](geometry-preview.qmd) for the static and connected

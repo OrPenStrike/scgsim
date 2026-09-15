@@ -14,6 +14,7 @@ from ._q2d_convergence import read_q2d_convergence, read_q3d_convergence
 from ._runtime_provenance import (
     RECEIPT_V1,
     RECEIPT_V2,
+    RECEIPT_V3,
     initial_receipt_payload,
     initial_receipt_sha256,
     validate_runtime_source,
@@ -106,14 +107,18 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
     if not isinstance(receipt, dict) or receipt.get("schema_version") not in {
         RECEIPT_V1,
         RECEIPT_V2,
+        RECEIPT_V3,
     }:
         raise RuntimeError("handoff receipt schema is invalid")
     if receipt.get("status") != "completed":
         raise RuntimeError("handoff has not completed successfully")
-    if receipt["schema_version"] == RECEIPT_V1:
+    receipt_schema = receipt["schema_version"]
+    if receipt_schema == RECEIPT_V1:
         _reject_legacy_v2_markers(root, receipt)
+    elif receipt_schema == RECEIPT_V2:
+        _validate_completion_cohort(root, receipt)
     else:
-        _validate_v2_completion_cohort(root, receipt)
+        _validate_completion_cohort(root, receipt)
     save = receipt.get("save")
     if (
         not isinstance(save, dict)
@@ -142,6 +147,10 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
     ):
         raise RuntimeError("AEDT receipt mode is invalid")
     _validate_readback(root, receipt, spec)
+    if receipt_schema == RECEIPT_V3 and isinstance(
+        spec, (HfssDrivenSpec, HfssEigenmodeSpec)
+    ):
+        _validate_hfss_pec_bindings(receipt, spec)
     outputs = receipt.get("outputs")
     if not isinstance(outputs, dict):
         raise TypeError("completed receipt has no output hash manifest")
@@ -264,10 +273,14 @@ def _reject_legacy_v2_markers(root: Path, receipt: dict[str, Any]) -> None:
             raise RuntimeError("legacy receipt conflicts with v2 expectation markers")
 
 
-def _validate_v2_completion_cohort(root: Path, receipt: dict[str, Any]) -> None:
+def _validate_completion_cohort(root: Path, receipt: dict[str, Any]) -> None:
     """Verify the immutable preparation cohort and complete execution provenance."""
-    if receipt.get("expected_receipt_schema") != RECEIPT_V2:
-        raise RuntimeError("completed v2 receipt expectation marker is invalid")
+    receipt_schema = receipt.get("schema_version")
+    if receipt_schema not in {RECEIPT_V2, RECEIPT_V3}:
+        raise RuntimeError("completed receipt cohort schema is invalid")
+    version = receipt_schema.rsplit(".", 1)[-1]
+    if receipt.get("expected_receipt_schema") != receipt_schema:
+        raise RuntimeError(f"completed {version} receipt expectation marker is invalid")
     mode = receipt.get("mode")
     if mode not in {"terminal", "modal", "eigenmode", "q3d", "q2d"}:
         raise RuntimeError("AEDT receipt mode is invalid")
@@ -275,7 +288,9 @@ def _validate_v2_completion_cohort(root: Path, receipt: dict[str, Any]) -> None:
     metadata_path = _contained(root, "metadata/aedt_handoff_metadata.json")
     manifest_path = _contained(root, "metadata/aedt_handoff_manifest.json")
     if not metadata_path.is_file() or not manifest_path.is_file():
-        raise RuntimeError("completed v2 receipt lacks preparation cohort files")
+        raise RuntimeError(
+            f"completed {version} receipt lacks preparation cohort files"
+        )
     metadata = read_json(metadata_path)
     manifest = read_json(manifest_path)
     if (
@@ -286,7 +301,7 @@ def _validate_v2_completion_cohort(root: Path, receipt: dict[str, Any]) -> None:
         or not isinstance(manifest, dict)
         or manifest.get("schema_version") != "scgsim.aedt.handoff-manifest.v1"
     ):
-        raise RuntimeError("completed v2 preparation cohort is invalid")
+        raise RuntimeError(f"completed {version} preparation cohort is invalid")
 
     expected_files = {
         "spec": "aedt_spec.json",
@@ -295,13 +310,20 @@ def _validate_v2_completion_cohort(root: Path, receipt: dict[str, Any]) -> None:
     if mode != "q2d":
         expected_files["gds"] = "geometry/design.gds"
     if metadata.get("files") != expected_files:
-        raise RuntimeError("completed v2 preparation file map is not canonical")
+        raise RuntimeError(f"completed {version} preparation file map is not canonical")
 
     metadata_has = "expected_receipt_schema" in metadata
     manifest_has = "expected_receipt_schema" in manifest
     preparation_cohort = receipt.get("preparation_cohort")
     prepared_source = receipt.get("prepared_runtime_source")
-    if preparation_cohort == "prepared_v2":
+    if preparation_cohort == "prepared_v3" and receipt_schema == RECEIPT_V3:
+        if (
+            metadata.get("expected_receipt_schema") != RECEIPT_V3
+            or manifest.get("expected_receipt_schema") != RECEIPT_V3
+        ):
+            raise RuntimeError("completed v3 preparation markers are inconsistent")
+        validate_runtime_source(prepared_source, stage="prepared")
+    elif preparation_cohort == "prepared_v2":
         if (
             metadata.get("expected_receipt_schema") != RECEIPT_V2
             or manifest.get("expected_receipt_schema") != RECEIPT_V2
@@ -310,11 +332,13 @@ def _validate_v2_completion_cohort(root: Path, receipt: dict[str, Any]) -> None:
         validate_runtime_source(prepared_source, stage="prepared")
     elif preparation_cohort == "verified_legacy_v1":
         if metadata_has or manifest_has:
-            raise RuntimeError("verified legacy cohort contains v2 preparation markers")
+            raise RuntimeError(
+                f"verified legacy cohort contains {version} preparation markers"
+            )
         if prepared_source != {"status": "legacy_v1_not_recorded"}:
             raise RuntimeError("verified legacy preparation provenance is invalid")
     else:
-        raise RuntimeError("completed v2 preparation cohort is invalid")
+        raise RuntimeError(f"completed {version} preparation cohort is invalid")
 
     validate_runtime_source(receipt.get("runtime_source"), stage="actual")
     prepared_receipt_sha = receipt.get("prepared_receipt_sha256")
@@ -327,7 +351,7 @@ def _validate_v2_completion_cohort(root: Path, receipt: dict[str, Any]) -> None:
         or file_sha256(manifest_path) != verified_manifest_sha
         or _initial_receipt_sha256(receipt, preparation_cohort) != prepared_receipt_sha
     ):
-        raise RuntimeError("completed v2 preparation hash bindings are invalid")
+        raise RuntimeError(f"completed {version} preparation hash bindings are invalid")
 
     expected_paths = ["run_aedt.sh", "aedt_spec.json"]
     if mode != "q2d":
@@ -338,7 +362,9 @@ def _validate_v2_completion_cohort(root: Path, receipt: dict[str, Any]) -> None:
         "metadata/aedt_handoff_manifest.json",
     ]
     if manifest.get("allowed_paths") != expected_paths:
-        raise RuntimeError("completed v2 manifest allowed paths are not canonical")
+        raise RuntimeError(
+            f"completed {version} manifest allowed paths are not canonical"
+        )
     members = manifest.get("members")
     if (
         not isinstance(members, list)
@@ -346,7 +372,7 @@ def _validate_v2_completion_cohort(root: Path, receipt: dict[str, Any]) -> None:
         or [item.get("path") if isinstance(item, dict) else None for item in members]
         != expected_paths[:-1]
     ):
-        raise RuntimeError("completed v2 manifest members are not canonical")
+        raise RuntimeError(f"completed {version} manifest members are not canonical")
     for member in members:
         if (
             not isinstance(member, dict)
@@ -357,11 +383,13 @@ def _validate_v2_completion_cohort(root: Path, receipt: dict[str, Any]) -> None:
             or not isinstance(member.get("sha256"), str)
             or not _sha256_text(member["sha256"])
         ):
-            raise RuntimeError("completed v2 manifest member is invalid")
+            raise RuntimeError(f"completed {version} manifest member is invalid")
         relative = member["path"]
         if relative == "metadata/aedt_run_receipt.json":
             if member["sha256"] != prepared_receipt_sha:
-                raise RuntimeError("completed v2 initial receipt binding is invalid")
+                raise RuntimeError(
+                    f"completed {version} initial receipt binding is invalid"
+                )
             continue
         path = _contained(root, relative)
         if (
@@ -369,7 +397,9 @@ def _validate_v2_completion_cohort(root: Path, receipt: dict[str, Any]) -> None:
             or path.stat().st_size != member["bytes"]
             or file_sha256(path) != member["sha256"]
         ):
-            raise RuntimeError(f"completed v2 manifest member mismatch: {relative}")
+            raise RuntimeError(
+                f"completed {version} manifest member mismatch: {relative}"
+            )
 
 
 def _sha256_text(value: str) -> bool:
@@ -379,10 +409,13 @@ def _sha256_text(value: str) -> bool:
 
 
 def _initial_receipt_sha256(receipt: dict[str, Any], preparation_cohort: Any) -> str:
+    schema_by_cohort = {
+        "prepared_v3": RECEIPT_V3,
+        "prepared_v2": RECEIPT_V2,
+        "verified_legacy_v1": RECEIPT_V1,
+    }
     initial = initial_receipt_payload(
-        schema_version=(
-            RECEIPT_V2 if preparation_cohort == "prepared_v2" else RECEIPT_V1
-        ),
+        schema_version=schema_by_cohort.get(preparation_cohort, ""),
         mode=receipt.get("mode"),
         requested=receipt.get("requested"),
         pdk_materials=receipt.get("pdk_materials"),
@@ -390,7 +423,7 @@ def _initial_receipt_sha256(receipt: dict[str, Any], preparation_cohort: Any) ->
         source=receipt.get("source"),
         prepared_runtime_source_value=(
             receipt.get("prepared_runtime_source")
-            if preparation_cohort == "prepared_v2"
+            if preparation_cohort in {"prepared_v2", "prepared_v3"}
             else None
         ),
         outputs={},
@@ -467,6 +500,208 @@ def _validate_readback(root: Path, receipt: dict[str, Any], spec: Any) -> None:
         _validate_modal_native_evidence(ports, spec)
     _validate_hfss_setup_and_convergence(root, receipt, spec)
     _validate_diagnostics(root, receipt.get("diagnostics"))
+
+
+def _validate_hfss_pec_bindings(
+    receipt: dict[str, Any], spec: HfssDrivenSpec | HfssEigenmodeSpec
+) -> None:
+    """Verify V3 PEC evidence against source material and object bindings."""
+    records = receipt.get("materials")
+    if not isinstance(records, list) or len(records) != len(spec.object_bindings):
+        raise RuntimeError("HFSS V3 material binding evidence is invalid")
+    materials = dict(spec.materials)
+    layers = {layer.layer: layer for layer in spec.layer_imports}
+    pec_records: list[dict[str, Any]] = []
+    sheet_records: list[dict[str, Any]] = []
+    for record, object_binding in zip(records, spec.object_bindings, strict=True):
+        material = materials[object_binding.material_id]
+        layer = layers[object_binding.layer]
+        if (
+            not isinstance(record, dict)
+            or record.get("object_name") != object_binding.object_name
+            or record.get("layer") != object_binding.layer
+            or record.get("layer_name") != layer.layer_name
+            or record.get("role") != object_binding.role
+            or record.get("material_id") != material.material_id
+            or record.get("kind") != material.kind
+            or record.get("is_superconducting") is not material.is_superconducting
+            or record.get("requested_library_name") != material.library_name
+            or record.get("native_destination_layer_prefix") != layer.layer_name
+        ):
+            raise RuntimeError("HFSS V3 material binding does not match the spec")
+        binding = record.get("hfss_pec_binding")
+        if not material.is_superconducting:
+            if binding is not None:
+                raise RuntimeError("non-PEC HFSS material has PEC binding evidence")
+            continue
+        face_ids = binding.get("native_face_ids") if isinstance(binding, dict) else None
+        if not isinstance(binding, dict) or (
+            binding.get("source_object") != object_binding.object_name
+            or binding.get("source_material_id") != material.material_id
+            or binding.get("source_material_kind") != material.kind
+            or binding.get("source_library_name") != material.library_name
+            or not _positive_unique_ids([binding.get("native_object_id")], 1)
+            or not isinstance(face_ids, list)
+            or not face_ids
+            or not _positive_unique_ids(face_ids, len(face_ids))
+        ):
+            raise RuntimeError("HFSS V3 PEC source binding evidence is invalid")
+        evidence = binding.get("verified_evidence")
+        if binding.get("native_object_type") == "Solid":
+            if (
+                binding.get("implementation") != "pec_material_solve_inside_false"
+                or set(binding)
+                != {
+                    "source_object",
+                    "source_material_id",
+                    "source_material_kind",
+                    "source_library_name",
+                    "native_object_id",
+                    "native_object_type",
+                    "native_face_ids",
+                    "implementation",
+                    "verified_evidence",
+                }
+                or not isinstance(evidence, dict)
+                or set(evidence) != {"native_material_name", "native_solve_inside"}
+                or not isinstance(evidence.get("native_material_name"), str)
+                or evidence["native_material_name"].casefold() != "pec"
+                or evidence.get("native_solve_inside") is not False
+                or record.get("observed") != evidence
+                or "requested_pec_boundary" in record
+            ):
+                raise RuntimeError("HFSS V3 solid PEC evidence is invalid")
+        elif binding.get("native_object_type") == "Sheet":
+            if (
+                binding.get("implementation") != "perfect_e_sheet"
+                or set(binding)
+                != {
+                    "source_object",
+                    "source_material_id",
+                    "source_material_kind",
+                    "source_library_name",
+                    "native_object_id",
+                    "native_object_type",
+                    "native_face_ids",
+                    "implementation",
+                    "verified_evidence",
+                }
+                or record.get("requested_pec_boundary") != "SCGSimPEC"
+            ):
+                raise RuntimeError("HFSS V3 sheet PEC evidence is invalid")
+            sheet_records.append(record)
+        else:
+            raise RuntimeError("HFSS V3 PEC native object type is invalid")
+        pec_records.append(record)
+
+    object_by_native_id: dict[int, str] = {}
+    object_by_face_id: dict[int, str] = {}
+    for record in pec_records:
+        binding = record["hfss_pec_binding"]
+        faces = set(binding["native_face_ids"])
+        if set(object_by_face_id) & faces:
+            raise RuntimeError("HFSS V3 PEC native faces are ambiguous")
+        object_name = binding["source_object"]
+        object_id = binding["native_object_id"]
+        if object_id in object_by_native_id:
+            raise RuntimeError("HFSS V3 PEC native object IDs are ambiguous")
+        object_by_native_id[object_id] = object_name
+        object_by_face_id.update({face_id: object_name for face_id in faces})
+    if set(object_by_native_id) & set(object_by_face_id):
+        raise RuntimeError("HFSS V3 PEC native assignment IDs are ambiguous")
+    if not sheet_records:
+        return
+
+    all_target_faces: set[int] = set()
+    target_faces_by_object: dict[str, set[int]] = {}
+    target_object_id_by_object: dict[str, int] = {}
+    for record in sheet_records:
+        binding = record["hfss_pec_binding"]
+        object_name = binding["source_object"]
+        faces = set(binding["native_face_ids"])
+        target_faces_by_object[object_name] = faces
+        target_object_id_by_object[object_name] = binding["native_object_id"]
+        all_target_faces.update(faces)
+
+    reference = sheet_records[0]["hfss_pec_binding"].get("verified_evidence")
+    if not isinstance(reference, dict):
+        raise RuntimeError("HFSS V3 sheet PEC evidence is invalid")
+    raw_ids = reference.get("raw_assignment_ids")
+    typed = reference.get("typed_assignment")
+    if (
+        reference.get("native_boundary_name") != "SCGSimPEC"
+        or reference.get("native_boundary_type") != "Perfect E"
+        or not isinstance(raw_ids, list)
+        or not all(
+            isinstance(value, int) and not isinstance(value, bool) for value in raw_ids
+        )
+        or not isinstance(typed, list)
+        or len(typed) != len(raw_ids)
+    ):
+        raise RuntimeError("HFSS V3 sheet PEC boundary evidence is invalid")
+    covered: set[int] = set()
+    covered_objects: set[str] = set()
+    for raw_id, item in zip(raw_ids, typed, strict=True):
+        if (
+            not isinstance(item, dict)
+            or set(item) != {"raw_id", "native_kind", "object_name", "face_ids"}
+            or item.get("raw_id") != raw_id
+        ):
+            raise RuntimeError("HFSS V3 PEC typed assignment is invalid")
+        object_name = item.get("object_name")
+        faces = item.get("face_ids")
+        if object_name not in target_faces_by_object or not isinstance(faces, list):
+            raise RuntimeError("HFSS V3 PEC assignment targets a non-sheet object")
+        object_owner = object_by_native_id.get(raw_id)
+        face_owner = object_by_face_id.get(raw_id)
+        if object_owner is not None and face_owner is not None:
+            raise RuntimeError("HFSS V3 PEC assignment ID is ambiguous")
+        if object_owner is None and face_owner is None:
+            raise RuntimeError("HFSS V3 PEC assignment ID is unknown")
+        if item.get("native_kind") == "object":
+            if (
+                object_owner != object_name
+                or raw_id != target_object_id_by_object[object_name]
+                or set(faces) != target_faces_by_object[object_name]
+            ):
+                raise RuntimeError("HFSS V3 PEC object assignment is incomplete")
+        elif item.get("native_kind") == "face":
+            if face_owner != object_name or faces != [raw_id]:
+                raise RuntimeError("HFSS V3 PEC face assignment is invalid")
+        else:
+            raise RuntimeError("HFSS V3 PEC assignment kind is invalid")
+        covered.update(faces)
+        covered_objects.add(object_name)
+    if covered != all_target_faces or covered_objects != set(target_faces_by_object):
+        raise RuntimeError("HFSS V3 PEC assignment coverage is incomplete")
+    for record in sheet_records:
+        binding = record["hfss_pec_binding"]
+        evidence = binding.get("verified_evidence")
+        expected_covered = sorted(target_faces_by_object[binding["source_object"]])
+        if (
+            not isinstance(evidence, dict)
+            or set(evidence)
+            != {
+                "native_boundary_name",
+                "native_boundary_type",
+                "raw_assignment_ids",
+                "typed_assignment",
+                "covered_face_ids",
+            }
+            or evidence.get("native_boundary_name") != "SCGSimPEC"
+            or evidence.get("native_boundary_type") != "Perfect E"
+            or evidence.get("raw_assignment_ids") != raw_ids
+            or evidence.get("typed_assignment") != typed
+            or evidence.get("covered_face_ids") != expected_covered
+            or record.get("observed")
+            != {
+                "native_pec_boundary": "SCGSimPEC",
+                "native_pec_boundary_type": "Perfect E",
+                "native_pec_face_ids": expected_covered,
+                "native_pec_objects": sorted(target_faces_by_object),
+            }
+        ):
+            raise RuntimeError("HFSS V3 per-sheet PEC evidence is inconsistent")
 
 
 def _validate_hfss_setup_and_convergence(
