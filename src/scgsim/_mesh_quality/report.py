@@ -5,14 +5,16 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
+from fractions import Fraction
 from importlib import metadata
+from numbers import Integral
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from .numerics import Measurements
+from .numerics import Measurements, _decode_label, _StatusCode
 from .reader import MeshData
 
 
@@ -59,13 +61,32 @@ def _stats(values: np.ndarray, included: np.ndarray, total: int) -> dict[str, An
             "p99": None,
             "max": None,
         }
+
+    def position(q: float) -> float:
+        rank = (len(finite) - 1) * q
+        lower = math.floor(rank)
+        upper = min(lower + 1, len(finite) - 1)
+        working = np.array(finite, dtype=np.float64, copy=True)
+        endpoints = np.partition(working, (lower, upper))
+        if lower == upper:
+            return float(endpoints[lower])
+        weight = Fraction.from_float(rank - lower)
+        exact = (
+            (1 - weight) * Fraction.from_float(float(endpoints[lower]))
+            + weight * Fraction.from_float(float(endpoints[upper]))
+        )
+        result = float(exact)
+        if not math.isfinite(result):
+            raise RuntimeError("finite statistic interpolation produced a nonfinite value")
+        return result
+
     return {
         "sample_count": int(len(finite)),
         "excluded_count": int(total - len(finite)),
         "min": float(np.min(finite)),
-        "median": float(np.median(finite)),
-        "p95": float(np.percentile(finite, 95)),
-        "p99": float(np.percentile(finite, 99)),
+        "median": position(0.5),
+        "p95": position(0.95),
+        "p99": position(0.99),
         "max": float(np.max(finite)),
     }
 
@@ -73,33 +94,41 @@ def _stats(values: np.ndarray, included: np.ndarray, total: int) -> dict[str, An
 def _make_summary(mesh: MeshData, metrics: Measurements) -> Mapping[str, Any]:
     total = len(mesh.element_ids)
     measured = np.isin(
-        metrics.orientation_method, ("floating_filter", "exact_dyadic")
+        metrics.orientation_method,
+        (_StatusCode.FLOATING_FILTER, _StatusCode.EXACT_DYADIC),
     )
-    volume_available = np.isin(metrics.volume_status, ("available", "exact_zero"))
+    volume_available = np.isin(
+        metrics.volume_status, (_StatusCode.AVAILABLE, _StatusCode.EXACT_ZERO)
+    )
     volume_m3_available = np.isin(
-        metrics.volume_m3_status, ("available", "exact_zero")
+        metrics.volume_m3_status, (_StatusCode.AVAILABLE, _StatusCode.EXACT_ZERO)
     )
-    kappa_available = metrics.condition_status == "available"
+    kappa_available = metrics.condition_status == _StatusCode.AVAILABLE
     warnings: list[str] = []
     exact_zero = int(
         np.count_nonzero(
             (metrics.orientation == 0)
-            & (metrics.orientation_method == "exact_dyadic")
+            & (metrics.orientation_method == _StatusCode.EXACT_DYADIC)
         )
     )
-    missing = int(np.count_nonzero(metrics.orientation_method == "missing_nodes"))
-    nonfinite = int(
-        np.count_nonzero(metrics.orientation_method == "nonfinite_coordinates")
+    missing = int(
+        np.count_nonzero(metrics.orientation_method == _StatusCode.MISSING_NODES)
     )
-    condition_names, condition_values = np.unique(
+    nonfinite = int(
+        np.count_nonzero(
+            metrics.orientation_method == _StatusCode.NONFINITE_COORDINATES
+        )
+    )
+    condition_codes, condition_values = np.unique(
         metrics.condition_status, return_counts=True
     )
     condition_counts = {
-        str(name): int(value)
-        for name, value in zip(condition_names, condition_values, strict=True)
+        _decode_label(code): int(value)
+        for code, value in zip(condition_codes, condition_values, strict=True)
     }
     condition_unavailable = ~np.isin(
-        metrics.condition_status, ("available", "exact_singular")
+        metrics.condition_status,
+        (_StatusCode.AVAILABLE, _StatusCode.EXACT_SINGULAR),
     )
     unavailable_conditions = int(np.count_nonzero(condition_unavailable))
     unresolved = condition_counts.get("numerically_unresolved", 0)
@@ -116,14 +145,27 @@ def _make_summary(mesh: MeshData, metrics: Measurements) -> Mapping[str, Any]:
         warnings.append(
             f"{uncovered} known 3D elements are not four-node tetrahedra and are outside this metric."
         )
+    unknown = int(mesh.element_counts["unknown"])
+    if unknown:
+        warnings.append(
+            f"{unknown} elements use unknown Gmsh element types and were counted without inferred dimension or arity."
+        )
     if unavailable_conditions:
         warnings.append(
             f"{unavailable_conditions} tetrahedra have unavailable condition numbers; status counts remain explicit."
         )
     representation_failures = int(
-        np.count_nonzero(np.isin(metrics.volume_status, ("underflow", "overflow")))
+        np.count_nonzero(
+            np.isin(
+                metrics.volume_status,
+                (_StatusCode.UNDERFLOW, _StatusCode.OVERFLOW),
+            )
+        )
         + np.count_nonzero(
-            np.isin(metrics.volume_m3_status, ("underflow", "overflow"))
+            np.isin(
+                metrics.volume_m3_status,
+                (_StatusCode.UNDERFLOW, _StatusCode.OVERFLOW),
+            )
         )
     )
     if representation_failures:
@@ -142,21 +184,27 @@ def _make_summary(mesh: MeshData, metrics: Measurements) -> Mapping[str, Any]:
             "missing_nodes": missing,
             "nonfinite_coordinates": nonfinite,
             "condition_exact_singular": int(
-                np.count_nonzero(metrics.condition_status == "exact_singular")
+                np.count_nonzero(
+                    metrics.condition_status == _StatusCode.EXACT_SINGULAR
+                )
             ),
             "condition_numerically_unresolved": unresolved,
             "condition_svd_failed": int(
-                np.count_nonzero(metrics.condition_status == "svd_failed")
+                np.count_nonzero(metrics.condition_status == _StatusCode.SVD_FAILED)
             ),
             "condition_unavailable": unavailable_conditions,
             "exact_fallback": int(np.count_nonzero(metrics.fallback_used)),
-            "volume_underflow": int(np.count_nonzero(metrics.volume_status == "underflow")),
-            "volume_overflow": int(np.count_nonzero(metrics.volume_status == "overflow")),
+            "volume_underflow": int(
+                np.count_nonzero(metrics.volume_status == _StatusCode.UNDERFLOW)
+            ),
+            "volume_overflow": int(
+                np.count_nonzero(metrics.volume_status == _StatusCode.OVERFLOW)
+            ),
             "volume_m3_underflow": int(
-                np.count_nonzero(metrics.volume_m3_status == "underflow")
+                np.count_nonzero(metrics.volume_m3_status == _StatusCode.UNDERFLOW)
             ),
             "volume_m3_overflow": int(
-                np.count_nonzero(metrics.volume_m3_status == "overflow")
+                np.count_nonzero(metrics.volume_m3_status == _StatusCode.OVERFLOW)
             ),
             **{key: int(value) for key, value in mesh.element_counts.items()},
         },
@@ -213,8 +261,8 @@ class MeshQualityReport:
         physical_tag = int(self._mesh.physical_tags[row]) or None
         elementary_tag = int(self._mesh.elementary_tags[row]) or None
         coordinates, coordinate_status = self._coordinates(row)
-        condition_status = str(self._metrics.condition_status[row])
-        orientation_method = str(self._metrics.orientation_method[row])
+        condition_status = _decode_label(self._metrics.condition_status[row])
+        orientation_method = _decode_label(self._metrics.orientation_method[row])
         orientation_value = (
             int(self._metrics.orientation[row])
             if orientation_method in {"floating_filter", "exact_dyadic"}
@@ -237,7 +285,8 @@ class MeshQualityReport:
         center = [
             _finite(float(value)) for value in self._metrics.centers[row]
         ]
-        if str(self._metrics.center_status[row]) != "available":
+        center_status = _decode_label(self._metrics.center_status[row])
+        if center_status != "available":
             center = [None, None, None]
         return {
             "element_id": int(self._mesh.element_ids[row]),
@@ -253,7 +302,7 @@ class MeshQualityReport:
             "coordinates": coordinates,
             "coordinate_status": coordinate_status,
             "center": center,
-            "center_status": str(self._metrics.center_status[row]),
+            "center_status": center_status,
             "orientation": orientation_value,
             "orientation_status": orientation_status,
             "orientation_method": orientation_method,
@@ -268,15 +317,15 @@ class MeshQualityReport:
             ),
             "signed_volume": _finite(float(self._metrics.signed_volume[row])),
             "volume": _finite(float(self._metrics.volume[row])),
-            "volume_status": str(self._metrics.volume_status[row]),
-            "volume_method": str(self._metrics.volume_method[row]),
+            "volume_status": _decode_label(self._metrics.volume_status[row]),
+            "volume_method": _decode_label(self._metrics.volume_method[row]),
             "volume_error_bound": _finite(
                 float(self._metrics.volume_error_bound[row])
             ),
             "signed_volume_m3": _finite(float(self._metrics.signed_volume_m3[row])),
             "volume_m3": _finite(float(self._metrics.volume_m3[row])),
-            "volume_m3_status": str(self._metrics.volume_m3_status[row]),
-            "volume_m3_method": str(self._metrics.volume_m3_method[row]),
+            "volume_m3_status": _decode_label(self._metrics.volume_m3_status[row]),
+            "volume_m3_method": _decode_label(self._metrics.volume_m3_method[row]),
             "volume_m3_error_bound": _finite(
                 float(self._metrics.volume_m3_error_bound[row])
             ),
@@ -356,16 +405,21 @@ class MeshQualityReport:
         if target == self._mesh.source_path:
             raise ValueError("mesh-quality JSON target must not be the source mesh")
         header = self._header()
+        serialized_header = [
+            (
+                json.dumps(key),
+                json.dumps(value, allow_nan=False, separators=(",", ":")),
+            )
+            for key, value in header.items()
+        ]
         with target.open("x", encoding="utf-8") as handle:
             handle.write("{")
-            first = True
-            for key, value in header.items():
-                if not first:
+            for index, (key, value) in enumerate(serialized_header):
+                if index:
                     handle.write(",")
-                handle.write(json.dumps(key))
+                handle.write(key)
                 handle.write(":")
-                handle.write(json.dumps(value, allow_nan=False, separators=(",", ":")))
-                first = False
+                handle.write(value)
             handle.write(',"nodes":[')
             for row in range(len(self._mesh.node_ids)):
                 if row:
@@ -389,7 +443,7 @@ class MeshQualityReport:
             handle.write("]}\n")
         return target
 
-    def _ranked_rows(self, metric: str, limit: int) -> list[int]:
+    def _selection(self, metric: str, limit: int) -> "_Selection":
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
             raise ValueError("limit must be a non-negative integer")
         element_ids = self._mesh.element_ids
@@ -397,13 +451,13 @@ class MeshQualityReport:
             singular = [
                 row
                 for row in range(len(element_ids))
-                if self._metrics.condition_status[row] == "exact_singular"
+                if self._metrics.condition_status[row] == _StatusCode.EXACT_SINGULAR
             ]
             singular.sort(key=lambda row: int(element_ids[row]))
             finite = [
                 row
                 for row in range(len(element_ids))
-                if self._metrics.condition_status[row] == "available"
+                if self._metrics.condition_status[row] == _StatusCode.AVAILABLE
             ]
             finite.sort(
                 key=lambda row: (-float(self._metrics.kappa_j[row]), int(element_ids[row]))
@@ -412,15 +466,16 @@ class MeshQualityReport:
                 row
                 for row in range(len(element_ids))
                 if self._metrics.condition_status[row]
-                not in {"available", "exact_singular"}
+                not in {_StatusCode.AVAILABLE, _StatusCode.EXACT_SINGULAR}
             ]
             unresolved.sort(key=lambda row: int(element_ids[row]))
-            return (singular + finite + unresolved)[:limit]
-        if metric == "volume":
+            ranked = singular + finite
+        elif metric == "volume":
             finite = [
                 row
                 for row in range(len(element_ids))
-                if self._metrics.volume_status[row] in {"available", "exact_zero"}
+                if self._metrics.volume_status[row]
+                in {_StatusCode.AVAILABLE, _StatusCode.EXACT_ZERO}
             ]
             finite.sort(
                 key=lambda row: (float(self._metrics.volume[row]), int(element_ids[row]))
@@ -428,33 +483,59 @@ class MeshQualityReport:
             finite_rows = set(finite)
             unresolved = [row for row in range(len(element_ids)) if row not in finite_rows]
             unresolved.sort(key=lambda row: int(element_ids[row]))
-            return (finite + unresolved)[:limit]
-        raise ValueError("metric must be 'kappa_j' or 'volume'")
+            ranked = finite
+        else:
+            raise ValueError("metric must be 'kappa_j' or 'volume'")
+        return _Selection(
+            ranked=tuple(ranked[:limit]),
+            remainder=tuple(unresolved[:limit]),
+            ranked_total=len(ranked),
+            remainder_total=len(unresolved),
+        )
 
     def show_summary(self) -> str:
         counts = self._summary["counts"]
-        text = (
+        lines = [
             f"Mesh quality: {counts['checked_tetrahedra']} tetrahedra; "
             f"{counts['available_volume']} measurable volumes; "
             f"{counts['exact_zero']} exact-zero; "
             f"{counts['negative_orientation']} negative orientation."
-        )
+        ]
+        statistics = self._summary["statistics"]
+        lines.append(_format_statistics("Volume", "mesh_unit^3", statistics["volume"]))
+        if self._length_scale_m is not None:
+            lines.append(_format_statistics("SI volume", "m^3", statistics["volume_m3"]))
+        lines.append(_format_statistics("Kappa(J)", "dimensionless", statistics["kappa_j"]))
         warnings = self._summary["warnings"]
         if warnings:
-            text += "\n" + "\n".join(f"Warning: {item}" for item in warnings)
+            lines.extend(f"Warning: {item}" for item in warnings)
+        text = "\n".join(lines)
         print(text)
         return text
 
     def show_worst_elements(self, metric: str = "kappa_j", limit: int = 10) -> str:
-        rows = self._ranked_rows(metric, limit)
-        lines = [f"Worst elements by {metric}", "element_id\tvalue\tstatus"]
-        for row in rows:
-            record = self._element_record(row)
-            value = record[metric]
-            status = (
-                record["condition_status"] if metric == "kappa_j" else record["volume_status"]
-            )
-            lines.append(f"{record['element_id']}\t{value}\t{status}")
+        selection = self._selection(metric, limit)
+        lines = [
+            f"Worst elements by {metric}",
+            (
+                f"ranked selected={len(selection.ranked)}/{selection.ranked_total}; "
+                f"remainder selected={len(selection.remainder)}/{selection.remainder_total}"
+            ),
+            "group\telement_id\tvalue\tstatus",
+        ]
+        for group, rows in (
+            ("ranked", selection.ranked),
+            ("remainder", selection.remainder),
+        ):
+            for row in rows:
+                record = self._element_record(row)
+                value = record[metric]
+                status = (
+                    record["condition_status"]
+                    if metric == "kappa_j"
+                    else record["volume_status"]
+                )
+                lines.append(f"{group}\t{record['element_id']}\t{value}\t{status}")
         text = "\n".join(lines)
         print(text)
         return text
@@ -472,64 +553,135 @@ class MeshQualityReport:
         if metric not in {"kappa_j", "volume"}:
             raise ValueError("metric must be 'kappa_j' or 'volume'")
         if element_ids is None:
-            rows = self._ranked_rows(metric, limit)
+            selection = self._selection(metric, limit)
+            grouped_rows = (
+                ("ranked", selection.ranked),
+                ("remainder", selection.remainder),
+            )
         else:
             row_by_id = {
                 int(element_id): row
                 for row, element_id in enumerate(self._mesh.element_ids)
             }
-            requested = [int(element_id) for element_id in element_ids]
+            requested = []
+            for element_id in element_ids:
+                if isinstance(element_id, (bool, np.bool_)) or not isinstance(
+                    element_id, Integral
+                ):
+                    raise TypeError(
+                        "element_ids must contain only Python or NumPy integers, excluding booleans"
+                    )
+                requested.append(int(element_id))
             unknown = [element_id for element_id in requested if element_id not in row_by_id]
             if unknown:
                 raise KeyError(f"unknown tetrahedron element IDs: {unknown}")
-            rows = [row_by_id[element_id] for element_id in requested]
+            requested_rows = tuple(row_by_id[element_id] for element_id in requested)
+            grouped_rows = (("requested", requested_rows),)
         figure = go.Figure()
-        unavailable: list[int] = []
+        unavailable: list[tuple[int, str]] = []
+        drawn_counts = {group: 0 for group, _ in grouped_rows}
         edges = ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3))
-        for row in rows:
-            record = self._element_record(row)
-            coordinates = record["coordinates"]
-            if coordinates is None or record["coordinate_status"] != "available":
-                unavailable.append(record["element_id"])
-                continue
-            x: list[float | None] = []
-            y: list[float | None] = []
-            z: list[float | None] = []
-            for first, second in edges:
-                x.extend((coordinates[first][0], coordinates[second][0], None))
-                y.extend((coordinates[first][1], coordinates[second][1], None))
-                z.extend((coordinates[first][2], coordinates[second][2], None))
-            hover = (
-                f"element={record['element_id']}<br>nodes={record['connectivity']}"
-                f"<br>coordinates={coordinates}<br>physical={record['physical_name']}"
-                f"<br>volume={record['volume']}"
-                f" ({record['volume_status']})<br>kappa={record['kappa_j']}"
-                f" ({record['condition_status']})<extra></extra>"
-            )
-            figure.add_trace(
-                go.Scatter3d(
-                    x=x,
-                    y=y,
-                    z=z,
-                    mode="lines",
-                    name=f"element {record['element_id']}",
-                    hovertemplate=hover,
+        for group, rows in grouped_rows:
+            for row in rows:
+                record = self._element_record(row)
+                coordinates = record["coordinates"]
+                if coordinates is None or record["coordinate_status"] != "available":
+                    unavailable.append(
+                        (record["element_id"], record["coordinate_status"])
+                    )
+                    continue
+                x: list[float | None] = []
+                y: list[float | None] = []
+                z: list[float | None] = []
+                for first, second in edges:
+                    x.extend((coordinates[first][0], coordinates[second][0], None))
+                    y.extend((coordinates[first][1], coordinates[second][1], None))
+                    z.extend((coordinates[first][2], coordinates[second][2], None))
+                hover = (
+                    f"element={record['element_id']}<br>nodes={record['connectivity']}"
+                    f"<br>coordinates={coordinates}<br>physical={record['physical_name']}"
+                    f"<br>volume={record['volume']}"
+                    f" ({record['volume_status']})<br>kappa={record['kappa_j']}"
+                    f" ({record['condition_status']})<extra></extra>"
                 )
-            )
-            figure.add_trace(
-                go.Scatter3d(
-                    x=[point[0] for point in coordinates],
-                    y=[point[1] for point in coordinates],
-                    z=[point[2] for point in coordinates],
-                    mode="markers",
-                    name=f"element {record['element_id']} vertices",
-                    showlegend=False,
-                    hovertemplate=hover,
+                figure.add_trace(
+                    go.Scatter3d(
+                        x=x,
+                        y=y,
+                        z=z,
+                        mode="lines",
+                        name=f"element {record['element_id']}",
+                        hovertemplate=hover,
+                    )
                 )
-            )
+                figure.add_trace(
+                    go.Scatter3d(
+                        x=[point[0] for point in coordinates],
+                        y=[point[1] for point in coordinates],
+                        z=[point[2] for point in coordinates],
+                        mode="markers",
+                        name=f"element {record['element_id']} vertices",
+                        showlegend=False,
+                        hovertemplate=hover,
+                    )
+                )
+                drawn_counts[group] += 1
+        selected_counts = {group: len(rows) for group, rows in grouped_rows}
+        count_text = "; ".join(
+            f"{group} selected={selected_counts[group]} drawn={drawn_counts[group]}"
+            for group, _ in grouped_rows
+        )
+        unavailable_text = ", ".join(
+            f"{element_id} ({reason})" for element_id, reason in unavailable
+        )
         figure.update_layout(
             scene={"aspectmode": "data"},
-            title=f"Tetrahedra by {metric}",
-            meta={"unavailable_element_ids": unavailable},
+            title=f"Tetrahedra by {metric} — {count_text}",
+            annotations=(
+                [
+                    {
+                        "xref": "paper",
+                        "yref": "paper",
+                        "x": 0.0,
+                        "y": 1.0,
+                        "showarrow": False,
+                        "text": f"Undrawable: {unavailable_text}",
+                        "align": "left",
+                    }
+                ]
+                if unavailable
+                else []
+            ),
+            meta={
+                "selected_group_counts": selected_counts,
+                "drawn_group_counts": drawn_counts,
+                "unavailable_element_ids": [
+                    element_id for element_id, _ in unavailable
+                ],
+                "unavailable_elements": [
+                    {"element_id": element_id, "reason": reason}
+                    for element_id, reason in unavailable
+                ],
+            },
         )
         return figure
+
+
+@dataclass(frozen=True, slots=True)
+class _Selection:
+    ranked: tuple[int, ...]
+    remainder: tuple[int, ...]
+    ranked_total: int
+    remainder_total: int
+
+
+def _format_statistics(label: str, units: str, values: Mapping[str, Any]) -> str:
+    samples = int(values["sample_count"])
+    excluded = int(values["excluded_count"])
+    if not samples:
+        return f"{label} [{units}]: no samples; excluded={excluded}."
+    return (
+        f"{label} [{units}]: samples={samples}; excluded={excluded}; "
+        f"min={values['min']}; median={values['median']}; "
+        f"p95={values['p95']}; p99={values['p99']}; max={values['max']}."
+    )

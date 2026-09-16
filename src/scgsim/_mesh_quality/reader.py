@@ -93,18 +93,21 @@ class _Lines:
         self.bytes_read = 0
         self.line_number = 0
 
-    def read(self, *, required: bool = False) -> bytes:
+    def read(self, *, required: bool = False) -> bytes | None:
         line = self.handle.readline()
-        if line:
-            self.hasher.update(line)
-            self.bytes_read += len(line)
-            self.line_number += 1
-        elif required:
+        if line == b"":
+            if not required:
+                return None
             raise ValueError(f"truncated MSH file at line {self.line_number + 1}")
+        self.hasher.update(line)
+        self.bytes_read += len(line)
+        self.line_number += 1
         return line
 
-    def text(self, *, required: bool = False) -> str:
+    def text(self, *, required: bool = False) -> str | None:
         raw = self.read(required=required)
+        if raw is None:
+            return None
         try:
             return raw.decode("ascii").rstrip("\r\n")
         except UnicodeDecodeError as error:
@@ -129,6 +132,7 @@ def _readonly(value: np.ndarray) -> np.ndarray:
 
 def _count(lines: _Lines, section: str) -> int:
     raw = lines.text(required=True)
+    assert raw is not None
     try:
         value = int(raw)
     except ValueError as error:
@@ -140,6 +144,7 @@ def _count(lines: _Lines, section: str) -> int:
 
 def _expect(lines: _Lines, expected: str) -> None:
     actual = lines.text(required=True)
+    assert actual is not None
     if actual != expected:
         raise ValueError(f"expected {expected!r}, found {actual!r}")
 
@@ -174,9 +179,9 @@ def read_msh22(mesh_path: str | Path) -> MeshData:
         lines = _Lines(handle)
         while True:
             section = lines.text()
+            if section is None:
+                break
             if section == "":
-                if handle.tell() == before.size:
-                    break
                 continue
             if not section.startswith("$") or section.startswith("$End"):
                 raise ValueError(
@@ -189,7 +194,9 @@ def read_msh22(mesh_path: str | Path) -> MeshData:
                 if name in seen:
                     raise ValueError("duplicate $MeshFormat section")
                 seen.add(name)
-                descriptor = lines.text(required=True).split()
+                raw_descriptor = lines.text(required=True)
+                assert raw_descriptor is not None
+                descriptor = raw_descriptor.split()
                 if descriptor != ["2.2", "0", "8"]:
                     if len(descriptor) >= 2 and descriptor[1] == "1":
                         raise ValueError("binary MSH files are unsupported; expected ASCII MSH 2.2")
@@ -202,6 +209,7 @@ def read_msh22(mesh_path: str | Path) -> MeshData:
                 seen.add(name)
                 for _ in range(_count(lines, "PhysicalNames")):
                     raw = lines.text(required=True)
+                    assert raw is not None
                     match = _PHYSICAL_NAME.fullmatch(raw)
                     if match is None:
                         raise ValueError(f"malformed PhysicalNames row: {raw!r}")
@@ -217,7 +225,9 @@ def read_msh22(mesh_path: str | Path) -> MeshData:
                 seen.add(name)
                 identifiers: set[int] = set()
                 for _ in range(_count(lines, "Nodes")):
-                    fields = lines.text(required=True).split()
+                    raw_fields = lines.text(required=True)
+                    assert raw_fields is not None
+                    fields = raw_fields.split()
                     if len(fields) != 4:
                         raise ValueError("each MSH 2.2 node row must have four fields")
                     try:
@@ -239,7 +249,9 @@ def read_msh22(mesh_path: str | Path) -> MeshData:
                     raise ValueError("$Nodes must precede $Elements")
                 seen.add(name)
                 for _ in range(_count(lines, "Elements")):
-                    fields = lines.text(required=True).split()
+                    raw_fields = lines.text(required=True)
+                    assert raw_fields is not None
+                    fields = raw_fields.split()
                     if len(fields) < 3:
                         raise ValueError("malformed MSH 2.2 element row")
                     try:
@@ -285,6 +297,7 @@ def read_msh22(mesh_path: str | Path) -> MeshData:
             rows = 0
             while True:
                 raw = lines.text(required=True)
+                assert raw is not None
                 if raw == end:
                     break
                 if raw.startswith("$End") or raw.startswith("$"):

@@ -83,18 +83,31 @@ file.
 
 Summaries keep available values, exact singularities, numerical-resolution
 failures, missing nodes, nonfinite coordinates, and representation failures in
-separate counts. Statistics and worst-element ranks use only values whose
-status makes them comparable. Condition-number ranking places exact
-singularities first, then finite values in descending order; volume ranking is
-ascending. Element ID breaks ties deterministically. These ranks describe the
-selected diagnostic metric only and do not impose a pass/fail threshold.
+separate counts. Volume and condition statistics state their units, sample
+count, and excluded count; a metric with no comparable samples says so
+explicitly. The median, 95th percentile, and 99th percentile use the binary64
+position \((n-1)q\) with rational interpolation between the two selected
+binary64 endpoints. Statistics and worst-element ranks use only values whose
+status makes them comparable.
+
+Condition-number ranking places exact singularities first, then finite values
+in descending order; volume ranking is ascending. Element ID breaks ties
+deterministically. Each display has a ranked group and a separately visible
+unavailable/remainder group. `limit=10` can therefore show up to ten rows from
+each group, while `limit=0` shows none. An element that lacks the *other*
+metric remains eligible when its selected metric is comparable. These ranks
+describe the selected diagnostic metric only and do not impose a pass/fail
+threshold.
 
 `show_summary()` and `show_worst_elements()` provide text displays.
 `show_elements()` imports Plotly lazily and draws the six authored edges for
 each selected tetrahedron as lines and its four vertices once as markers, with
-`aspectmode="data"`. Degenerate vertices remain
-visible without rewriting coordinates or inflating a tiny nonzero dimension.
-Unknown requested element IDs fail instead of being dropped.
+`aspectmode="data"`. Degenerate vertices remain visible without rewriting
+coordinates or inflating a tiny nonzero dimension. The figure title reports
+selected and drawn counts for each group, and undrawable IDs and reasons are
+visible annotations. Explicit `element_ids` preserve caller order, ignore the
+ranking limit, accept Python and NumPy integers other than booleans, and reject
+other types. Unknown requested element IDs fail instead of being dropped.
 
 These inert coordinate sets illustrate three distinct outcomes; they are not
 executed by the documentation build and do not define acceptance thresholds:
@@ -108,16 +121,21 @@ thin_nonzero = ((0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 2**-100))
 ```
 
 The regular set uses the documented reference matrix and has
-\(\kappa(J)=1\). The coplanar set is exactly singular. The thin set has a
-nonzero orientation and volume but a large condition number; the report keeps
-those facts separate.
+\(\kappa(J)=1\). The coplanar set is exactly singular. With the shown
+`2**-100` height, the thin set has a nonzero orientation and volume but a
+numerically unresolved condition number; the report keeps those facts
+separate.
 
 ## Serialization and limitations
 
-`to_dict()` returns detached plain containers. `save_json()` streams the same
-schema to an exclusively created output file and refuses to overwrite the mesh
-itself. Nonfinite or unavailable numerical values are serialized as `null` with
-an explicit reason; JSON never contains `NaN` or `Infinity` tokens.
+`to_dict()` returns detached plain containers. `save_json()` validates and
+strictly serializes the complete header before exclusively creating the output,
+then streams nodes and elements without materializing the complete report. It
+refuses to overwrite either an existing path or the mesh itself. Nonfinite or
+unavailable numerical values are serialized as `null` with an explicit reason;
+JSON never contains `NaN` or `Infinity` tokens. A later operating-system write
+failure can leave a partial newly created output file; this is streaming output,
+not an atomic replacement protocol.
 
 This V1 surface does not reorder tetrahedra to match solver orientation, repair
 connectivity, evaluate higher-order tetrahedra, infer solver-side acceptance,
