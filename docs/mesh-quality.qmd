@@ -1,0 +1,134 @@
+---
+title: "Tetrahedral Mesh Quality"
+---
+
+`scgsim.palace.check_mesh_quality()` reads a solver-bound Gmsh MSH 2.2 ASCII
+file without starting Gmsh or Palace. It returns an immutable
+`MeshQualityReport` for the linear four-node tetrahedra that are actually in
+that file. This is a diagnostic reading surface, not a mesh repair step and not
+a scientific acceptance gate.
+
+## Input and ownership
+
+The reader accepts only MSH 2.2 ASCII files and preserves node and element IDs,
+element order, original binary64 coordinates, raw tag order, and
+dimension-qualified physical names. Other element types are counted but are
+not silently reinterpreted as linear tetrahedra. Known public MSH element codes
+must have their standard node arity; future unknown codes remain counted as
+unknown rather than acquiring a guessed dimension. Missing node references and
+nonfinite coordinates stay attached to their element IDs as unavailable
+records; malformed sections and duplicate IDs fail closed.
+
+Reading is sequential. The report binds the parsed byte count, SHA-256, and
+before/after file identity, and does not retain an open file or reread the mesh
+for later summaries, export, or visualization. A report owns read-only compact
+arrays. Returned dictionaries and Plotly figures are detached presentation
+objects and cannot mutate retained measurements.
+
+## Numerical meaning
+
+For authored tetrahedron vertices \(p_0,p_1,p_2,p_3\), the edge matrix is
+
+\[
+B = [p_1-p_0\; p_2-p_0\; p_3-p_0].
+\]
+
+The signed mesh-unit volume is \(\det(B)/6\); the reported volume magnitude is
+\(|\det(B)|/6\). Orientation and magnitude are separate: a positive,
+negative, or exact-zero orientation is never inferred from a rounded absolute
+volume.
+
+The fast orientation path first applies one exactly reversible power-of-two
+scale to all twelve coordinates of the element, before subtraction. It uses a
+Shewchuk-style determinant error bound \(E=(7+56u)uP\), with binary64 unit
+roundoff \(u=2^{-53}\) and \(P\) formed in the matching triple-product order,
+only for the sign decision. A bound
+that is inconclusive, a scale that loses a finite nonzero value, or a
+representation-boundary ambiguity takes the exact fallback based on
+`float.as_integer_ratio()` values from the original coordinates. Nonfinite
+coordinates remain locatable but numerically unavailable. The report
+retains the determinant estimate, absolute sign bound, and the selected
+method. The exact fallback computes mesh-unit and optional SI volume
+independently before either result is rounded to binary64, so mesh and SI
+underflow or overflow remain distinct statuses rather than false zero or
+infinity.
+
+The condition metric uses
+
+\[
+J = B W^{-1},\qquad
+W = \begin{bmatrix}
+1 & 1/2 & 1/2 \\
+0 & \sqrt{3}/2 & \sqrt{3}/6 \\
+0 & 0 & \sqrt{2/3}
+\end{bmatrix},
+\qquad \kappa(J)=\sigma_{max}/\sigma_{min}.
+\]
+
+A regular reference tetrahedron therefore has \(\kappa=1\). Exact zero
+determinants are singular. A nonzero exact determinant whose smallest singular
+value is below the numerical-resolution threshold is reported as numerically
+unresolved, not relabeled geometrically singular.
+The threshold is \(\sigma_{min}\leq3\epsilon\sigma_{max}\), with binary64
+spacing \(\epsilon=2^{-52}\). It is a reporting status, not a scientific
+quality gate.
+
+## Units, summaries, and ranking
+
+`length_scale_m` is optional. Without it, mesh-unit volume is available and SI
+volume is explicitly unavailable. Palace simulation wrappers pass their
+existing micrometre model scale (`1e-6`) after a mesh has been built. A direct
+call may supply another finite positive scale but does not infer one from the
+file.
+
+Summaries keep available values, exact singularities, numerical-resolution
+failures, missing nodes, nonfinite coordinates, and representation failures in
+separate counts. Statistics and worst-element ranks use only values whose
+status makes them comparable. Condition-number ranking places exact
+singularities first, then finite values in descending order; volume ranking is
+ascending. Element ID breaks ties deterministically. These ranks describe the
+selected diagnostic metric only and do not impose a pass/fail threshold.
+
+`show_summary()` and `show_worst_elements()` provide text displays.
+`show_elements()` imports Plotly lazily and draws the six authored edges for
+each selected tetrahedron as lines and its four vertices once as markers, with
+`aspectmode="data"`. Degenerate vertices remain
+visible without rewriting coordinates or inflating a tiny nonzero dimension.
+Unknown requested element IDs fail instead of being dropped.
+
+These inert coordinate sets illustrate three distinct outcomes; they are not
+executed by the documentation build and do not define acceptance thresholds:
+
+```python
+# p0, p1, p2, p3 in authored mesh units
+regular = ((0, 0, 0), (1, 0, 0), (0.5, 3**0.5 / 2, 0),
+           (0.5, 3**0.5 / 6, (2 / 3)**0.5))
+coplanar = ((0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0))
+thin_nonzero = ((0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 2**-100))
+```
+
+The regular set uses the documented reference matrix and has
+\(\kappa(J)=1\). The coplanar set is exactly singular. The thin set has a
+nonzero orientation and volume but a large condition number; the report keeps
+those facts separate.
+
+## Serialization and limitations
+
+`to_dict()` returns detached plain containers. `save_json()` streams the same
+schema to an exclusively created output file and refuses to overwrite the mesh
+itself. Nonfinite or unavailable numerical values are serialized as `null` with
+an explicit reason; JSON never contains `NaN` or `Infinity` tokens.
+
+This V1 surface does not reorder tetrahedra to match solver orientation, repair
+connectivity, evaluate higher-order tetrahedra, infer solver-side acceptance,
+or prove convergence. It reads the stored mesh exactly once and reports its
+own numerical evidence.
+
+The numerical design follows Shewchuk's
+[adaptive-predicate guidance](https://www.cs.cmu.edu/~quake/robust.html) for
+sign decisions and uses NumPy's documented
+[SVD rank-resolution model](https://numpy.org/doc/stable/reference/generated/numpy.linalg.matrix_rank.html)
+only as a numerical-resolution indicator. The
+[MFEM mesh implementation](https://docs.mfem.org/4.9/mesh_8cpp_source.html) may
+reorder elements in its own workflow; that does not redefine the orientation
+of the original MSH connectivity inspected here.

@@ -7,8 +7,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from scgsim._mesh_quality import MeshQualityReport, check_mesh_quality
 from scgsim.sgb import VacuumRegionSpec
 from ._config import (
+    _MODEL_L0_M,
     TerminalBinding,
     build_electrostatic_config,
     configure_numerical_controls,
@@ -317,6 +319,15 @@ class ElectrostaticSim:
             indium_ground_bump_fill=prepared.indium_ground_bump_fill,
         )
         return self._mesh_result.mesh_path
+
+    def check_mesh_quality(self) -> MeshQualityReport:
+        """Inspect the current mesh without changing simulation state."""
+
+        if self._mesh_result is None:
+            raise ValueError("mesh() must run before check_mesh_quality().")
+        return check_mesh_quality(
+            self._mesh_result.mesh_path, length_scale_m=_MODEL_L0_M
+        )
 
     def write_config(self) -> Path:
         self._invalidate_config()

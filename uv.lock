@@ -2088,8 +2088,12 @@ wheels = [
 
 [[package]]
 name = "scgsim"
-version = "1.0.0.dev23"
+version = "1.0.0.dev24"
 source = { editable = "." }
+dependencies = [
+    { name = "numpy" },
+    { name = "plotly" },
+]
 
 [package.optional-dependencies]
 aedt = [
@@ -2104,7 +2108,6 @@ palace = [
     { name = "gdsfactory" },
     { name = "gdstk" },
     { name = "gmsh" },
-    { name = "plotly" },
 ]
 visualization = [
     { name = "meshio" },
@@ -2121,8 +2124,9 @@ requires-dist = [
     { name = "jupytext", marker = "extra == 'dev'" },
     { name = "meshio", marker = "extra == 'visualization'", specifier = ">=5.3,<6" },
     { name = "nbformat", marker = "extra == 'dev'" },
+    { name = "numpy", specifier = ">=2.0.0" },
     { name = "pillow", marker = "extra == 'visualization'", specifier = ">=11,<13" },
-    { name = "plotly", marker = "extra == 'palace'", specifier = ">=6.0.0" },
+    { name = "plotly", specifier = ">=6.0.0" },
     { name = "pyaedt", marker = "extra == 'aedt'", specifier = "==1.3.0" },
     { name = "pyvista", extras = ["jupyter"], marker = "extra == 'visualization'", specifier = ">=0.48,<0.49" },
 ]

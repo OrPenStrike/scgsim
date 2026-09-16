@@ -37,6 +37,11 @@ Palace and AEDT resolved quantities remain bound to their exact receipt,
 artifact-hash, handoff, and solver identities. Presentation never weakens those
 bindings and makes no numerical-convergence or cross-solver-agreement claim.
 
+The separate [Tetrahedral Mesh Quality](mesh-quality.qmd) report is bound to a
+single MSH file read. Its volume, orientation, and condition evidence are
+geometry diagnostics, not solver results, and do not create a hidden quality
+threshold or convergence claim.
+
 ## Multi-margin Surface EPR reading surface
 
 The existing inspection and strict-resolution split also governs native

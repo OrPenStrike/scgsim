@@ -60,6 +60,8 @@ website:
           href: docs/execution-profiles.qmd
         - text: "Unified report model"
           href: docs/report-model.qmd
+        - text: "Tetrahedral mesh quality"
+          href: docs/mesh-quality.qmd
     - id: specs
       title: "Specs"
       style: floating

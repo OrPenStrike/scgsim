@@ -43,6 +43,7 @@ binding is excluded from this refactor rather than represented as a placeholder.
 | Run identity, handoff, profiles, receipts | One common SCGSim contract |
 | Physical result meaning | Solver-specific, never flattened into a false common quantity |
 | Report navigation, provenance, cost presentation | SCGSim report/resolver surfaces |
+| Offline tetrahedral mesh diagnostics | `scgsim._mesh_quality`, exposed through `scgsim.palace` |
 | Public component-simulation notebook source | OrPen SC PDK |
 
 ## Semantic facts boundary
@@ -84,6 +85,12 @@ SC PDK owns the public component examples and calls the shared runtime directly.
 
 The Palace Electrostatic/Eigenmode and version-locked AEDT runtime families are
 implemented but remain `CONVERGING`, not V1 stable.
+
+Palace mesh-quality inspection is an offline reader over the emitted MSH file.
+It neither owns mesh construction nor starts a native backend. The reader binds
+one immutable parsed snapshot to the file bytes and leaves mesh acceptance and
+scientific convergence outside the report contract. See
+[Tetrahedral Mesh Quality](mesh-quality.qmd).
 
 ## Palace preparation lifecycle
 

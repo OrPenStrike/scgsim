@@ -4,10 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scgsim"
-version = "1.0.0.dev23"
+version = "1.0.0.dev24"
 description = "Research-first electromagnetic simulation workflows for superconducting circuits."
 readme = "README.md"
 requires-python = "~=3.12.0"
+dependencies = [
+    "numpy>=2.0.0",
+    "plotly>=6.0.0",
+]
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 
@@ -20,7 +24,6 @@ palace = [
     "gdsfactory>=9,<10",
     "gdstk",
     "gmsh",
-    "plotly>=6.0.0",
 ]
 visualization = [
     "meshio>=5.3,<6",
