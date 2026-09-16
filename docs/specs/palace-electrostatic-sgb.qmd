@@ -176,10 +176,18 @@ These values are **CONVERGING**, not accepted scientific defaults or Gates:
 | `unassigned_conductor_policy` | `"ground"` |
 | `exterior_boundary_policy` | `"none"` |
 | `Model.Refinement.Nonconformal` | `false` unless the notebook sets `amr_nonconformal=True` |
+| `Model.Refinement.SaveAdaptMesh` | omitted unless the notebook sets `save_adapt_mesh=True` or `False` |
 
 Palace defaults `Nonconformal` to `true` when the key is omitted. SCGSim always
 writes the key and defaults it to `false` (conformal tet AMR). Notebooks opt
 into nonconformal AMR with `set_numerical(amr_nonconformal=True)`.
+
+`set_numerical(save_adapt_mesh=...)` accepts only `True`, `False`, or `None`.
+`None` (including omission) preserves the previous SCGSim numerical payload and
+config bytes by omitting `SaveAdaptMesh`; a Boolean writes that exact Boolean to
+`Model.Refinement.SaveAdaptMesh`. The control asks Palace whether to save its
+final adapted mesh. It does not guarantee that a file is produced for every
+solver run or private workflow.
 
 `add_ground(net_id=...)` is the explicit physical-conductor path. It is
 independent of `exterior_boundary_policy="ground"`, which adds the finite

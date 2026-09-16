@@ -545,6 +545,8 @@ def _build_refinement(numerical: Mapping[str, Any]) -> dict[str, Any]:
     }
     if numerical.get("save_adapt_iterations") is not None:
         refinement["SaveAdaptIterations"] = bool(numerical["save_adapt_iterations"])
+    if numerical.get("save_adapt_mesh") is not None:
+        refinement["SaveAdaptMesh"] = bool(numerical["save_adapt_mesh"])
     if numerical.get("amr_update_fraction") is not None:
         refinement["UpdateFraction"] = float(numerical["amr_update_fraction"])
     return refinement
@@ -578,6 +580,7 @@ def configure_numerical_controls(
     amr_tolerance: float = 1e-2,
     amr_update_fraction: float | None = None,
     save_adapt_iterations: bool | None = None,
+    save_adapt_mesh: bool | None = None,
     estimator_mg: bool | None = None,
     output_paraview: bool | None = None,
     output_grid_function: bool | None = None,
@@ -640,6 +643,8 @@ def configure_numerical_controls(
         save_adapt_iterations, bool
     ):
         raise TypeError("save_adapt_iterations must be bool or None.")
+    if save_adapt_mesh is not None and not isinstance(save_adapt_mesh, bool):
+        raise TypeError("save_adapt_mesh must be bool or None.")
     if estimator_mg is not None and not isinstance(estimator_mg, bool):
         raise TypeError("estimator_mg must be bool or None.")
     if output_paraview is not None and not isinstance(output_paraview, bool):
@@ -647,7 +652,7 @@ def configure_numerical_controls(
     if output_grid_function is not None and not isinstance(output_grid_function, bool):
         raise TypeError("output_grid_function must be bool or None.")
 
-    return {
+    controls = {
         "order": int(order),
         "tolerance": float(tolerance),
         "max_iterations": int(max_iterations),
@@ -667,6 +672,9 @@ def configure_numerical_controls(
         "output_paraview": output_paraview,
         "output_grid_function": output_grid_function,
     }
+    if save_adapt_mesh is not None:
+        controls["save_adapt_mesh"] = save_adapt_mesh
+    return controls
 
 
 def _domain_energy_rows(
