@@ -51,6 +51,7 @@ def prepare_mesh_input(
             prepared_stack,
             source_stack=stack,
             variant=route_a_thin_film,
+            component=component,
         )
     indium_fill = None
     prepared_component = component

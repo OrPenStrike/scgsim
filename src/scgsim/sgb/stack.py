@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Mapping, Sequence
 from math import isfinite
 from typing import Any
@@ -98,6 +99,14 @@ def _solution_regions(
         semantic_id = _identifier(level_name, "PDK solution level id")
         material_id, z_min_um, thickness_um, _ = _level_facts(level, level_name)
         _require_material(material_id, materials, f"solution region {semantic_id!r}")
+        authored_geometry = info.get("geometry", {})
+        if not isinstance(authored_geometry, Mapping):
+            raise TypeError(f"PDK solution level {semantic_id!r} geometry must be a mapping.")
+        source_outline = {
+            key: copy.deepcopy(authored_geometry[key])
+            for key in ("outer_loop", "hole_loops")
+            if key in authored_geometry
+        }
         result[semantic_id] = {
             "role": "solution_region",
             "material_id": material_id,
@@ -106,6 +115,7 @@ def _solution_regions(
                 "z_min_um": z_min_um,
                 "z_max_um": z_min_um + thickness_um,
                 "domain_bounds_um": dict(bounds),
+                **source_outline,
             },
             "metadata": {
                 "pdk_level_id": semantic_id,
@@ -157,11 +167,16 @@ def _semantic_layer_records(
             )
         material_id, z_um, thickness_um, priority = _level_facts(level, level_name)
         _require_material(material_id, materials, f"semantic layer {semantic_id!r}")
-        host = _identifier(
-            level_info.get("host_void_semantic_id"),
-            f"{semantic_id!r} host_void_semantic_id",
+        auto_host = "host_void_semantic_id" not in level_info
+        host = (
+            "VACUUM_REGION"
+            if auto_host
+            else _identifier(
+                level_info["host_void_semantic_id"],
+                f"{semantic_id!r} host_void_semantic_id",
+            )
         )
-        if host not in solution_region_ids:
+        if host not in solution_region_ids and not auto_host:
             raise ValueError(
                 f"semantic layer {semantic_id!r} host {host!r} is not a solution region."
             )
@@ -218,6 +233,7 @@ def _semantic_layer_records(
                 "pdk_semantic_authority": "layer_stack",
                 "component_semantic_authority": "component.info",
                 **component_metadata,
+                **({"host_reference_origin": "generated_background"} if auto_host else {}),
             },
             "net_id": _identifier(declaration["net_id"], f"{semantic_id!r} net_id"),
         }

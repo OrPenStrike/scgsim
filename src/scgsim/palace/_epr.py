@@ -187,6 +187,11 @@ def build_surface_epr_postprocessing(
             for margin_index, margin_um in enumerate(
                 preset.get("inset_margins_um", ())
             ):
+                _validate_native_mask_support(
+                    name=name,
+                    info=info,
+                    margin_um=float(margin_um),
+                )
                 mask_requests.append(
                     (index, name, info, preset, attrs, margin_index, float(margin_um))
                 )
@@ -236,6 +241,50 @@ def build_surface_epr_postprocessing(
             }
         )
     return rows, index_map
+
+
+def _validate_native_mask_support(
+    *,
+    name: str,
+    info: Mapping[str, Any],
+    margin_um: float,
+) -> None:
+    """Reject only positive masks that need unavailable side-resolved geometry."""
+    if margin_um == 0.0:
+        return
+    provenance = info.get("source_provenance")
+    unsupported = tuple(
+        support
+        for support in _surface_mask_support_records(provenance)
+        if support.get("positive_inset_supported") is False
+    )
+    if not unsupported:
+        return
+    details = tuple(
+        {
+            "reason": support.get("unsupported_reason"),
+            "sides": tuple(support.get("sides", ())),
+        }
+        for support in unsupported
+    )
+    raise ValueError(
+        f"Surface EPR group {name!r} cannot apply positive inset margin "
+        f"{margin_um} um to aggregated side contributions: {details!r}."
+    )
+
+
+def _surface_mask_support_records(value: Any) -> tuple[Mapping[str, Any], ...]:
+    if not isinstance(value, Mapping):
+        return ()
+    records: list[Mapping[str, Any]] = []
+    support = value.get("mask_support")
+    if isinstance(support, Mapping):
+        records.append(support)
+    sources = value.get("sources", ())
+    if isinstance(sources, (list, tuple)):
+        for source in sources:
+            records.extend(_surface_mask_support_records(source))
+    return tuple(records)
 
 
 def _structured_metadata(info: Mapping[str, Any]) -> dict[str, Any]:

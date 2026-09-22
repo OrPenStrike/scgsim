@@ -125,7 +125,7 @@ class ElectrostaticSim:
         self,
         padding: float | list[float] | tuple[float, ...] | Mapping[str, Any] = 0.0,
     ) -> None:
-        """Set an auto-generated vacuum envelope around non-vacuum solution regions."""
+        """Set six-direction padding for a route-aware generated vacuum region."""
         if self.airbox:
             raise ValueError(
                 "set_vacuum_region is mutually exclusive with set_airbox()."

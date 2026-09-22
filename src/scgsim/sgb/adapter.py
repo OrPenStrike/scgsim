@@ -1216,6 +1216,7 @@ def _route_a_sheet_interfaces(
                     "owner_semantic_ids": (entity.semantic_id, "AIR"),
                     "interface_kinds": ("MS", "MA"),
                     "recognition_rule": "route_a_surface_sheet_polygon",
+                    "intent_origin": "generated_route_a_surface_sheet",
                     "source_polygon_ids": (polygon_id,),
                     "valid_routes": ("A",),
                     "plane": {"axis": "z", "value_um": z_um},

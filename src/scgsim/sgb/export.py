@@ -95,8 +95,6 @@ def _structured_surface_group(
         "interface_type",
         "contact_kind",
         "face_kind",
-        "owner_semantic_ids",
-        "boundary_volume_ids",
         "conductor_component_id",
         "net_id",
         "equipotential_id",
@@ -104,6 +102,28 @@ def _structured_surface_group(
     )
     for field in same_fields:
         _require_same_metadata_field(field, sources)
+    ledger_coverage = tuple(
+        _has_authoritative_contribution_ledger(
+            source.metadata.get("source_provenance")
+        )
+        for source in sources
+    )
+    if any(ledger_coverage) and not all(ledger_coverage):
+        raise ValueError(
+            f"{first.surface_id} physical group mixes ledgered and legacy sources"
+        )
+    if all(ledger_coverage):
+        owner_semantic_ids = _grouped_source_ids(sources, "owner_semantic_ids")
+        boundary_volume_ids = _grouped_source_ids(sources, "boundary_volume_ids")
+    else:
+        for field in ("owner_semantic_ids", "boundary_volume_ids"):
+            _require_same_metadata_field(field, sources)
+        owner_semantic_ids = _nonempty_tuple(
+            first.metadata["owner_semantic_ids"], "owner_semantic_ids", first
+        )
+        boundary_volume_ids = _nonempty_tuple(
+            first.metadata["boundary_volume_ids"], "boundary_volume_ids", first
+        )
     provenance = (
         dict(first.metadata["source_provenance"])
         if first.surface_role == "lumped_port" and len(sources) == 1
@@ -125,12 +145,8 @@ def _structured_surface_group(
             first.metadata.get("contact_kind"), "contact_kind", first
         ),
         face_kind=str(first.metadata["face_kind"]),
-        owner_semantic_ids=_nonempty_tuple(
-            first.metadata["owner_semantic_ids"], "owner_semantic_ids", first
-        ),
-        adjacent_solution_volume_ids=_nonempty_tuple(
-            first.metadata["boundary_volume_ids"], "boundary_volume_ids", first
-        ),
+        owner_semantic_ids=owner_semantic_ids,
+        adjacent_solution_volume_ids=boundary_volume_ids,
         conductor_component_id=_optional_string(
             first.metadata.get("conductor_component_id"),
             "conductor_component_id",
@@ -145,6 +161,29 @@ def _structured_surface_group(
             "surface_role": first.surface_role,
             **_custom_physical_attribute(first),
         },
+    )
+
+
+def _grouped_source_ids(
+    sources: Sequence[SurfacePlanRecord], field: str
+) -> tuple[str, ...]:
+    """Union group labels while each source provenance retains its local pairing."""
+    result: list[str] = []
+    for source in sources:
+        values = _nonempty_tuple(source.metadata[field], field, source)
+        for value in values:
+            if value not in result:
+                result.append(value)
+    return tuple(result)
+
+
+def _has_authoritative_contribution_ledger(value: object) -> bool:
+    return (
+        isinstance(value, Mapping)
+        and value.get("surface_contribution_schema")
+        == "scgsim.surface-contributions.v1"
+        and isinstance(value.get("surface_contribution_ledger"), (list, tuple))
+        and bool(value["surface_contribution_ledger"])
     )
 
 

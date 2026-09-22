@@ -20,7 +20,10 @@ def normalize_optional_profile(value: str | None) -> RouteAProfile | None:
 
 
 def derive_thin_film_facts(
-    stack: Mapping[str, Any], *, allow_single_face: bool = False
+    stack: Mapping[str, Any],
+    *,
+    allow_single_face: bool = False,
+    substrate_support: Mapping[str, Mapping[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Derive validated physical facts from an already-shaped stack mapping."""
     layers = stack.get("layers")
@@ -64,48 +67,224 @@ def derive_thin_film_facts(
             "Route A face_metal layers must share one explicit host solution."
         )
     host_id = next(iter(host_ids))
-    face_ranges = group_z_ranges(faces)
-    if len(face_ranges) == 1 and allow_single_face:
-        validate_single_face_metal_records(
-            face_ranges[0][2], records=face_records, materials=materials
+    origins = set()
+    for semantic_id, record in face_records.items():
+        metadata = record.get("metadata", {})
+        if not isinstance(metadata, Mapping):
+            raise TypeError(f"{semantic_id} metadata must be a mapping.")
+        origins.add(metadata.get("host_reference_origin"))
+    if len(origins) != 1:
+        raise ValueError("Route A face-metal hosts mix authored and generated references.")
+    generated = origins == {"generated_background"}
+    if generated and substrate_support is None:
+        raise ValueError("generated-background Route A requires verified substrate coverage.")
+    if generated and host_id != "VACUUM_REGION":
+        raise ValueError("generated-background Route A requires its internal vacuum reference.")
+    legacy_support = (
+        None
+        if generated
+        else _legacy_host_substrate_support(
+            faces,
+            regions=regions,
+            materials=materials,
+            host_id=host_id,
+            allow_single_face=allow_single_face,
         )
-        return single_face_thin_film_facts(
-            face_ranges[0], regions=regions, materials=materials, host_id=host_id
-        )
-    if len(face_ranges) != 2:
-        raise ValueError("Route A requires exactly two physical face-metal Z ranges.")
-    lower, upper = face_ranges
-    if lower[1] >= upper[0] - _Z_TOLERANCE_UM:
-        raise ValueError("Route A face-metal intervals must enclose a positive cavity.")
+    )
+    if substrate_support is not None and legacy_support is not None:
+        if dict(substrate_support) != legacy_support:
+            raise ValueError(
+                "Route A authored host and full-planar substrate coverage disagree."
+            )
+    return _derive_thin_film_facts_from_substrates(
+        faces,
+        face_records=face_records,
+        regions=regions,
+        materials=materials,
+        support=substrate_support if substrate_support is not None else legacy_support,
+        allow_single_face=allow_single_face,
+        host_id=host_id,
+        generated=generated,
+    )
+
+
+def _legacy_host_substrate_support(
+    faces: Sequence[tuple[str, str, float, float]],
+    *,
+    regions: Mapping[str, Any],
+    materials: Mapping[str, Any],
+    host_id: str,
+    allow_single_face: bool,
+) -> dict[str, dict[str, str]]:
+    """Retain explicit-host input checks, then project to shared support facts."""
+    groups = group_z_ranges(faces)
     host = regions.get(host_id)
     if host is None:
         raise ValueError(f"Route A host solution {host_id!r} is missing.")
     if not isinstance(host, Mapping):
         raise TypeError(f"Route A host solution {host_id!r} must be a mapping.")
     host_min, host_max = geometry_z_range(record_geometry(host, host_id), host_id)
+    material_id = host.get("material_id", host_id)
+    host_material = materials.get(material_id)
+    if not isinstance(host_material, Mapping) or host_material.get("kind") != "vacuum":
+        raise ValueError(
+            f"Route A host solution {host_id!r} must reference an explicit vacuum material."
+        )
+    if len(groups) == 1 and allow_single_face:
+        z_min, z_max, semantic_ids = groups[0]
+        if z_min < host_min - _Z_TOLERANCE_UM or z_max > host_max + _Z_TOLERANCE_UM:
+            raise ValueError(
+                "Route A single face-metal interval must be contained within its host solution."
+            )
+        lower = same_z(host_min, z_min)
+        upper = same_z(host_max, z_max)
+        if lower == upper:
+            raise ValueError(
+                "Route A single face-metal interval must share exactly one host solution boundary."
+            )
+        side = "lower" if lower else "upper"
+        substrate = adjacent_dielectric_region(
+            regions,
+            materials,
+            host_id=host_id,
+            z_um=host_min if lower else host_max,
+            side=side,
+        )
+        return {
+            semantic_id: {"side": side, "substrate_id": substrate["semantic_id"]}
+            for semantic_id in semantic_ids
+        }
+    if len(groups) != 2:
+        raise ValueError("Route A requires exactly two physical face-metal Z ranges.")
+    lower, upper = groups
+    if lower[1] >= upper[0] - _Z_TOLERANCE_UM:
+        raise ValueError("Route A face-metal intervals must enclose a positive cavity.")
     if not same_z(host_min, lower[0]) or not same_z(host_max, upper[1]):
         raise ValueError(
             "Route A host solution boundaries must equal the two substrate faces."
         )
-    lower_substrate = adjacent_dielectric_region(
-        regions, materials, host_id=host_id, z_um=host_min, side="lower"
-    )
-    upper_substrate = adjacent_dielectric_region(
-        regions, materials, host_id=host_id, z_um=host_max, side="upper"
-    )
+    support = {}
+    for side, semantic_ids, face_z in (
+        ("lower", lower[2], host_min),
+        ("upper", upper[2], host_max),
+    ):
+        substrate = adjacent_dielectric_region(
+            regions, materials, host_id=host_id, z_um=face_z, side=side
+        )
+        support.update(
+            {
+                semantic_id: {"side": side, "substrate_id": substrate["semantic_id"]}
+                for semantic_id in semantic_ids
+            }
+        )
+    return support
+
+
+def _derive_thin_film_facts_from_substrates(
+    faces: Sequence[tuple[str, str, float, float]],
+    *,
+    face_records: Mapping[str, Mapping[str, Any]],
+    regions: Mapping[str, Any],
+    materials: Mapping[str, Any],
+    support: Mapping[str, Mapping[str, str]],
+    allow_single_face: bool,
+    host_id: str,
+    generated: bool,
+) -> dict[str, Any]:
+    """Use verified full-planar support, never background bounds, for Route A."""
+    face_ids = {semantic_id for semantic_id, _, _, _ in faces}
+    if set(support) != face_ids:
+        raise ValueError(
+            f"Route A substrate support must cover exactly {sorted(face_ids)!r}; "
+            f"received {sorted(support)!r}."
+        )
+    groups = group_z_ranges(faces)
+    if len(groups) not in ({1, 2} if allow_single_face else {2}):
+        raise ValueError("Route A requires one or two physical face-metal Z ranges for this profile.")
+
+    grouped: list[tuple[float, float, list[str], str, dict[str, Any]]] = []
+    for z_min, z_max, semantic_ids in groups:
+        sides = {support[semantic_id]["side"] for semantic_id in semantic_ids}
+        substrate_ids = {
+            support[semantic_id]["substrate_id"] for semantic_id in semantic_ids
+        }
+        if len(sides) != 1 or len(substrate_ids) != 1:
+            raise ValueError(
+                f"Route A face-metal group {semantic_ids!r} has ambiguous substrate support."
+            )
+        side = next(iter(sides))
+        substrate_id = next(iter(substrate_ids))
+        if side not in {"lower", "upper"}:
+            raise ValueError(f"Route A substrate support for {semantic_ids!r} has invalid side.")
+        substrate = regions.get(substrate_id)
+        if not isinstance(substrate, Mapping):
+            raise ValueError(f"Route A supporting substrate {substrate_id!r} is missing.")
+        material_id = substrate.get("material_id", substrate_id)
+        material = materials.get(material_id)
+        if not isinstance(material, Mapping) or material.get("kind") != "dielectric":
+            raise ValueError(f"Route A supporting substrate {substrate_id!r} must be dielectric.")
+        sub_min, sub_max = geometry_z_range(
+            record_geometry(substrate, substrate_id), substrate_id
+        )
+        expected_z = sub_max if side == "lower" else sub_min
+        face_z = z_min if side == "lower" else z_max
+        if not same_z(expected_z, face_z):
+            raise ValueError(
+                f"Route A face-metal group {semantic_ids!r} does not touch substrate {substrate_id!r} on {side} side."
+            )
+        validate_single_face_metal_records(
+            semantic_ids, records=face_records, materials=materials
+        )
+        grouped.append(
+            (
+                z_min,
+                z_max,
+                semantic_ids,
+                side,
+                {"semantic_id": substrate_id, "z_min_um": sub_min, "z_max_um": sub_max},
+            )
+        )
+
+    if len(grouped) == 1:
+        z_min, z_max, semantic_ids, side, substrate = grouped[0]
+        return {
+            "host_solution_volume_id": host_id,
+            **({"host_reference_origin": "generated_background"} if generated else {}),
+            "physical_face_z_um": z_min if side == "lower" else z_max,
+            "physical_substrate_z_ranges_um": {side: substrate},
+            "physical_face_metal_z_ranges_um": {
+                side: {
+                    "semantic_ids": semantic_ids,
+                    "z_min_um": z_min,
+                    "z_max_um": z_max,
+                }
+            },
+        }
+
+    lower, upper = grouped
+    if lower[3] != "lower" or upper[3] != "upper":
+        raise ValueError("Route A opposing face-metal groups require lower and upper substrates.")
+    if lower[4]["semantic_id"] == upper[4]["semantic_id"]:
+        raise ValueError("Route A opposing faces require distinct supporting substrates.")
+    if lower[1] >= upper[0] - _Z_TOLERANCE_UM:
+        raise ValueError("Route A face-metal intervals must enclose a positive cavity.")
+    physical_gap = upper[4]["z_min_um"] - lower[4]["z_max_um"]
+    if physical_gap <= _Z_TOLERANCE_UM:
+        raise ValueError("Route A supporting substrates must enclose a positive physical gap.")
     return {
         "host_solution_volume_id": host_id,
-        "lower_substrate_face_z_um": host_min,
-        "upper_substrate_face_z_um": host_max,
+        **({"host_reference_origin": "generated_background"} if generated else {}),
+        "lower_substrate_face_z_um": lower[4]["z_max_um"],
+        "upper_substrate_face_z_um": upper[4]["z_min_um"],
         "lower_metal_outer_z_um": lower[1],
         "upper_metal_outer_z_um": upper[0],
         "lower_metal_thickness_um": lower[1] - lower[0],
         "upper_metal_thickness_um": upper[1] - upper[0],
-        "physical_substrate_face_gap_um": host_max - host_min,
+        "physical_substrate_face_gap_um": physical_gap,
         "physical_metal_gap_um": upper[0] - lower[1],
         "physical_substrate_z_ranges_um": {
-            "lower": lower_substrate,
-            "upper": upper_substrate,
+            "lower": lower[4],
+            "upper": upper[4],
         },
         "physical_face_metal_z_ranges_um": {
             "lower": {

@@ -107,6 +107,17 @@ open three-dimensional selected patch with a perimeter; the native
 no-perimeter error remains a truthful failure rather than an approximated
 result.
 
+Local sheet patches may retain more than one semantic side contribution. MS
+and MA contributions continue to use their existing separate native types. If
+both sides are MA on the same native surface, SCGSim records both ordered
+contributions but emits one aggregate MA row and enables Palace internal
+boundary cracking; it does not duplicate the row, multiply a result, or claim
+side-resolved native output. A zero inset remains the same unmasked aggregate.
+A positive inset for that shared aggregate is rejected at configuration time
+because the current native attribute cannot express different per-side masked
+support. The error identifies the selected aggregate and sides. Historical
+artifacts without the additive ledger remain readable without inferred sides.
+
 A complete masked snapshot requires both native files from the same retained
 `final` or `iterationNN` result source:
 
@@ -160,6 +171,84 @@ Existing two-face `substrate_face` behavior is unchanged.
 `metal_gap_equivalent` still requires two opposing physical face intervals.
 The source `LayerStack` remains immutable. This single-face case changes no
 mask, Port, Surface-EPR, or Route B semantics.
+
+### Generated background without a PDK vacuum layer
+
+Fabrication levels and materials still come from the PDK; the component still
+owns conductor nets and selections. A stack may omit a PDK die-to-die Vacuum
+level and omit its conductor `host_void_semantic_id` declarations. With
+`set_vacuum_region()`, SCGSim assigns the resulting conductors an internal
+background reference for construction, not an authored contact or a physical
+die-gap. An explicitly named but unresolved host remains an input error.
+
+`set_vacuum_region(padding=0)` requests the smallest region enclosing the
+modeled route geometry. Scalar padding applies in every direction; a
+three-item sequence applies respectively to X, Y, and Z; a six-key mapping
+names `x_minus_um`, `x_plus_um`, `y_minus_um`, `y_plus_um`, `z_minus_um`, and
+`z_plus_um`. Every value is finite, nonnegative, and in micrometres. Zero is
+the default only for an omitted direction in the optional argument; it does
+not authorize a degenerate three-dimensional region. An explicitly modeled
+substrate rectangle is its actual planar region; an explicit outline and
+holes are used when present. Face-metal attachment requires a unique,
+positive-area planar contact with a substrate on the correct Z side. Neither
+a point/edge touch, coupon bounding box, nor generated vacuum boundary supplies
+contact evidence.
+
+For one lower substrate and its face metal, choose
+`route_a_thin_film="substrate_face"`; no upper die is invented and gap fields
+remain inapplicable. For two opposed substrates and face-metal layers,
+`substrate_face` preserves physical Z while `metal_gap_equivalent` remains a
+separate two-face coordinate-normalized model. Route B retains finite
+conductor bodies. Existing explicit vacuum-host stacks continue to use their
+authored regions and identities; setting the generated region does not delete
+those records. The generated vacuum is partitioned around dielectric and
+finite-conductor occupancy, while a Route-A sheet contributes no fictitious
+volume.
+
+For an already authored public component, PDK `layer_stack`, and material
+mapping with one substrate but no PDK vacuum level or conductor-host key, the
+preparation sequence is:
+
+```python
+from scgsim.palace import ElectrostaticSim
+from scgsim.sgb import build_component_stack
+
+stack = build_component_stack(
+    component=component,
+    layer_stack=layer_stack,
+    material_records=materials,
+    coupon_padding_um=100.0,
+)
+sim = ElectrostaticSim()
+sim.set_geometry(component)
+sim.set_stack(stack)
+sim.set_vacuum_region({"z_plus_um": 100.0})
+sim.set_surface_epr(
+    representation="A", specs={}, route_a_thin_film="substrate_face"
+)
+sim.set_output_dir(output_dir)
+sim.mesh()
+sim.write_config()
+```
+
+The dev27 candidate derives Route-A support per exact polygon patch rather than
+per whole sheet. Supported MS/MA and exposed MA/MA children retain their own
+domain pairs and contribution ledgers; a remote substrate hole is removed from
+the bare SA patch instead of overlapping it. An MM bump/contact cap keeps only
+the uncut physical side, and a port crossing two incompatible local patches is
+rejected before meshing. Route B retains finite conductors with local top,
+bottom, and sidewall records. Fully freestanding Route-A sheets remain outside
+the supported input contract. These statements cover geometry/config/handoff
+preparation only; no Palace field solve has been run.
+
+The positive Z padding is an authored example value, not a hidden default or
+an acceptance threshold. If zero padding leaves no finite vacuum region,
+construction fails rather than fabricating a sliver. For a two-substrate
+assembly, use the same calls with both real substrate levels and opposing
+face-metal layers. Select `substrate_face` to retain physical Z or
+`metal_gap_equivalent` for its explicit two-face sensitivity model; no
+vacuum-host record is needed. For Route B, use `representation="B"` and omit
+the thin-film argument; finite metal bodies are retained.
 
 The candidate has no native-geometry fallback, physical-name semantic parsing,
 replacement topology reconstruction, or external gdsfactory/cloud execution

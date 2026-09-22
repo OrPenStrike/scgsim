@@ -631,6 +631,7 @@ def _add_surface_group_records(
         raise ValueError(
             f"SGB surface {name!r} has unsupported interface_type {interface_type!r}."
         )
+    _validate_surface_contribution_ledger(name, record, interface_type)
 
     component_id = _optional_string(record.get("conductor_component_id"))
     net_id = _optional_string(record.get("net_id"))
@@ -1052,39 +1053,103 @@ def _validate_surface_adjacency(
     interface_type: str,
     material_kinds: Mapping[str, str],
 ) -> None:
-    adjacent = record.get("adjacent_solution_volume_ids")
-    if not isinstance(adjacent, (list, tuple)) or not adjacent:
+    adjacent_groups = _surface_local_adjacencies(record)
+    if not adjacent_groups:
         raise ValueError(
             f"SGB surface {name!r} has no explicit adjacent solution volumes."
         )
-    kinds: list[str] = []
-    for identifier in adjacent:
-        if not isinstance(identifier, str) or identifier not in material_kinds:
-            raise ValueError(
-                f"SGB surface {name!r} adjacent solution id {identifier!r} cannot resolve explicit material kind."
-            )
-        kinds.append(material_kinds[identifier])
-    if interface_type == "MS_MA":
-        if str(record.get("face_kind", "")).lower() != "interface" or sorted(kinds) != [
-            "dielectric",
-            "vacuum",
-        ]:
-            raise ValueError(
-                f"SGB MS_MA surface {name!r} requires face_kind=interface and exactly dielectric/vacuum adjacency."
-            )
-    elif interface_type in {"MA", "MS", "SA"}:
-        # The required material pairing is an explicit semantic compatibility
-        # check, never a geometric orientation or material-name inference.
-        expected = {"MA": "vacuum", "MS": "dielectric", "SA": "vacuum"}[interface_type]
-        if interface_type == "SA":
-            if sorted(kinds) != ["dielectric", "vacuum"]:
+    for adjacent in adjacent_groups:
+        kinds: list[str] = []
+        for identifier in adjacent:
+            if not isinstance(identifier, str) or identifier not in material_kinds:
                 raise ValueError(
-                    f"SGB SA surface {name!r} requires exactly dielectric/vacuum adjacency."
+                    f"SGB surface {name!r} adjacent solution id {identifier!r} "
+                    "cannot resolve explicit material kind."
                 )
-        elif expected not in kinds:
-            raise ValueError(
-                f"SGB {interface_type} surface {name!r} lacks explicit adjacent {expected} solution material."
-            )
+            kinds.append(material_kinds[identifier])
+        if interface_type == "MS_MA":
+            if str(record.get("face_kind", "")).lower() != "interface" or sorted(
+                kinds
+            ) != ["dielectric", "vacuum"]:
+                raise ValueError(
+                    f"SGB MS_MA surface {name!r} requires face_kind=interface "
+                    "and exactly dielectric/vacuum adjacency in every local source."
+                )
+        elif interface_type in {"MA", "MS", "SA"}:
+            # The required material pairing is an explicit semantic compatibility
+            # check, never a geometric orientation or material-name inference.
+            expected = {"MA": "vacuum", "MS": "dielectric", "SA": "vacuum"}[
+                interface_type
+            ]
+            if interface_type == "SA":
+                if sorted(kinds) != ["dielectric", "vacuum"]:
+                    raise ValueError(
+                        f"SGB SA surface {name!r} requires exactly "
+                        "dielectric/vacuum adjacency in every local source."
+                    )
+            elif expected not in kinds:
+                raise ValueError(
+                    f"SGB {interface_type} surface {name!r} lacks explicit adjacent "
+                    f"{expected} solution material in a local source."
+                )
+
+
+def _surface_local_adjacencies(
+    record: Mapping[str, Any],
+) -> tuple[tuple[str, ...], ...]:
+    """Read exact source-local adjacency without treating a group union as a pair."""
+    provenance = record.get("source_provenance")
+    members = (
+        _surface_provenance_members(provenance)
+        if isinstance(provenance, Mapping)
+        else ()
+    )
+    sources = tuple(
+        source
+        for source in members
+        if isinstance(source.get("surface_contribution_ledger"), (list, tuple))
+    )
+    if sources and len(sources) != len(members):
+        raise ValueError(
+            "SGB surface contribution provenance mixes ledgered and legacy sources."
+        )
+    local: list[tuple[str, ...]] = []
+    for source in sources:
+        ledger = source.get("surface_contribution_ledger")
+        if not isinstance(ledger, (list, tuple)):
+            continue
+        identifiers: list[str] = []
+        for contribution in ledger:
+            if not isinstance(contribution, Mapping):
+                continue
+            effective = contribution.get("effective_domain_ids")
+            if not isinstance(effective, (list, tuple)):
+                continue
+            for identifier in effective:
+                if isinstance(identifier, str) and identifier not in identifiers:
+                    identifiers.append(identifier)
+        if identifiers:
+            local.append(tuple(identifiers))
+    if local:
+        return tuple(local)
+    adjacent = record.get("adjacent_solution_volume_ids")
+    if not isinstance(adjacent, (list, tuple)) or not adjacent:
+        return ()
+    return (tuple(adjacent),)
+
+
+def _surface_provenance_members(
+    provenance: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], ...]:
+    sources = provenance.get("sources")
+    if not isinstance(sources, (list, tuple)):
+        return (provenance,)
+    return tuple(
+        member
+        for source in sources
+        if isinstance(source, Mapping)
+        for member in _surface_provenance_members(source)
+    )
 
 
 def _structured_surface_info(
@@ -1720,6 +1785,134 @@ def _validate_structured_surface_record(name: str, record: Mapping[str, Any]) ->
             )
 
 
+def _validate_surface_contribution_ledger(
+    name: str,
+    record: Mapping[str, Any],
+    interface_type: str,
+) -> None:
+    """Validate additive side provenance without reconstructing historical rows."""
+    provenance = record.get("source_provenance")
+    if not isinstance(provenance, Mapping):
+        return
+    sources = _surface_contribution_sources(provenance)
+    if not sources:
+        return
+    contribution_identities: dict[str, str] = {}
+    classifications: set[str] = set()
+    for source in sources:
+        ledger = source.get("surface_contribution_ledger")
+        aggregation = source.get("native_aggregation")
+        mask_support = source.get("mask_support")
+        if (
+            not isinstance(ledger, (list, tuple))
+            or not ledger
+            or source.get("surface_contribution_schema")
+            != "scgsim.surface-contributions.v1"
+            or not isinstance(aggregation, Mapping)
+            or not isinstance(mask_support, Mapping)
+        ):
+            raise ValueError(
+                f"SGB surface {name!r} has incomplete contribution provenance."
+            )
+        local_contribution_ids: set[str] = set()
+        local_classifications: list[str] = []
+        for contribution in ledger:
+            if not isinstance(contribution, Mapping):
+                raise TypeError(
+                    f"SGB surface {name!r} contribution entries must be mappings."
+                )
+            contribution_id = _optional_string(contribution.get("contribution_id"))
+            classification = _optional_string(contribution.get("classification"))
+            side = _optional_string(contribution.get("side"))
+            if (
+                contribution_id is None
+                or contribution_id in local_contribution_ids
+                or classification not in {"MA", "MS", "SA", "MM", "SS", "AA"}
+                or side is None
+                or not isinstance(contribution.get("snapshot_reference"), Mapping)
+            ):
+                raise ValueError(
+                    f"SGB surface {name!r} has invalid or duplicate contribution identity."
+                )
+            local_contribution_ids.add(contribution_id)
+            identity = _serialized_contribution_identity(contribution)
+            previous = contribution_identities.setdefault(contribution_id, identity)
+            if previous != identity:
+                raise ValueError(
+                    f"SGB surface {name!r} has conflicting repeated contribution "
+                    f"identity {contribution_id!r}."
+                )
+            classifications.add(classification)
+            local_classifications.append(classification)
+        unique_local = tuple(dict.fromkeys(local_classifications))
+        surface_epr_local = tuple(
+            classification
+            for classification in local_classifications
+            if classification in {"MA", "MS", "SA"}
+        )
+        unique_surface_epr = tuple(dict.fromkeys(surface_epr_local))
+        aggregate_once = (
+            len(surface_epr_local) > 1 and len(unique_surface_epr) == 1
+        )
+        local_sides = tuple(
+            contribution.get("side")
+            for contribution in ledger
+            if isinstance(contribution, Mapping)
+        )
+        expected_policy = (
+            "semantic_only_no_native_row"
+            if not unique_surface_epr
+            else "shared_native_surface_once"
+            if aggregate_once
+            else "one_row_per_interface_kind"
+        )
+        expected_positive_mask_support = bool(unique_surface_epr) and not aggregate_once
+        if (
+            aggregation.get("policy") != expected_policy
+            or aggregation.get("contribution_count") != len(ledger)
+            or tuple(aggregation.get("interface_kinds", ())) != unique_local
+            or tuple(aggregation.get("surface_epr_interface_kinds", ()))
+            != unique_surface_epr
+            or aggregation.get("native_row_count") != (
+                1 if aggregate_once else len(unique_surface_epr)
+            )
+            or aggregation.get("side_resolved_numeric_output") is not False
+            or mask_support.get("zero_inset_supported") is not True
+            or mask_support.get("positive_inset_supported")
+            is not expected_positive_mask_support
+            or tuple(mask_support.get("sides", ())) != local_sides
+            or (
+                aggregate_once
+                and (len(ledger) != 2 or set(local_sides) != {"bottom", "top"})
+            )
+        ):
+            raise ValueError(
+                f"SGB surface {name!r} contribution aggregation is inconsistent."
+            )
+    expected = set(interface_type.split("_"))
+    if classifications != expected:
+        raise ValueError(
+            f"SGB surface {name!r} contribution kinds {sorted(classifications)!r} "
+            f"do not match interface_type {interface_type!r}."
+        )
+
+
+def _surface_contribution_sources(
+    provenance: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], ...]:
+    if "surface_contribution_ledger" in provenance:
+        return (provenance,)
+    sources = provenance.get("sources", ())
+    if not isinstance(sources, (list, tuple)):
+        return ()
+    return tuple(
+        contribution_source
+        for source in sources
+        if isinstance(source, Mapping)
+        for contribution_source in _surface_contribution_sources(source)
+    )
+
+
 def _validate_structured_volume_record(name: str, record: Mapping[str, Any]) -> None:
     for field in ("representation", "source_provenance", "physical_attribute"):
         if field not in record:
@@ -1761,6 +1954,15 @@ def _structured_conductor_source_layer(name: str, record: Mapping[str, Any]) -> 
             f"SGB surface {name!r} has ambiguous conductor source-layer provenance."
         )
     return source_layers.pop()
+
+
+def _serialized_contribution_identity(contribution: Mapping[str, Any]) -> str:
+    """Canonicalize one complete serialized EvidenceResult transport record."""
+    return json.dumps(
+        dict(contribution),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _physical_group_values(value: Any) -> tuple[int, ...]:

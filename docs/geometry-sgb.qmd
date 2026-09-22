@@ -54,6 +54,36 @@ profile. With no core profile, coordinates remain unchanged and no collapse is
 recorded. `metal_gap_equivalent` remains the existing effective coordinate
 normalization; no reversible-collapse claim is made.
 
+For a stack with no PDK vacuum layer, omitted conductor host declarations are
+bound to the internally generated background only when the caller selects
+`set_vacuum_region()`. The same normalized polygon-versus-substrate-region
+contact check supplies Route-A physical support for both authored-host and
+generated-background stacks. It considers complete exteriors and holes and
+requires a unique positive-area contact; a bounding-box intersection,
+point/edge touch, or auto-region edge is insufficient. An authored
+but unresolved host name still fails instead of being silently rebound.
+Single-substrate `substrate_face` has no opposing die or gap value; two
+opposed substrates keep physical `substrate_face` and the distinct
+two-face-only `metal_gap_equivalent` normalization. The generated Region is
+profiled after the source geometry and partitioned around actual dielectric
+and finite-PEC occupancy. Route-A sheets do not subtract a fictitious volume.
+
+Route-A support is local rather than a whole-sheet label. The sheet polygon is
+partitioned by exact bottom/top solution coverage before bare SA/AA surfaces
+are constructed, so substrate holes remain holes and a partly supported stress
+case retains separate supported and exposed children. Each child keeps ordered
+bottom/top evidence; an MM contact cap retains only the side left after the
+contact cut. Port footprints select the intersecting child and fail if they
+cross incompatible local domain pairs. Fully freestanding sheets remain
+unsupported.
+
+Route B keeps finite geometry and records local top, bottom, and sidewall
+material-side evidence. Geometry adjacency remains a set, whereas the additive
+contribution ledger preserves semantic multiplicity. Two same-kind MA sides
+on one Route-A child share one native surface and one aggregate Palace row;
+they are not duplicated or multiplied. That aggregate requires Palace's
+internal-boundary cracking and does not imply side-resolved numeric output.
+
 ## Identity requirements
 
 A handoff preserves:

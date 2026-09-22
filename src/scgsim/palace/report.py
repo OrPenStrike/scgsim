@@ -10,7 +10,7 @@ import html
 import json
 import math
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
@@ -2309,7 +2309,10 @@ def _surface_ranking_figure(
             record.face_kind,
             record.net_id or "unassigned",
             record.equipotential_id or "unassigned",
-            _source_provenance_label(record.source_provenance),
+            _source_provenance_label(
+                record.source_provenance,
+                interface_type=record.interface_type,
+            ),
         ]
         for record in visible
     ]
@@ -2401,16 +2404,81 @@ def _series_label(
     return f"{noun} {snapshot.series_index}"
 
 
-def _source_provenance_label(provenance: dict[str, Any]) -> str:
+def _source_provenance_label(
+    provenance: dict[str, Any],
+    *,
+    interface_type: str | None = None,
+) -> str:
     record_ids = provenance.get("source_record_ids")
+    label = "structured provenance retained"
     if (
         isinstance(record_ids, list)
         and record_ids
         and all(isinstance(record_id, str) for record_id in record_ids)
     ):
         suffix = f" (+{len(record_ids) - 1})" if len(record_ids) > 1 else ""
-        return f"{record_ids[0]}{suffix}"
-    return "structured provenance retained"
+        label = f"{record_ids[0]}{suffix}"
+    contributions = _surface_contribution_records(
+        provenance,
+        interface_type=interface_type,
+    )
+    if not contributions:
+        return label
+    sides = tuple(
+        dict.fromkeys(
+            str(record["side"])
+            for record in contributions
+            if isinstance(record.get("side"), str)
+        )
+    )
+    suffix = f"; {len(contributions)} contribution(s)"
+    if sides:
+        suffix += f" ({'/'.join(sides)})"
+    return f"{label}{suffix}"
+
+
+def _surface_contribution_records(
+    provenance: Mapping[str, Any],
+    *,
+    interface_type: str | None = None,
+) -> tuple[Mapping[str, Any], ...]:
+    records: list[Mapping[str, Any]] = []
+    ledger = provenance.get("surface_contribution_ledger")
+    if isinstance(ledger, (list, tuple)):
+        records.extend(record for record in ledger if isinstance(record, Mapping))
+    else:
+        sources = provenance.get("sources", ())
+        if isinstance(sources, (list, tuple)):
+            for source in sources:
+                if isinstance(source, Mapping):
+                    records.extend(_surface_contribution_records(source))
+    deduplicated: dict[str, Mapping[str, Any]] = {}
+    identities: dict[str, str] = {}
+    for record in records:
+        contribution_id = record.get("contribution_id")
+        if not isinstance(contribution_id, str) or not contribution_id:
+            continue
+        identity = _serialized_report_contribution(record)
+        previous = identities.setdefault(contribution_id, identity)
+        if previous != identity:
+            raise ValueError(
+                f"conflicting repeated surface contribution {contribution_id!r}"
+            )
+        deduplicated.setdefault(contribution_id, record)
+    return tuple(
+        record
+        for record in deduplicated.values()
+        if interface_type is None or record.get("classification") == interface_type
+    )
+
+
+def _serialized_report_contribution(record: Mapping[str, Any]) -> str:
+    """Canonicalize one complete serialized EvidenceResult transport record."""
+    return json.dumps(
+        dict(record),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _read_error_indicators(path: Path) -> dict[str, float] | None:

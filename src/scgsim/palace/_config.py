@@ -151,6 +151,8 @@ def build_electrostatic_config(
             "Postprocessing": {"Energy": energy_rows, "Probe": []},
         },
     }
+    if _requires_internal_boundary_cracking(groups):
+        config["Model"]["CrackInternalBoundaryElements"] = True
     if epr_rows:
         config["Boundaries"]["Postprocessing"] = {"Dielectric": epr_rows}
     return ConfigBuildResult(
@@ -270,6 +272,8 @@ def build_eigenmode_config(
             "Postprocessing": {"Energy": energy_rows, "Probe": []},
         },
     }
+    if _requires_internal_boundary_cracking(groups):
+        config["Model"]["CrackInternalBoundaryElements"] = True
     return EigenmodeConfigBuildResult(
         config=config,
         port_information=port_info,
@@ -285,6 +289,35 @@ def build_eigenmode_config(
             for name, volume in domain_volumes
         ],
     )
+
+
+def _requires_internal_boundary_cracking(
+    groups: Mapping[str, Mapping[str, Mapping[str, Any]]],
+) -> bool:
+    """Bind two-sided same-kind ledgers to Palace's cracked-interface semantics."""
+    for info in groups.get("boundary_surfaces", {}).values():
+        if not isinstance(info, Mapping):
+            continue
+        provenance = info.get("source_provenance")
+        if not isinstance(provenance, Mapping):
+            continue
+        pending: list[Mapping[str, Any]] = [provenance]
+        while pending:
+            current = pending.pop()
+            aggregation = current.get("native_aggregation")
+            if (
+                isinstance(aggregation, Mapping)
+                and aggregation.get("policy") == "shared_native_surface_once"
+                and aggregation.get("contribution_count") == 2
+                and aggregation.get("native_row_count") == 1
+            ):
+                return True
+            sources = current.get("sources", ())
+            if isinstance(sources, (list, tuple)):
+                pending.extend(
+                    source for source in sources if isinstance(source, Mapping)
+                )
+    return False
 
 
 def _electrostatic_boundaries(

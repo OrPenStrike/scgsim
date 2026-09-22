@@ -77,6 +77,33 @@ implementation are separate facts. The core classifies already-valid values;
 the existing SGB and Palace adapters retain their source-specific validation,
 error messages, and call order.
 
+For Palace routes, PDK fabrication owns substrate materials and Z ranges;
+component intent owns metal nets and polygon selections. SGB verifies
+positive-area contact between the complete normalized face-metal and modeled
+dielectric regions, including explicit holes, before Route-A substrate support
+is recorded. A contact candidate cannot be inferred from bounding boxes.
+Palace may request a generated background Region after those source facts are
+declared. Its internal conductor-host reference allows construction and cuts,
+but neither the Region envelope nor a coupon bounding box proves attachment
+or creates a physical die-to-die gap. Existing authored vacuum regions keep
+their own records and explicit unresolved host references remain errors.
+
+The dev27 candidate partitions each Route-A sheet by exact local bottom/top
+solution domains before SA/AA construction. It therefore preserves supported
+MS/MA and synthetic partial-contact MA/MA patches without assigning substrate
+support to an exposed remainder. Contact caps retain only the surviving side,
+and a lumped-port footprint must belong to one compatible local patch. Route B
+applies the same local evidence to finite top, bottom, and sidewall records.
+Fully freestanding Route-A sheets remain unsupported.
+
+Each patch keeps its semantic side contributions in one provenance ledger.
+Physical surface kinds remain the Palace classification boundary: separate
+MS/MA kinds lower separately, while two MA sides sharing one native surface
+lower to one aggregate MA row with internal-boundary cracking enabled. The
+ledger and the aggregate policy remain present in physical-group, index, and
+report metadata; native output is not presented as side-resolved. Historical
+records without a ledger remain readable and are not reconstructed.
+
 ## Current truth
 
 The Human accepted the PDK/Component/SCGSim semantic-authority split and public

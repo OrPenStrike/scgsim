@@ -75,7 +75,7 @@ import time
 from bisect import bisect_left, bisect_right
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from itertools import pairwise
 from math import hypot, isfinite, sqrt
 from typing import Any
@@ -95,6 +95,7 @@ from scgsim.semantics.ownership import (
     surface_declared_owner_ids,
     surface_physical_owner_ids,
 )
+from scgsim.semantics.route_a import geometry_z_range, record_geometry, same_z
 
 from scgsim.sgb.models import (
     HIGH_COUNT_LOCAL_CONDUCTOR_PART_ROLES,
@@ -158,6 +159,107 @@ _GEOMETRY_REF_METADATA_KEYS = (
 )
 _INTERFACE_KIND_ORDER = ("MM", "SS", "AA", "MS", "MA", "SA")
 _TOPOLOGY_EPS_UM = 1e-9
+
+
+@dataclass(frozen=True, slots=True)
+class _RouteASheetPatch:
+    """One exact sheet region with one ordered solution domain on each side."""
+
+    parent_interface_id: str
+    sheet_entity_id: str
+    patch_id: str
+    geometry_ref: Mapping[str, Any]
+    bottom: EvidenceResult
+    top: EvidenceResult
+
+    @property
+    def boundary_volume_ids(self) -> tuple[str, str]:
+        bottom_ids = self.bottom.effective_domain_ids or ()
+        top_ids = self.top.effective_domain_ids or ()
+        if len(bottom_ids) != 1 or len(top_ids) != 1:
+            raise ValueError(f"{self.patch_id} lacks one effective domain per side")
+        return (bottom_ids[0], top_ids[0])
+
+    @property
+    def contributions(self) -> tuple[EvidenceResult, EvidenceResult]:
+        return (self.bottom, self.top)
+
+
+def verified_route_a_substrate_support(
+    build_input: GeometryBuildInput,
+    stack: Mapping[str, Any],
+) -> dict[str, dict[str, str]]:
+    """Bind each face metal to one positive-area dielectric contact plane.
+
+    The normalized face polygons and modeled substrate region (rectangle or
+    explicit outer/hole loops) are intersected as regions. A metal overhang
+    remains exposed; neither bounds nor a point/edge touch establishes contact.
+    """
+    import gdstk
+
+    layers = stack.get("layers")
+    if isinstance(layers, str | bytes) or not isinstance(layers, Sequence):
+        raise TypeError("Route A requires a sequence of stack layers.")
+    polygons = {polygon.polygon_id: polygon for polygon in build_input.polygons}
+    substrates = tuple(
+        entity
+        for entity in build_input.entities
+        if _is_solution_entity(entity) and entity.material_kind == "dielectric"
+    )
+    result: dict[str, dict[str, str]] = {}
+    for record in layers:
+        if not isinstance(record, Mapping):
+            raise TypeError("Route A stack layers must contain mappings.")
+        if record.get("part_role") != "face_metal":
+            continue
+        source_id = record.get("semantic_id")
+        if not isinstance(source_id, str) or not source_id:
+            raise ValueError("face_metal requires semantic_id for substrate support.")
+        face_z_min, face_z_max = geometry_z_range(
+            record_geometry(record, source_id), source_id
+        )
+        if face_z_max <= face_z_min:
+            raise ValueError(f"{source_id} physical face-metal thickness must be > 0.")
+        face_entities = tuple(
+            entity
+            for entity in build_input.entities
+            if entity.semantic_id == source_id
+            or entity.metadata.get("semantic_group_id") == source_id
+        )
+        face_regions: list[Any] = []
+        for entity in face_entities:
+            for polygon_id in entity.polygon_ids:
+                polygon = polygons.get(polygon_id)
+                if polygon is None:
+                    raise ValueError(f"{source_id} references missing normalized polygon {polygon_id!r}.")
+                exterior = (gdstk.Polygon(_clean_loop(polygon.exterior)),)
+                holes = tuple(gdstk.Polygon(_clean_loop(hole)) for hole in polygon.holes)
+                face_regions.extend(_boolean_gdstk_region(gdstk, exterior, holes, "not"))
+        if not face_regions:
+            raise ValueError(f"{source_id} has no normalized face-metal polygon for substrate attachment.")
+        matches: list[tuple[str, str]] = []
+        for substrate in substrates:
+            sub_z_min, sub_z_max = _entity_z_range_um(substrate)
+            sides = (
+                *(("lower",) if same_z(sub_z_max, face_z_min) else ()),
+                *(("upper",) if same_z(sub_z_min, face_z_max) else ()),
+            )
+            if not sides:
+                continue
+            substrate_region = _solution_entity_xy_region(gdstk, substrate)
+            if _boolean_gdstk_region(
+                gdstk, face_regions, substrate_region, "and"
+            ):
+                matches.extend((side, substrate.semantic_id) for side in sides)
+        if len(matches) != 1:
+            raise ValueError(
+                f"{source_id} requires exactly one positive-area dielectric substrate "
+                f"contact at its physical face; matched {matches!r} among "
+                f"{tuple(entity.semantic_id for entity in substrates)!r}."
+            )
+        side, substrate_id = matches[0]
+        result[source_id] = {"side": side, "substrate_id": substrate_id}
+    return result
 
 
 def _prepare_auto_vacuum_solution_regions(
@@ -579,8 +681,9 @@ def _auto_vacuum_envelope_bounds(
             and entity.route_representations.get(route) == "surface_sheet"
             and not is_subtractor
         ):
-            entry["z_min_um"] = float("nan")
-            entry["z_max_um"] = float("nan")
+            sheet_z_um = _auto_vacuum_sheet_z(build_input, entity)
+            entry["z_min_um"] = sheet_z_um
+            entry["z_max_um"] = sheet_z_um
 
         bounds.append(entry)
 
@@ -602,6 +705,31 @@ def _auto_vacuum_envelope_bounds(
         "z_min_um": min(item["z_min_um"] for item in finite_z_bounds),
         "z_max_um": max(item["z_max_um"] for item in finite_z_bounds),
     }
+
+
+def _auto_vacuum_sheet_z(
+    build_input: GeometryBuildInput, entity: SemanticEntitySpec
+) -> float:
+    provenance = build_input.metadata.get("route_a_thin_film")
+    if not isinstance(provenance, Mapping):
+        raise ValueError("auto VACUUM_REGION Route-A sheets require thin-film provenance")
+    ranges = provenance.get("physical_face_metal_z_ranges_um")
+    sheet_positions = provenance.get("effective_sheet_z_um")
+    if not isinstance(ranges, Mapping) or not isinstance(sheet_positions, Mapping):
+        raise ValueError("auto VACUUM_REGION Route-A sheet provenance is incomplete")
+    source_id = entity.metadata.get("semantic_group_id", entity.semantic_id)
+    matches = (
+        side
+        for side, record in ranges.items()
+        if isinstance(record, Mapping)
+        and source_id in record.get("semantic_ids", ())
+    )
+    sides = tuple(matches)
+    if len(sides) != 1 or not isfinite(float(sheet_positions.get(sides[0], float("nan")))):
+        raise ValueError(
+            f"{entity.semantic_id} has no unique effective Route-A sheet position"
+        )
+    return float(sheet_positions[sides[0]])
 
 
 def _auto_vacuum_solution_region(
@@ -863,6 +991,10 @@ def build_route_construction_plan(
         "validate_surface_use_counts",
         lambda: validate_surface_use_counts(volumes=volumes, surfaces=surfaces),
     )
+    construction_bodies = _reconcile_construction_body_surface_ids(
+        construction_bodies,
+        surfaces=surfaces,
+    )
     cut_operations = _timed(
         timings,
         "plan_cut_host_operations",
@@ -1036,13 +1168,19 @@ def _surface_interface_record_owners(
 def _structured_surface_boundary_volume_ids(
     surface: SurfacePlanRecord,
     owners: tuple[str, ...],
-) -> tuple[str, str]:
-    projected = project_legacy_interface_record_owners(
-        owners,
-        surface.metadata.get("boundary_volume_ids", ()),
-        surface_id=surface.surface_id,
-    )
-    return (projected[0], projected[1])
+) -> tuple[str, ...]:
+    raw = surface.metadata.get("boundary_volume_ids", ())
+    boundary_ids = () if isinstance(raw, str) else tuple(str(value) for value in raw)
+    expected_count = 1 if surface.metadata.get("sheet_contact_cap") else 2
+    if (
+        len(boundary_ids) != expected_count
+        or not set(boundary_ids).issubset(owners)
+    ):
+        raise ValueError(
+            f"{surface.surface_id} structured interface requires {expected_count} ordered "
+            "boundary_volume_ids from its owners"
+        )
+    return _unique_ids(boundary_ids)
 
 
 def plan_canonical_topology(
@@ -2276,6 +2414,261 @@ def plan_surface_partitions(
     return tuple(records)
 
 
+def _plan_route_a_sheet_patches(
+    build_input: GeometryBuildInput,
+    *,
+    interfaces: Sequence[InterfacePlanRecord],
+    semantic_facts: SemanticEvidenceFacade,
+) -> tuple[_RouteASheetPatch, ...]:
+    """Partition each Route-A sheet by its exact ordered local domains."""
+    import gdstk
+
+    raw_patches: list[
+        tuple[
+            InterfacePlanRecord,
+            SemanticEntitySpec,
+            str,
+            str,
+            dict[str, Any],
+        ]
+    ] = []
+    for interface in interfaces:
+        if not _is_route_a_sheet_interface("A", interface):
+            continue
+        sheet = _entity_by_id(build_input, interface.owner_semantic_ids[0])
+        plane_z_um = _route_a_sheet_plane_z_um(build_input, sheet)
+        parent_geometry_ref = {
+            "from_interface_id": interface.interface_id,
+            "source_polygon_ids": interface.source_polygon_ids,
+            **_geometry_ref_from_metadata(interface.metadata),
+            "plane": {"axis": "z", "value_um": plane_z_um},
+            "representation": "surface_sheet",
+        }
+        sheet_region = _gdstk_surface_region(parent_geometry_ref)
+        if not sheet_region:
+            raise ValueError(f"{sheet.semantic_id} Route A sheet has no occupied region")
+        bottom_regions = _route_a_sheet_side_solution_regions(
+            build_input,
+            sheet=sheet,
+            sheet_region=sheet_region,
+            plane_z_um=plane_z_um,
+            side="bottom",
+        )
+        top_regions = _route_a_sheet_side_solution_regions(
+            build_input,
+            sheet=sheet,
+            sheet_region=sheet_region,
+            plane_z_um=plane_z_um,
+            side="top",
+        )
+        pair_region: tuple[Any, ...] = ()
+        has_distinct_side_domains = False
+        for bottom_id, bottom_region in bottom_regions:
+            for top_id, top_region in top_regions:
+                overlap = _boolean_gdstk_region(
+                    gdstk,
+                    bottom_region,
+                    top_region,
+                    "and",
+                )
+                if not overlap:
+                    continue
+                has_distinct_side_domains |= bottom_id != top_id
+                refs = _geometry_refs_from_gdstk_region(parent_geometry_ref, overlap)
+                for geometry_ref in refs:
+                    raw_patches.append(
+                        (interface, sheet, bottom_id, top_id, geometry_ref)
+                    )
+                pair_region = (
+                    overlap
+                    if not pair_region
+                    else _boolean_gdstk_region(gdstk, pair_region, overlap, "or")
+                )
+        uncovered = _boolean_gdstk_region(
+            gdstk,
+            sheet_region,
+            pair_region,
+            "not",
+        )
+        if uncovered:
+            raise ValueError(
+                f"{sheet.semantic_id} local Route A patches do not cover the full sheet."
+            )
+        if not has_distinct_side_domains:
+            raise ValueError(
+                f"{sheet.semantic_id} has no positive-area physical support from "
+                "distinct side domains."
+            )
+
+    ordered = sorted(
+        raw_patches,
+        key=lambda item: (
+            item[0].interface_id,
+            item[2],
+            item[3],
+            _loop_signature(item[4]["outer_loop"]),
+        ),
+    )
+    counts: Counter[str] = Counter(interface.interface_id for interface, *_ in ordered)
+    indexes: Counter[str] = Counter()
+    records: list[_RouteASheetPatch] = []
+    for interface, sheet, bottom_id, top_id, geometry_ref in ordered:
+        component_index = indexes[interface.interface_id]
+        indexes[interface.interface_id] += 1
+        patch_suffix = (
+            ""
+            if counts[interface.interface_id] == 1
+            else f":{component_index:04d}"
+        )
+        patch_id = f"route-a-local:{interface.interface_id}{patch_suffix}"
+        bottom = conductor_solution_evidence(
+            semantic_facts,
+            contribution_id=f"{patch_id}:bottom:{bottom_id}",
+            patch_id=f"planned:{patch_id}:bottom",
+            conductor_id=sheet.semantic_id,
+            solution_id=bottom_id,
+            side="bottom",
+        )
+        top = conductor_solution_evidence(
+            semantic_facts,
+            contribution_id=f"{patch_id}:top:{top_id}",
+            patch_id=f"planned:{patch_id}:top",
+            conductor_id=sheet.semantic_id,
+            solution_id=top_id,
+            side="top",
+        )
+        records.append(
+            _RouteASheetPatch(
+                parent_interface_id=interface.interface_id,
+                sheet_entity_id=sheet.semantic_id,
+                patch_id=patch_id,
+                geometry_ref=geometry_ref,
+                bottom=bottom,
+                top=top,
+            )
+        )
+    return tuple(records)
+
+
+def _route_a_sheet_side_solution_regions(
+    build_input: GeometryBuildInput,
+    *,
+    sheet: SemanticEntitySpec,
+    sheet_region: tuple[Any, ...],
+    plane_z_um: float,
+    side: str,
+) -> tuple[tuple[str, tuple[Any, ...]], ...]:
+    """Return nonoverlapping exact solution coverage for one sheet side."""
+    return _planar_side_solution_regions(
+        build_input,
+        owner_id=sheet.semantic_id,
+        occupied_region=sheet_region,
+        plane_z_um=plane_z_um,
+        side=side,
+    )
+
+
+def _planar_side_solution_regions(
+    build_input: GeometryBuildInput,
+    *,
+    owner_id: str,
+    occupied_region: tuple[Any, ...],
+    plane_z_um: float,
+    side: str,
+) -> tuple[tuple[str, tuple[Any, ...]], ...]:
+    """Resolve exact nonoverlapping solution coverage on one planar side."""
+    import gdstk
+
+    records: list[tuple[str, tuple[Any, ...]]] = []
+    for solution in _solution_entities(build_input):
+        z_min_um = float(solution.geometry["z_min_um"])
+        z_max_um = float(solution.geometry["z_max_um"])
+        on_boundary = (
+            _same_z(z_max_um, plane_z_um)
+            if side == "bottom"
+            else _same_z(z_min_um, plane_z_um)
+        )
+        contains_plane = z_min_um < plane_z_um < z_max_um
+        if not on_boundary and not contains_plane:
+            continue
+        overlap = _boolean_gdstk_region(
+            gdstk,
+            occupied_region,
+            _solution_entity_xy_region(gdstk, solution),
+            "and",
+        )
+        if overlap:
+            records.append((solution.semantic_id, overlap))
+
+    for index, (left_id, left_region) in enumerate(records):
+        for right_id, right_region in records[index + 1 :]:
+            if _boolean_gdstk_region(gdstk, left_region, right_region, "and"):
+                raise ValueError(
+                    f"{owner_id} {side} local adjacency is ambiguous "
+                    f"between {left_id!r} and {right_id!r}."
+                )
+    covered: tuple[Any, ...] = ()
+    for _, region in records:
+        covered = (
+            region
+            if not covered
+            else _boolean_gdstk_region(gdstk, covered, region, "or")
+        )
+    uncovered = _boolean_gdstk_region(gdstk, occupied_region, covered, "not")
+    if uncovered:
+        raise ValueError(
+            f"{owner_id} {side} has no local solution coverage."
+        )
+    return tuple(records)
+
+
+def _conductor_face_solution_pieces(
+    build_input: GeometryBuildInput,
+    *,
+    route: RouteLiteral,
+    entity: SemanticEntitySpec,
+    shell_part: str,
+    geometry_refs: Sequence[Mapping[str, Any]],
+) -> tuple[tuple[str, dict[str, Any]], ...]:
+    """Partition Route-B planar faces by exact local solution adjacency."""
+    if route != "B":
+        adjacent_id = _conductor_face_adjacent_solution_id(
+            build_input,
+            entity,
+            shell_part,
+        )
+        return tuple((adjacent_id, dict(geometry_ref)) for geometry_ref in geometry_refs)
+
+    import gdstk
+
+    z_min_um, z_max_um = _entity_z_range_um(entity)
+    plane_z_um = z_min_um if shell_part == "bottom" else z_max_um
+    records: list[tuple[str, dict[str, Any]]] = []
+    for geometry_ref in geometry_refs:
+        occupied_region = _gdstk_surface_region(geometry_ref)
+        adjacent_regions = _planar_side_solution_regions(
+            build_input,
+            owner_id=entity.semantic_id,
+            occupied_region=occupied_region,
+            plane_z_um=plane_z_um,
+            side=shell_part,
+        )
+        for adjacent_id, region in adjacent_regions:
+            records.extend(
+                (adjacent_id, child)
+                for child in _geometry_refs_from_gdstk_region(geometry_ref, region)
+            )
+    return tuple(
+        sorted(
+            records,
+            key=lambda item: (
+                item[0],
+                _loop_signature(item[1]["outer_loop"]),
+            ),
+        )
+    )
+
+
 def plan_route_construction_bodies(
     build_input: GeometryBuildInput,
     *,
@@ -2370,10 +2763,27 @@ def plan_route_surfaces(
             [],
         ).append(partition)
 
+    route_a_sheet_patches = (
+        _plan_route_a_sheet_patches(
+            build_input,
+            interfaces=interfaces,
+            semantic_facts=semantic_facts,
+        )
+        if route == "A"
+        else ()
+    )
+    sheet_patches_by_interface: dict[str, list[_RouteASheetPatch]] = {}
+    for patch in route_a_sheet_patches:
+        sheet_patches_by_interface.setdefault(patch.parent_interface_id, []).append(
+            patch
+        )
     records: list[SurfacePlanRecord] = []
     records.extend(
         _plan_substrate_air_surfaces(
-            build_input, route=route, semantic_facts=semantic_facts
+            build_input,
+            route=route,
+            semantic_facts=semantic_facts,
+            route_a_sheet_patches=route_a_sheet_patches,
         )
     )
     contact_faces = _contact_patches_by_entity_face(interfaces)
@@ -2392,133 +2802,30 @@ def plan_route_surfaces(
         # Route A nor Route B may lower an internal MM face as solver geometry.
         if _is_hidden_contact_interface(route, interface):
             continue
+        if _is_route_a_sheet_interface(route, interface):
+            patches = tuple(sheet_patches_by_interface.get(interface.interface_id, ()))
+            if not patches:
+                raise ValueError(
+                    f"{interface.interface_id} has no local Route A sheet patches"
+                )
+            records.extend(
+                _route_a_sheet_patch_surfaces(
+                    build_input,
+                    interface=interface,
+                    patches=patches,
+                    sheet_contacts=sheet_contacts_by_face.get(
+                        patches[0].sheet_entity_id, ()
+                    ),
+                    semantic_facts=semantic_facts,
+                )
+            )
+            continue
         geometry_ref = {
             "from_interface_id": interface.interface_id,
             "source_polygon_ids": interface.source_polygon_ids,
             **_geometry_ref_from_metadata(interface.metadata),
         }
         route_a_sheet_evidence: tuple[EvidenceResult, ...] = ()
-        if _is_route_a_sheet_interface(route, interface):
-            sheet_entity = _entity_by_id(
-                build_input,
-                interface.owner_semantic_ids[0],
-            )
-            geometry_ref = {
-                **geometry_ref,
-                "plane": {
-                    "axis": "z",
-                    "value_um": _route_a_sheet_plane_z_um(
-                        build_input,
-                        sheet_entity,
-                    ),
-                },
-            }
-            route_a_sheet_evidence = _route_a_sheet_interface_evidence(
-                build_input,
-                interface=interface,
-                sheet_entity=sheet_entity,
-                semantic_facts=semantic_facts,
-            )
-            sheet_contacts = sheet_contacts_by_face.get(sheet_entity.semantic_id, ())
-            sheet_contact_loops = tuple(record.outer_loop for record in sheet_contacts)
-            if sheet_contacts:
-                # Keep the sheet contact footprint as the one live MS cap of
-                # the finite PEC void.  Its MM relation remains only in the
-                # MMContactRecord; it is never an MM physical group.
-                for contact_index, contact in enumerate(sheet_contacts):
-                    contact_loop = contact.outer_loop
-                    cap_face = _route_a_sheet_contact_cap_face(
-                        build_input,
-                        sheet_entity=sheet_entity,
-                        contact=contact,
-                    )
-                    cap_solution_id = _conductor_face_adjacent_solution_id(
-                        build_input,
-                        sheet_entity,
-                        cap_face,
-                    )
-                    if semantic_facts is None:
-                        cap_kind = _conductor_solution_interface_kind(
-                            _entity_by_id(build_input, cap_solution_id)
-                        )
-                        cap_owner_ids = (sheet_entity.semantic_id, cap_solution_id)
-                    else:
-                        cap_evidence = conductor_solution_evidence(
-                            semantic_facts,
-                            contribution_id=(
-                                f"route-a-sheet-cap:{contact.contact_id}:"
-                                f"{cap_face}:{cap_solution_id}"
-                            ),
-                            patch_id=(
-                                f"planned:route-a-sheet-cap:{contact.contact_id}:"
-                                f"{contact_index:04d}"
-                            ),
-                            conductor_id=sheet_entity.semantic_id,
-                            solution_id=cap_solution_id,
-                            side=cap_face,
-                        )
-                        cap_kind = cap_evidence.classification
-                        cap_owner_ids = cap_evidence.source_owner_ids
-                    records.append(
-                        SurfacePlanRecord(
-                            surface_id=(
-                                f"SURF__{cap_kind}__{sheet_entity.semantic_id}__"
-                                f"SHEET_CONTACT_CAP__{contact_index:04d}"
-                            ),
-                            owner_semantic_id=sheet_entity.semantic_id,
-                            surface_role="route_a_sheet_contact_cap",
-                            geometry_ref={
-                                "outer_loop": contact_loop,
-                                "hole_loops": (),
-                                "plane": geometry_ref["plane"],
-                                "representation": "surface_sheet",
-                                "source_polygon_ids": _unique_ids(
-                                    (
-                                        *contact.lower_source_fragment_ids,
-                                        *contact.upper_source_fragment_ids,
-                                    )
-                                ),
-                            },
-                            interface_id=(
-                                f"{cap_kind}__{sheet_entity.semantic_id}__"
-                                f"SHEET_CONTACT_CAP__{contact_index:04d}"
-                            ),
-                            valid_routes=(route,),
-                            metadata={
-                                "physical_name": (
-                                    f"{cap_kind}__{_entity_physical_group_id(sheet_entity)}"
-                                    "__SHEET_CONTACT_CAP"
-                                ),
-                                "interface_kinds": (cap_kind,),
-                                "owner_semantic_ids": cap_owner_ids,
-                                "physical_owner_semantic_ids": (
-                                    _physical_group_owner_ids(
-                                        build_input, cap_owner_ids
-                                    )
-                                ),
-                                "boundary_volume_ids": (cap_solution_id,),
-                                "exposed_surface_role": "sheet_contact_cap",
-                                "sheet_contact_cap": True,
-                                "source_contact_id": contact.contact_id,
-                                "source_contact_owner_semantic_ids": (
-                                    contact.lower_entity_id,
-                                    contact.upper_entity_id,
-                                ),
-                            },
-                        )
-                    )
-                geometry_refs = _subtract_contact_patches_from_face(
-                    geometry_ref,
-                    sheet_contact_loops,
-                )
-                if not geometry_refs:
-                    continue
-                if len(geometry_refs) != 1:
-                    raise ValueError(
-                        f"{sheet_entity.semantic_id} Route A sheet contact "
-                        "split produced multiple sheet remainders"
-                    )
-                geometry_ref = geometry_refs[0]
         primary_kind = next(
             (
                 result.classification
@@ -2650,29 +2957,32 @@ def plan_route_surfaces(
                 )
                 if not face_geometry_refs:
                     continue
-                adjacent_id = _conductor_face_adjacent_solution_id(
+                face_pieces = _conductor_face_solution_pieces(
                     build_input,
-                    entity,
-                    shell_part,
+                    route=route,
+                    entity=entity,
+                    shell_part=shell_part,
+                    geometry_refs=face_geometry_refs,
                 )
-                interface_evidence = conductor_solution_evidence(
-                    semantic_facts,
-                    contribution_id=(
+                for face_index, (adjacent_id, face_geometry_ref) in enumerate(
+                    face_pieces
+                ):
+                    contribution_id = (
                         f"conductor-solution:{entity.semantic_id}:"
-                        f"{adjacent_id}:{shell_part}"
-                    ),
-                    patch_id=(
-                        f"planned:{entity.semantic_id}:{adjacent_id}:{shell_part}"
-                    ),
-                    conductor_id=entity.semantic_id,
-                    solution_id=adjacent_id,
-                    side=shell_part,
-                )
-                interface_kind = interface_evidence.classification
-                for face_index, face_geometry_ref in enumerate(face_geometry_refs):
+                        f"{adjacent_id}:{shell_part}:{face_index:04d}"
+                    )
+                    interface_evidence = conductor_solution_evidence(
+                        semantic_facts,
+                        contribution_id=contribution_id,
+                        patch_id=f"planned:{contribution_id}",
+                        conductor_id=entity.semantic_id,
+                        solution_id=adjacent_id,
+                        side=shell_part,
+                    )
+                    interface_kind = interface_evidence.classification
                     surface_id = (
                         base_surface_id
-                        if len(face_geometry_refs) == 1
+                        if len(face_pieces) == 1
                         else f"{base_surface_id}__P{face_index:04d}"
                     )
                     body = construction_body_by_surface_id.get(surface_id)
@@ -2701,7 +3011,7 @@ def plan_route_surfaces(
                                 entity.semantic_id,
                                 adjacent_id,
                                 shell_part,
-                                None if len(face_geometry_refs) == 1 else face_index,
+                                None if len(face_pieces) == 1 else face_index,
                             ),
                             valid_routes=(route,),
                             solver_use="solver_active",
@@ -2724,6 +3034,16 @@ def plan_route_surfaces(
                                     )
                                 ),
                                 "exposed_surface_role": shell_part,
+                                "source_provenance": (
+                                    _surface_contribution_provenance(
+                                        parent_interface_id=(
+                                            f"conductor-face:{entity.semantic_id}:"
+                                            f"{shell_part}"
+                                        ),
+                                        patch_id=contribution_id,
+                                        contributions=(interface_evidence,),
+                                    )
+                                ),
                             },
                         )
                     )
@@ -2864,6 +3184,22 @@ def plan_route_surfaces(
                             ),
                             "boundary_volume_ids": sidewall_boundary_volume_ids,
                             "exposed_surface_role": shell_part,
+                            **(
+                                {
+                                    "source_provenance": (
+                                        _surface_contribution_provenance(
+                                            parent_interface_id=(
+                                                f"conductor-sidewall:"
+                                                f"{entity.semantic_id}"
+                                            ),
+                                            patch_id=contribution_id,
+                                            contributions=(sidewall_evidence,),
+                                        )
+                                    )
+                                }
+                                if sidewall_interface_id is not None
+                                else {}
+                            ),
                         },
                     )
                 )
@@ -2876,6 +3212,343 @@ def plan_route_surfaces(
         mm_contacts=mm_contacts,
         surfaces=tuple(records),
     )
+
+
+def _route_a_sheet_patch_surfaces(
+    build_input: GeometryBuildInput,
+    *,
+    interface: InterfacePlanRecord,
+    patches: Sequence[_RouteASheetPatch],
+    sheet_contacts: Sequence[MMContactRecord],
+    semantic_facts: SemanticEvidenceFacade,
+) -> tuple[SurfacePlanRecord, ...]:
+    """Lower local Route-A adjacency without assigning one pair to a whole sheet."""
+    import gdstk
+
+    sheet = _entity_by_id(build_input, interface.owner_semantic_ids[0])
+    contact_loops_by_patch: dict[str, list[tuple[tuple[float, float], ...]]] = {
+        patch.patch_id: [] for patch in patches
+    }
+    records: list[SurfacePlanRecord] = []
+    for contact_index, contact in enumerate(sheet_contacts):
+        contact_region = (gdstk.Polygon(_clean_loop(contact.outer_loop)),)
+        matches: list[_RouteASheetPatch] = []
+        for patch in patches:
+            overlap = _boolean_gdstk_region(
+                gdstk,
+                contact_region,
+                _gdstk_surface_region(patch.geometry_ref),
+                "and",
+            )
+            if overlap:
+                matches.append(patch)
+        if len(matches) != 1:
+            raise ValueError(
+                f"{contact.contact_id} crosses {len(matches)} local Route A "
+                "sheet patches; one contact requires one ordered domain pair."
+            )
+        patch = matches[0]
+        uncovered = _boolean_gdstk_region(
+            gdstk,
+            contact_region,
+            _gdstk_surface_region(patch.geometry_ref),
+            "not",
+        )
+        if uncovered:
+            raise ValueError(
+                f"{contact.contact_id} is not contained by its local Route A patch."
+            )
+        contact_loops_by_patch[patch.patch_id].append(_clean_loop(contact.outer_loop))
+        cap_face = _route_a_sheet_contact_cap_face(
+            build_input,
+            sheet_entity=sheet,
+            contact=contact,
+        )
+        parent_evidence = patch.bottom if cap_face == "bottom" else patch.top
+        cap_evidence = _route_a_sheet_child_evidence(
+            semantic_facts,
+            patch=patch,
+            parent=parent_evidence,
+            child_label=f"contact-cap:{contact.contact_id}",
+        )
+        cap_solution_id = _one_effective_domain(cap_evidence)
+        cap_kind = cap_evidence.classification
+        cap_owner_ids = cap_evidence.source_owner_ids
+        cap_interface_id = (
+            f"{cap_kind}__{sheet.semantic_id}__"
+            f"SHEET_CONTACT_CAP__{contact_index:04d}"
+        )
+        cap_geometry_ref = {
+            **dict(patch.geometry_ref),
+            "outer_loop": _clean_loop(contact.outer_loop),
+            "hole_loops": (),
+            "source_polygon_ids": _unique_ids(
+                (
+                    *contact.lower_source_fragment_ids,
+                    *contact.upper_source_fragment_ids,
+                )
+            ),
+        }
+        records.append(
+            SurfacePlanRecord(
+                surface_id=f"SURF__{cap_interface_id}",
+                owner_semantic_id=sheet.semantic_id,
+                surface_role="route_a_sheet_contact_cap",
+                geometry_ref=cap_geometry_ref,
+                interface_id=cap_interface_id,
+                valid_routes=("A",),
+                metadata={
+                    "physical_name": (
+                        f"{cap_kind}__{_entity_physical_group_id(sheet)}"
+                        "__SHEET_CONTACT_CAP"
+                    ),
+                    "interface_kinds": (cap_kind,),
+                    "owner_semantic_ids": cap_owner_ids,
+                    "physical_owner_semantic_ids": _physical_group_owner_ids(
+                        build_input, cap_owner_ids
+                    ),
+                    "boundary_volume_ids": (cap_solution_id,),
+                    "embedded_surface_sheet": True,
+                    "exposed_surface_role": "sheet_contact_cap",
+                    "sheet_contact_cap": True,
+                    "source_contact_id": contact.contact_id,
+                    "source_contact_owner_semantic_ids": (
+                        contact.lower_entity_id,
+                        contact.upper_entity_id,
+                    ),
+                    "source_provenance": _surface_contribution_provenance(
+                        parent_interface_id=interface.interface_id,
+                        patch_id=patch.patch_id,
+                        contributions=(cap_evidence,),
+                    ),
+                },
+            )
+        )
+
+    candidates: list[
+        tuple[_RouteASheetPatch, dict[str, Any], tuple[EvidenceResult, EvidenceResult]]
+    ] = []
+    for patch in patches:
+        geometry_refs = _subtract_contact_patches_from_face(
+            patch.geometry_ref,
+            contact_loops_by_patch[patch.patch_id],
+        )
+        for child_index, geometry_ref in enumerate(geometry_refs):
+            child_label = f"live:{child_index:04d}"
+            bottom = _route_a_sheet_child_evidence(
+                semantic_facts,
+                patch=patch,
+                parent=patch.bottom,
+                child_label=child_label,
+            )
+            top = _route_a_sheet_child_evidence(
+                semantic_facts,
+                patch=patch,
+                parent=patch.top,
+                child_label=child_label,
+            )
+            candidates.append((patch, geometry_ref, (bottom, top)))
+
+    interface_ids = [
+        _route_a_sheet_patch_interface_id(interface, patch, contributions)
+        for patch, _, contributions in candidates
+    ]
+    interface_counts = Counter(interface_ids)
+    interface_indexes: Counter[str] = Counter()
+    for (patch, geometry_ref, contributions), surface_interface_id in zip(
+        candidates, interface_ids, strict=True
+    ):
+        child_index = interface_indexes[surface_interface_id]
+        interface_indexes[surface_interface_id] += 1
+        surface_id = f"SURF__{surface_interface_id}"
+        parent_surface_id = None
+        partition_label = None
+        if interface_counts[surface_interface_id] > 1:
+            parent_surface_id = surface_id
+            partition_label = f"LOCAL_{child_index:04d}"
+            surface_id = f"{surface_id}__{partition_label}"
+        interface_kinds = _route_a_sheet_patch_interface_kinds(
+            interface,
+            contributions,
+        )
+        owner_ids = _unique_ids(
+            owner_id
+            for result in contributions
+            for owner_id in result.source_owner_ids
+        )
+        records.append(
+            SurfacePlanRecord(
+                surface_id=surface_id,
+                owner_semantic_id=sheet.semantic_id,
+                surface_role="A_planned_interface",
+                geometry_ref=dict(geometry_ref),
+                interface_id=surface_interface_id,
+                parent_surface_id=parent_surface_id,
+                partition_label=partition_label,
+                solver_use=interface.solver_use or "solver_active",
+                valid_routes=("A",),
+                metadata={
+                    "interface_kinds": interface_kinds,
+                    "owner_semantic_ids": owner_ids,
+                    "physical_owner_semantic_ids": _physical_group_owner_ids(
+                        build_input, owner_ids
+                    ),
+                    "boundary_volume_ids": patch.boundary_volume_ids,
+                    "embedded_surface_sheet": True,
+                    "source_provenance": _surface_contribution_provenance(
+                        parent_interface_id=interface.interface_id,
+                        patch_id=patch.patch_id,
+                        contributions=contributions,
+                    ),
+                },
+            )
+        )
+    return tuple(records)
+
+
+def _route_a_sheet_child_evidence(
+    semantic_facts: SemanticEvidenceFacade,
+    *,
+    patch: _RouteASheetPatch,
+    parent: EvidenceResult,
+    child_label: str,
+) -> EvidenceResult:
+    solution_id = _one_effective_domain(parent)
+    return conductor_solution_evidence(
+        semantic_facts,
+        contribution_id=(
+            f"{patch.patch_id}:{child_label}:{parent.side}:{solution_id}"
+        ),
+        patch_id=f"planned:{patch.patch_id}:{child_label}:{parent.side}",
+        conductor_id=patch.sheet_entity_id,
+        solution_id=solution_id,
+        side=parent.side or "unknown",
+    )
+
+
+def _one_effective_domain(result: EvidenceResult) -> str:
+    if result.effective_domain_ids is None or len(result.effective_domain_ids) != 1:
+        raise ValueError(
+            f"{result.contribution_id} requires one effective solution domain."
+        )
+    return result.effective_domain_ids[0]
+
+
+def _route_a_sheet_patch_interface_id(
+    interface: InterfacePlanRecord,
+    patch: _RouteASheetPatch,
+    contributions: tuple[EvidenceResult, EvidenceResult],
+) -> str:
+    preferred_domain = interface.owner_semantic_ids[1]
+    primary_kind = next(
+        (
+            result.classification
+            for result in contributions
+            if preferred_domain in (result.effective_domain_ids or ())
+        ),
+        contributions[0].classification,
+    )
+    suffix = interface.interface_id.rsplit("__", 1)[-1]
+    return (
+        f"{primary_kind}__{patch.sheet_entity_id}__"
+        f"{'__'.join(patch.boundary_volume_ids)}__{suffix}"
+    )
+
+
+def _route_a_sheet_patch_interface_kinds(
+    interface: InterfacePlanRecord,
+    contributions: Sequence[EvidenceResult],
+) -> tuple[str, ...]:
+    derived = {
+        result.classification
+        for result in contributions
+    }
+    raw = interface.metadata.get("interface_kinds")
+    if (
+        interface.metadata.get("intent_origin")
+        != "generated_route_a_surface_sheet"
+        and raw is not None
+    ):
+        declared = {str(raw)} if isinstance(raw, str) else {str(value) for value in raw}
+        if declared != derived:
+            raise ValueError(
+                f"{interface.interface_id} explicit interface kinds "
+                f"{sorted(declared)!r} contradict local evidence {sorted(derived)!r}."
+            )
+    return tuple(kind for kind in _INTERFACE_KIND_ORDER if kind in derived)
+
+
+def _surface_contribution_provenance(
+    *,
+    parent_interface_id: str,
+    patch_id: str,
+    contributions: Sequence[EvidenceResult],
+) -> dict[str, Any]:
+    ledger = tuple(
+        {
+            "contribution_id": result.contribution_id,
+            "patch_ids": result.patch_ids,
+            "classification": result.classification,
+            "source_owner_ids": result.source_owner_ids,
+            "aggregate_owner_ids": result.aggregate_owner_ids,
+            "material_id": result.material_id,
+            "material_kind": result.material_kind,
+            "effective_domain_ids": result.effective_domain_ids,
+            "side": result.side,
+            "sheet_owner_id": result.sheet_owner_id,
+            "outer_source_ids": result.outer_source_ids,
+            "hole_source_ids": result.hole_source_ids,
+            "seam_source_ids": result.seam_source_ids,
+            "evidence_stages": result.evidence_stages,
+            "observation_hashes": result.observation_hashes,
+            "snapshot_reference": result.snapshot_reference.detached(),
+        }
+        for result in contributions
+    )
+    classifications = tuple(result.classification for result in contributions)
+    surface_epr_classifications = tuple(
+        classification
+        for classification in classifications
+        if classification in {"MA", "MS", "SA"}
+    )
+    unique_surface_epr = tuple(dict.fromkeys(surface_epr_classifications))
+    aggregate_once = (
+        len(surface_epr_classifications) > 1 and len(unique_surface_epr) == 1
+    )
+    aggregation_policy = (
+        "semantic_only_no_native_row"
+        if not unique_surface_epr
+        else "shared_native_surface_once"
+        if aggregate_once
+        else "one_row_per_interface_kind"
+    )
+    return {
+        "surface_contribution_schema": "scgsim.surface-contributions.v1",
+        "parent_interface_id": parent_interface_id,
+        "local_patch_id": patch_id,
+        "surface_contribution_ledger": ledger,
+        "native_aggregation": {
+            "policy": aggregation_policy,
+            "interface_kinds": tuple(dict.fromkeys(classifications)),
+            "surface_epr_interface_kinds": unique_surface_epr,
+            "contribution_count": len(ledger),
+            "native_row_count": 1 if aggregate_once else len(unique_surface_epr),
+            "side_resolved_numeric_output": False,
+        },
+        "mask_support": {
+            "zero_inset_supported": True,
+            "positive_inset_supported": bool(unique_surface_epr)
+            and not aggregate_once,
+            "unsupported_reason": (
+                "same-kind side contributions share one native aggregate surface"
+                if aggregate_once
+                else "semantic contribution has no Surface EPR native row"
+                if not unique_surface_epr
+                else None
+            ),
+            "sides": tuple(result.side for result in contributions),
+        },
+    }
 
 
 def _lower_port_sheet_regions(
@@ -3023,6 +3696,7 @@ def _lower_port_sheet_regions(
             plane_z_um, boundary_volume_ids = _route_a_port_sheet_sheet_contract(
                 host_ids,
                 planned_surfaces,
+                region.overlaps,
             )
             embedded_volume_id = _route_a_port_sheet_vacuum_volume_id(
                 boundary_volume_ids,
@@ -3395,12 +4069,23 @@ def _route_b_port_terminal_curve_matches_overlap(
 def _route_a_port_sheet_sheet_contract(
     host_ids: Sequence[str],
     planned_surfaces: Sequence[SurfacePlanRecord],
+    overlaps: Sequence[Any],
 ) -> tuple[float, tuple[str, str]]:
-    """Use the actual Route-A host sheets, never stack-name inference."""
+    """Select the local Route-A child intersecting each exact host footprint."""
+    import gdstk
+
     host_planes: list[float] = []
     boundary_volume_ids: tuple[str, str] | None = None
     for host_id in host_ids:
-        host_sheets = tuple(
+        host_overlaps = tuple(
+            overlap for overlap in overlaps if overlap.host_semantic_id == host_id
+        )
+        if len(host_overlaps) != 1:
+            raise ValueError(
+                f"{host_id} requires exactly one Route A port overlap record"
+            )
+        overlap_region = (gdstk.Polygon(_clean_loop(host_overlaps[0].overlap_loop)),)
+        candidates = tuple(
             surface
             for surface in planned_surfaces
             if surface.metadata.get("representation") == "surface_sheet"
@@ -3410,9 +4095,29 @@ def _route_a_port_sheet_sheet_contract(
             and surface.surface_role == "A_planned_interface"
             and host_id in _surface_owner_ids(surface)
         )
+        host_sheets = tuple(
+            surface
+            for surface in candidates
+            if _boolean_gdstk_region(
+                gdstk,
+                overlap_region,
+                _gdstk_surface_region(surface.geometry_ref),
+                "and",
+            )
+        )
         if len(host_sheets) != 1:
             raise ValueError(
-                f"{host_id} requires exactly one planned Route A surface_sheet"
+                f"{host_id} port overlap intersects {len(host_sheets)} local "
+                "Route A surface_sheet patches"
+            )
+        if _boolean_gdstk_region(
+            gdstk,
+            overlap_region,
+            _gdstk_surface_region(host_sheets[0].geometry_ref),
+            "not",
+        ):
+            raise ValueError(
+                f"{host_id} port overlap crosses incompatible Route A domains"
             )
         plane_z_um = _geometry_ref_surface_z_um(host_sheets[0].geometry_ref)
         if not isfinite(plane_z_um):
@@ -3504,12 +4209,29 @@ def _carve_route_a_port_sheet_from_host_plane(
             "not",
         )
         refs = _geometry_refs_from_gdstk_region(surface.geometry_ref, remainder)
-        if len(refs) != 1:
-            raise ValueError(
-                f"{port_surface.surface_id} requires one host-plane remainder "
-                f"for {surface.surface_id}"
+        parent_surface_id = surface.parent_surface_id or surface.surface_id
+        for index, geometry_ref in enumerate(refs):
+            result.append(
+                replace(
+                    surface,
+                    surface_id=(
+                        surface.surface_id
+                        if len(refs) == 1
+                        else f"{surface.surface_id}__PORT_REMAINDER_{index:04d}"
+                    ),
+                    geometry_ref=geometry_ref,
+                    parent_surface_id=(
+                        surface.parent_surface_id
+                        if len(refs) == 1
+                        else parent_surface_id
+                    ),
+                    partition_label=(
+                        surface.partition_label
+                        if len(refs) == 1
+                        else f"PORT_REMAINDER_{index:04d}"
+                    ),
+                )
             )
-        result.append(replace(surface, geometry_ref=refs[0]))
     return result
 
 
@@ -3690,6 +4412,11 @@ def _with_surface_contract_metadata(
             raise ValueError(
                 f"{surface.surface_id} has ambiguous conductor source_layer_name"
             )
+        existing_source_provenance = surface.metadata.get("source_provenance", {})
+        if not isinstance(existing_source_provenance, Mapping):
+            raise TypeError(
+                f"{surface.surface_id} source_provenance must be a mapping"
+            )
         result.append(
             replace(
                 surface,
@@ -3717,7 +4444,16 @@ def _with_surface_contract_metadata(
                     # entities under a stable semantic group id.  Keep the
                     # exact split owners in source provenance, while the
                     # solver-live owner field names the actual group owner.
-                    "owner_semantic_ids": structured_owner_ids,
+                    "owner_semantic_ids": (
+                        owner_ids
+                        if any(
+                            boundary_id not in structured_owner_ids
+                            for boundary_id in surface.metadata.get(
+                                "boundary_volume_ids", ()
+                            )
+                        )
+                        else structured_owner_ids
+                    ),
                     "net_id": (
                         component_net[next(iter(component_ids))]
                         if component_ids and next(iter(component_ids)) in component_net
@@ -3731,6 +4467,7 @@ def _with_surface_contract_metadata(
                         else next(iter(equipotential_ids), None)
                     ),
                     "source_provenance": {
+                        **dict(existing_source_provenance),
                         "source_polygon_ids": _normalized_source_polygon_ids(
                             build_input,
                             owner_ids,
@@ -4051,6 +4788,30 @@ def plan_cut_host_operations(
             valid_routes=(route,),
         )
         for host_id, bodies in bodies_by_host.items()
+    )
+
+
+def _reconcile_construction_body_surface_ids(
+    construction_bodies: tuple[ConstructionBodyPlanRecord, ...],
+    *,
+    surfaces: Sequence[SurfacePlanRecord],
+) -> tuple[ConstructionBodyPlanRecord, ...]:
+    """Bind preplanned cutter bodies to their final local surface children."""
+    surface_ids_by_body: dict[str, list[str]] = {}
+    for surface in surfaces:
+        body_id = surface.geometry_ref.get("construction_body_id")
+        if isinstance(body_id, str) and body_id:
+            surface_ids_by_body.setdefault(body_id, []).append(surface.surface_id)
+    return tuple(
+        replace(
+            body,
+            expected_surface_ids=tuple(
+                sorted(surface_ids_by_body.get(body.construction_body_id, ()))
+            ),
+        )
+        if body.construction_body_id in surface_ids_by_body
+        else body
+        for body in construction_bodies
     )
 
 
@@ -4731,7 +5492,10 @@ def _interface_surface_owner_ids(
         route_a_owner_ids = _unique_ids(
             owner_id
             for result in route_a_evidence
-            for owner_id in result.source_owner_ids
+            for owner_id in (
+                *result.source_owner_ids,
+                *(result.effective_domain_ids or ()),
+            )
         )
         if not route_a_owner_ids:
             entity = _entity_by_id(build_input, interface.owner_semantic_ids[0])
@@ -4986,6 +5750,7 @@ def _plan_substrate_air_surfaces(
     *,
     route: RouteLiteral,
     semantic_facts: SemanticEvidenceFacade | None = None,
+    route_a_sheet_patches: Sequence[_RouteASheetPatch] = (),
 ) -> tuple[SurfacePlanRecord, ...]:
     import gdstk
 
@@ -5039,9 +5804,26 @@ def _plan_substrate_air_surfaces(
                 z_um=z_um,
                 base_region=(patch,),
             )
+            sheet_geometry_refs = tuple(
+                sheet_patch.geometry_ref
+                for sheet_patch in route_a_sheet_patches
+                if sheet_patch.boundary_volume_ids
+                == (lower.semantic_id, upper.semantic_id)
+                and _same_z(
+                    _geometry_ref_surface_z_um(sheet_patch.geometry_ref),
+                    z_um,
+                )
+                and _boolean_gdstk_region(
+                    gdstk,
+                    _gdstk_surface_region(sheet_patch.geometry_ref),
+                    (patch,),
+                    "and",
+                )
+            )
             solution_geometry_refs = _solution_interface_geometry_refs(
                 base_geometry_ref,
                 plane_conductors,
+                conductor_geometry_refs=sheet_geometry_refs,
             )
             for geometry_ref in solution_geometry_refs:
                 interface_id = (
@@ -5063,6 +5845,16 @@ def _plan_substrate_air_surfaces(
                                 lower.semantic_id,
                                 upper.semantic_id,
                             ),
+                            "source_provenance": (
+                                _surface_contribution_provenance(
+                                    parent_interface_id=(
+                                        f"solution-interface:{lower.semantic_id}:"
+                                        f"{upper.semantic_id}"
+                                    ),
+                                    patch_id=interface_evidence.contribution_id,
+                                    contributions=(interface_evidence,),
+                                )
+                            ),
                         },
                     )
                 )
@@ -5073,14 +5865,20 @@ def _plan_substrate_air_surfaces(
 def _solution_interface_geometry_refs(
     parent_geometry_ref: Mapping[str, Any],
     plane_conductors: Sequence[SemanticEntitySpec],
+    *,
+    conductor_geometry_refs: Sequence[Mapping[str, Any]] = (),
 ) -> tuple[dict[str, Any], ...]:
     """Create live solution-interface patches after removing conductors."""
-    if not plane_conductors:
+    if not plane_conductors and not conductor_geometry_refs:
         return (dict(parent_geometry_ref),)
 
     import gdstk
 
-    hole_loops = _simple_interior_hole_loops(parent_geometry_ref, plane_conductors)
+    hole_loops = _simple_interior_hole_loops(
+        parent_geometry_ref,
+        plane_conductors,
+        conductor_geometry_refs=conductor_geometry_refs,
+    )
     if hole_loops is not None:
         return ({**dict(parent_geometry_ref), "hole_loops": hole_loops},)
 
@@ -5089,6 +5887,10 @@ def _solution_interface_geometry_refs(
         polygon
         for entity in plane_conductors
         for polygon in _entity_occupied_region(gdstk, entity)
+    ) + tuple(
+        polygon
+        for geometry_ref in conductor_geometry_refs
+        for polygon in _gdstk_surface_region(geometry_ref)
     )
     live_region = _boolean_gdstk_region(
         gdstk,
@@ -5102,16 +5904,29 @@ def _solution_interface_geometry_refs(
 def _simple_interior_hole_loops(
     parent_geometry_ref: Mapping[str, Any],
     plane_conductors: Sequence[SemanticEntitySpec],
+    *,
+    conductor_geometry_refs: Sequence[Mapping[str, Any]] = (),
 ) -> tuple[tuple[tuple[float, float], ...], ...] | None:
+    # This shortcut constructs a new hole list from conductor footprints.  An
+    # already-holed solution interface must take the Boolean path so authored
+    # substrate holes remain absent from the live SA surface.
+    if parent_geometry_ref.get("hole_loops"):
+        return None
     if any(entity.geometry.get("hole_loops") for entity in plane_conductors):
+        return None
+    if any(geometry_ref.get("hole_loops") for geometry_ref in conductor_geometry_refs):
         return None
     base_loop = _clean_loop(parent_geometry_ref["outer_loop"])
     hole_loops = tuple(
         _clean_loop(entity.geometry["outer_loop"])
         for entity in plane_conductors
         if "outer_loop" in entity.geometry
+    ) + tuple(
+        _clean_loop(geometry_ref["outer_loop"])
+        for geometry_ref in conductor_geometry_refs
+        if "outer_loop" in geometry_ref
     )
-    if len(hole_loops) != len(plane_conductors):
+    if len(hole_loops) != len(plane_conductors) + len(conductor_geometry_refs):
         return None
     if any(not _loop_inside_loop(hole_loop, base_loop) for hole_loop in hole_loops):
         return None
@@ -5511,6 +6326,14 @@ def _merge_solution_sidewall_interfaces(
                 "boundary_volume_ids": owner_ids,
                 "interface_kinds": (kind,),
                 "interface_type": kind,
+                "source_provenance": _surface_contribution_provenance(
+                    parent_interface_id=(
+                        f"solution-sidewall:{lower.semantic_id}:"
+                        f"{upper.semantic_id}"
+                    ),
+                    patch_id=interface_evidence.contribution_id,
+                    contributions=(interface_evidence,),
+                ),
             },
         )
         grouped_surfaces.append(merged)
@@ -6069,6 +6892,12 @@ def _route_a_sheet_plane_z_um(
     build_input: GeometryBuildInput,
     entity: SemanticEntitySpec,
 ) -> float:
+    if any(
+        solution.metadata.get("auto_vacuum_group_id")
+        == entity.host_void_semantic_id
+        for solution in _solution_entities(build_input)
+    ):
+        return _auto_vacuum_sheet_z(build_input, entity)
     z_min_um, z_max_um = _entity_z_range_um(entity)
     for boundary_id, z_um in (
         (
@@ -6178,6 +7007,29 @@ def _conductor_face_adjacent_solution_id(
         )
         if non_auto_solution is not None:
             return non_auto_solution
+        adjacent_solution = _solution_id_for_entity_coverage(
+            build_input,
+            entity,
+            z_um=face_z_um,
+            mode=face,
+        )
+        if adjacent_solution is not None and _entity_by_id(
+            build_input, adjacent_solution
+        ).metadata.get("auto_vacuum_group_id") == entity.host_void_semantic_id:
+            return adjacent_solution
+        # A Route-A sheet may retain its physical film thickness in source
+        # coordinates while its solution side lies inside one generated vacuum
+        # component. Require full polygonal coverage by that exact component.
+        containing_solution = _solution_id_for_entity_coverage(
+            build_input,
+            entity,
+            z_um=face_z_um,
+            mode="containing",
+        )
+        if containing_solution is not None and _entity_by_id(
+            build_input, containing_solution
+        ).metadata.get("auto_vacuum_group_id") == entity.host_void_semantic_id:
+            return containing_solution
         raise ValueError(
             f"{entity.semantic_id} {face} has no local auto-vacuum component."
         )
@@ -6639,7 +7491,10 @@ def _conductor_entities_on_solution_plane(
             continue
         representation = entity.route_representations.get(route)
         if representation == "surface_sheet":
-            if set(
+            # Route-A sheets are removed by exact local patch geometry in
+            # `_plan_substrate_air_surfaces`; whole-entity coverage cannot
+            # represent a sheet spanning supported and exposed regions.
+            if route != "A" and set(
                 _route_a_sheet_boundary_volume_ids(build_input, entity)
             ) == pair_ids and _same_z(
                 _route_a_sheet_plane_z_um(build_input, entity), z_um

@@ -7,6 +7,8 @@ import hashlib
 import json
 import math
 from collections.abc import Mapping, Sequence
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, Literal
 
 from scgsim.semantics.route_a import (
@@ -87,6 +89,7 @@ def apply_route_a_thin_film_to_stack(
     *,
     source_stack: Mapping[str, Any],
     variant: str | None,
+    component: Any | None = None,
 ) -> Mapping[str, Any]:
     """Return a Route-A stack with one explicit thin-film coordinate contract.
 
@@ -98,8 +101,16 @@ def apply_route_a_thin_film_to_stack(
     normalized = normalize_route_a_thin_film("A", variant)
     if not isinstance(stack, Mapping) or not isinstance(source_stack, Mapping):
         raise TypeError("Route-A thin-film lowering requires mapping stacks.")
+    layers = stack.get("layers", ())
+    if isinstance(layers, str | bytes) or not isinstance(layers, Sequence):
+        raise TypeError("Route-A thin-film lowering requires structured layers.")
+    substrate_support = (
+        _normalized_route_a_support(component, stack) if component is not None else None
+    )
     facts = _route_a_thin_film_facts(
-        stack, allow_single_face=normalized == "substrate_face"
+        stack,
+        allow_single_face=normalized == "substrate_face",
+        substrate_support=substrate_support,
     )
     work = dict(
         apply_thin_film_profile(
@@ -141,6 +152,11 @@ def _route_a_thin_film_provenance(
                 "sha256": source_hash,
             },
             "host_solution_volume_id": facts["host_solution_volume_id"],
+            **(
+                {"host_reference_origin": facts["host_reference_origin"]}
+                if "host_reference_origin" in facts
+                else {}
+            ),
             "physical_substrate_z_ranges_um": facts[
                 "physical_substrate_z_ranges_um"
             ],
@@ -170,6 +186,11 @@ def _route_a_thin_film_provenance(
             "sha256": source_hash,
         },
         "host_solution_volume_id": facts["host_solution_volume_id"],
+        **(
+            {"host_reference_origin": facts["host_reference_origin"]}
+            if "host_reference_origin" in facts
+            else {}
+        ),
         "physical_substrate_z_ranges_um": facts["physical_substrate_z_ranges_um"],
         "physical_face_metal_z_ranges_um": face_ranges,
         "physical_substrate_face_gap_um": facts["physical_substrate_face_gap_um"],
@@ -209,9 +230,44 @@ def _route_a_thin_film_provenance(
 
 
 def _route_a_thin_film_facts(
-    stack: Mapping[str, Any], *, allow_single_face: bool = False
+    stack: Mapping[str, Any],
+    *,
+    allow_single_face: bool = False,
+    substrate_support: Mapping[str, Mapping[str, str]] | None = None,
 ) -> dict[str, Any]:
-    return derive_thin_film_facts(stack, allow_single_face=allow_single_face)
+    return derive_thin_film_facts(
+        stack,
+        allow_single_face=allow_single_face,
+        substrate_support=substrate_support,
+    )
+
+
+def _normalized_route_a_support(
+    component: Any | None,
+    stack: Mapping[str, Any],
+) -> Mapping[str, Mapping[str, str]]:
+    if component is None:
+        raise ValueError(
+            "generated-background Route A requires the component's normalized layout polygons."
+        )
+    from scgsim.sgb import build_gds_stack_geometry_input
+    from scgsim.sgb.planning import verified_route_a_substrate_support
+
+    from ._mesh import _component_gds_top_cell_name, _write_component_gds
+
+    with TemporaryDirectory(prefix="scgsim-auto-route-a-") as directory:
+        gds_path = Path(directory) / "design.gds"
+        stack_path = Path(directory) / "design.stack.json"
+        _write_component_gds(component, gds_path)
+        stack_path.write_text(json.dumps(dict(stack), indent=2) + "\n", encoding="utf-8")
+        build_input = build_gds_stack_geometry_input(
+            gds_file=gds_path,
+            stack_file=stack_path,
+            top_cell_name=_component_gds_top_cell_name(
+                component=component, gds_path=gds_path
+            ),
+        )
+        return verified_route_a_substrate_support(build_input, stack)
 
 
 def _validate_single_face_metal_records(
@@ -494,6 +550,7 @@ def apply_vacuum_region_to_stack(
     auto_bounds = _auto_vacuum_bounds(
         solution_regions,
         materials=work_materials,
+        layers=stack.get("layers", ()),
     )
 
     region = solution_regions.get("VACUUM_REGION")
@@ -621,6 +678,7 @@ def _materialize_locked_vacuum_material(
 def _auto_vacuum_bounds(
     solution_regions: Mapping[str, Mapping[str, Any]],
     materials: Mapping[str, Any],
+    layers: Any = (),
 ) -> dict[str, float]:
     bounds: list[dict[str, float]] = []
     for semantic_id, region in solution_regions.items():
@@ -701,13 +759,32 @@ def _auto_vacuum_bounds(
             "Cannot auto-compute vacuum envelope without non-vacuum solution regions."
         )
 
+    if isinstance(layers, str | bytes) or not isinstance(layers, Sequence):
+        raise TypeError("stack layers must be a sequence for auto vacuum envelope.")
+    layer_z_ranges = []
+    for index, layer in enumerate(layers):
+        if not isinstance(layer, Mapping):
+            raise TypeError(f"stack layer {index} must be a mapping for auto vacuum envelope.")
+        layer_z_ranges.append(
+            semantic_geometry_z_range(
+                semantic_record_geometry(layer, str(layer.get("semantic_id", index))),
+                str(layer.get("semantic_id", index)),
+            )
+        )
+
     return {
         "x_min_um": min(item["x_min_um"] for item in bounds),
         "x_max_um": max(item["x_max_um"] for item in bounds),
         "y_min_um": min(item["y_min_um"] for item in bounds),
         "y_max_um": max(item["y_max_um"] for item in bounds),
-        "z_min_um": min(item["z_min_um"] for item in bounds),
-        "z_max_um": max(item["z_max_um"] for item in bounds),
+        "z_min_um": min(
+            *(item["z_min_um"] for item in bounds),
+            *(item[0] for item in layer_z_ranges),
+        ),
+        "z_max_um": max(
+            *(item["z_max_um"] for item in bounds),
+            *(item[1] for item in layer_z_ranges),
+        ),
     }
 
 

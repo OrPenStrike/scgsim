@@ -51,7 +51,7 @@ class VacuumRegionSpec:
         cls,
         value: float | Sequence[float] | Mapping[str, Any],
     ) -> VacuumRegionSpec:
-        """Normalize scalar, 3-sequence, or exact six-face vacuum padding."""
+        """Normalize scalar, 3-sequence, or sparse six-face vacuum padding."""
         if isinstance(value, bool) or value is None:
             raise TypeError(
                 "vacuum padding must be a number, 3-sequence, or six-face mapping."
@@ -92,36 +92,16 @@ class VacuumRegionSpec:
             "z_plus_um",
         }
         keys = set(value.keys())
-        if keys != required:
-            missing = tuple(sorted(required - keys))
+        if not keys <= required:
             extras = tuple(sorted(keys - required))
-            problems = []
-            if missing:
-                problems.append(f"missing {missing!r}")
-            if extras:
-                problems.append(f"extra {extras!r}")
             raise ValueError(
-                "vacuum face padding mapping must define exact keys x_minus_um, x_plus_um, y_minus_um, y_plus_um, z_minus_um, z_plus_um: "
-                + "; ".join(problems)
+                "vacuum face padding mapping has unsupported keys: "
+                f"{extras!r}."
             )
 
         face_map = {
-            "x_minus_um": _non_negative_float(value.get("x_minus_um"), "x_minus_um"),
-            "x_plus_um": _non_negative_float(value.get("x_plus_um"), "x_plus_um"),
-            "y_minus_um": _non_negative_float(value.get("y_minus_um"), "y_minus_um"),
-            "y_plus_um": _non_negative_float(value.get("y_plus_um"), "y_plus_um"),
-            "z_minus_um": _non_negative_float(value.get("z_minus_um"), "z_minus_um"),
-            "z_plus_um": _non_negative_float(value.get("z_plus_um"), "z_plus_um"),
+            key: _non_negative_float(value.get(key, 0.0), key) for key in required
         }
-        missing = tuple(
-            face for face, face_value in face_map.items() if face_value is None
-        )
-        if missing:
-            raise ValueError(
-                "vacuum face padding mapping must define exact keys: "
-                "x_minus_um, x_plus_um, y_minus_um, y_plus_um, z_minus_um, z_plus_um; "
-                f"missing {missing!r}"
-            )
         return cls(**{key: value for key, value in face_map.items()})
 
 
