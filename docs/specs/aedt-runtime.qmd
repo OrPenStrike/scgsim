@@ -319,7 +319,9 @@ material, vacuum-region, and (for Route A) thin-film provenance. See
 [Geometry and SGB Route A/B](../geometry-sgb.qmd#shared-source-facts-for-aedt).
 The first call requests no analysis contributions and exposes the public
 `contribution_catalog`; the selected contribution and source polygon are then
-checked against that catalogue before constructing `SurfaceEprSpec`.
+checked against that catalogue before constructing `SurfaceEprSpec`. Supply
+the existing Route A profile (`substrate_face` or `metal_gap_equivalent`)
+explicitly as `route_a_profile`; no profile is defaulted.
 
 ```python
 from collections.abc import Mapping
@@ -342,6 +344,7 @@ def prepare_surface_epr_handoff(
     *,
     build_input: GeometryBuildInput,
     prepared_stack: Mapping[str, Any],
+    route_a_profile: str,
     contribution_id: str,
     source_polygon_id: str,
     film_thickness_m: float,
@@ -357,6 +360,7 @@ def prepare_surface_epr_handoff(
         build_input,
         prepared_stack=prepared_stack,
         route="A",
+        route_a_profile=route_a_profile,
     )
     for record in catalogue_geometry.contribution_catalog:
         print(
@@ -390,6 +394,7 @@ def prepare_surface_epr_handoff(
         build_input,
         prepared_stack=prepared_stack,
         route="A",
+        route_a_profile=route_a_profile,
         contributions=(surface,),
     )
     request = EprAnalysisRequest(
@@ -414,7 +419,8 @@ def prepare_surface_epr_handoff(
 
 Call this local example with the existing SGB outputs, the exact IDs printed
 from the catalogue, PDK film properties, the selected `EigenmodeRunControl`,
-and a new path such as `runs/cpw-epr-prepare-only`. On the AEDT host, the
+the existing Route A profile passed as `route_a_profile`, and a new path such
+as `runs/cpw-epr-prepare-only`. On the AEDT host, the
 generated script's explicit preparation-only invocation is
 `<handoff.run_dir>/run_aedt.sh --prepare-only`; this saves and releases the
 prepared model but does not solve or produce field integrals. Preparation
