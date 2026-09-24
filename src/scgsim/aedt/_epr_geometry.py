@@ -925,6 +925,59 @@ def _polygon_sheet(app: Any, polygon: Mapping[str, Any], *, name: str, z_um: flo
     return app.modeler[name]
 
 
+def _positive_z_exterior(exterior: Sequence[Sequence[float]]) -> list[Sequence[float]]:
+    if len(exterior) < 3:
+        raise ValueError("solid planar exterior needs at least three vertices")
+    signed_area_twice = sum(
+        float(point[0]) * float(exterior[(index + 1) % len(exterior)][1])
+        - float(exterior[(index + 1) % len(exterior)][0]) * float(point[1])
+        for index, point in enumerate(exterior)
+    )
+    if not math.isfinite(signed_area_twice) or signed_area_twice == 0.0:
+        raise ValueError("solid planar exterior has invalid winding")
+    return list(reversed(exterior)) if signed_area_twice < 0.0 else list(exterior)
+
+
+def _positive_z_solid(
+    app: Any,
+    polygon: Mapping[str, Any],
+    *,
+    name: str,
+    z_min_um: float,
+    z_max_um: float,
+) -> Any:
+    """Thicken a planar loop toward its declared upper Z, regardless of winding."""
+
+    if z_max_um <= z_min_um:
+        raise ValueError(f"solid {name!r} has empty Z extent")
+    native_polygon = dict(polygon)
+    native_polygon["exterior"] = _positive_z_exterior(polygon["exterior"])
+    sheet = _polygon_sheet(app, native_polygon, name=name, z_um=z_min_um)
+    faces = sheet.faces
+    if not faces or any(
+        face.normal is None
+        or len(face.normal) != 3
+        or not all(math.isfinite(float(value)) for value in face.normal)
+        or float(face.normal[2]) <= 0.0
+        for face in faces
+    ):
+        raise RuntimeError(f"solid {name!r} source sheet does not face positive Z")
+    body = app.modeler.thicken_sheet(
+        sheet.name, f"{z_max_um - z_min_um:.17g}um", both_sides=False
+    )
+    if body is False or body is None:
+        raise RuntimeError(f"failed to thicken solid {name!r}")
+    bounds = body.bounding_box
+    scale = max(1.0, abs(z_min_um), abs(z_max_um))
+    if (
+        len(bounds) != 6
+        or not math.isclose(float(bounds[2]), z_min_um, rel_tol=0.0, abs_tol=1e-9 * scale)
+        or not math.isclose(float(bounds[5]), z_max_um, rel_tol=0.0, abs_tol=1e-9 * scale)
+    ):
+        raise RuntimeError(f"solid {name!r} native Z range differs from source")
+    return body
+
+
 def _analysis_surface_sheet(
     app: Any, geometry_ref: Mapping[str, Any], *, name: str
 ) -> tuple[Any, list[list[float]]]:
@@ -1051,14 +1104,9 @@ def _solution_body(app: Any, entity: Mapping[str, Any]) -> Any:
         "holes": geometry.get("hole_loops", ()),
     }
     name = _native_name("domain", entity["semantic_id"])
-    sheet = _polygon_sheet(app, polygon, name=name, z_um=z_min)
-    body = app.modeler.thicken_sheet(
-        sheet.name, f"{z_max - z_min:.17g}um", both_sides=False
+    body = _positive_z_solid(
+        app, polygon, name=name, z_min_um=z_min, z_max_um=z_max
     )
-    if body is False or body is None:
-        raise RuntimeError(
-            f"failed to thicken solution domain {entity['semantic_id']!r}"
-        )
     body.material_name = str(entity["material_id"])
     return body
 
@@ -1353,9 +1401,9 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
             if polygon_id in junction_polygons:
                 continue
             name = _native_name("conductor", entity["semantic_id"], polygon_id)
-            obj = _polygon_sheet(app, polygons[polygon_id], name=name, z_um=z_um)
             boundary_name: str | None = None
             if is_route_a_sheet:
+                obj = _polygon_sheet(app, polygons[polygon_id], name=name, z_um=z_um)
                 boundary_name = _native_name(
                     "pec_boundary", entity["semantic_id"], polygon_id
                 )
@@ -1369,9 +1417,13 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
                     raise ValueError(
                         f"finite conductor {entity['semantic_id']!r} requires positive thickness"
                     )
-                obj = app.modeler.thicken_sheet(obj.name, f"{thickness_um:g}um", both_sides=False)
-                if obj is False or obj is None:
-                    raise RuntimeError(f"failed to thicken Route B conductor {name!r}")
+                obj = _positive_z_solid(
+                    app,
+                    polygons[polygon_id],
+                    name=name,
+                    z_min_um=z_min_um,
+                    z_max_um=z_max_um,
+                )
                 obj.material_name = "pec"
                 obj.solve_inside = False
             evidence = _native_object_evidence(app, obj.name)
