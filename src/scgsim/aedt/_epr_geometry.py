@@ -509,49 +509,59 @@ def _regions_from_gdstk(polygons: Sequence[Any]) -> list[dict[str, Any]]:
 
 def _bind_physical_support_masks(
     bindings: list[dict[str, Any]],
+    support_bindings: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    if not bindings:
+        return []
     import gdstk
 
     groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
-    for binding in bindings:
+    for binding in support_bindings:
         groups.setdefault(_plane_group_key(binding), []).append(binding)
-    result: list[dict[str, Any]] = []
-    for group in groups.values():
+    support_by_group: dict[
+        tuple[Any, ...],
+        tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]],
+    ] = {}
+    for key, group in groups.items():
         plane = group[0]["mask_plane"]
         projected = [
-            _project_plane_region(binding["mask_plane"], plane)
-            for binding in group
+            _project_plane_region(item["mask_plane"], plane) for item in group
         ]
         union = list(gdstk.boolean(_gdstk_polygons(projected), [], "or", precision=1e-9))
         if not union:
             raise RuntimeError("physical EPR support union is empty")
-        support_regions = _regions_from_gdstk(union)
-        for binding in group:
-            result.append(
-                {
-                    **binding,
-                    "mask_plane": {**plane, "exterior": [], "holes": []},
-                    "mask_support": {
-                        "group_identity_sha256": canonical_sha256(
-                            {
-                                "plane": plane,
-                                "classification": binding["contribution"]["classification"],
-                                "side": binding["contribution"]["side"],
-                                "material_id": binding["effective_material_id"],
-                                "members": sorted(item["binding_id"] for item in group),
-                            }
-                        ),
-                        "attribution_regions": [
-                            _project_plane_region(binding["mask_plane"], plane)
-                        ],
-                        # The original union boundary is authoritative.  The
-                        # field compiler applies exact finite-segment distance
-                        # for each margin; polygon offset geometry would change
-                        # concave and hole-corner semantics.
-                        "support_regions": support_regions,
-                    },
-                }
-            )
+        support_by_group[key] = (plane, _regions_from_gdstk(union), group)
+    result: list[dict[str, Any]] = []
+    for binding in bindings:
+        support = support_by_group.get(_plane_group_key(binding))
+        if support is None:
+            raise RuntimeError("selected EPR surface lacks complete physical support")
+        plane, support_regions, group = support
+        result.append(
+            {
+                **binding,
+                "mask_plane": {**plane, "exterior": [], "holes": []},
+                "mask_support": {
+                    "group_identity_sha256": canonical_sha256(
+                        {
+                            "plane": plane,
+                            "classification": binding["contribution"]["classification"],
+                            "side": binding["contribution"]["side"],
+                            "material_id": binding["effective_material_id"],
+                            "members": sorted(item["binding_id"] for item in group),
+                        }
+                    ),
+                    "attribution_regions": [
+                        _project_plane_region(binding["mask_plane"], plane)
+                    ],
+                    # The original union boundary is authoritative.  The
+                    # field compiler applies exact finite-segment distance
+                    # for each margin; polygon offset geometry would change
+                    # concave and hole-corner semantics.
+                    "support_regions": support_regions,
+                },
+            }
+        )
     return result
 
 
@@ -679,6 +689,44 @@ def prepare_planar_geometry_input(
         item["semantic_id"]: item for item in source["solution_regions"]
     }
     materials = source["materials"]
+    support_bindings: list[dict[str, Any]] = []
+    requested_support_sides = {
+        (item.interface_kind, item.field_side)
+        for item in contribution_tuple
+    }
+    for surface in surfaces:
+        evidence = surface["contribution"]
+        if (
+            evidence.get("classification"), evidence.get("side")
+        ) not in requested_support_sides:
+            continue
+        domain_ids = tuple(evidence.get("effective_domain_ids", ()))
+        expected_count = 2 if evidence["classification"] == "SA" else 1
+        if len(domain_ids) != expected_count:
+            raise ValueError("physical EPR support has inconsistent adjacent domains")
+        domains = [regions_by_id.get(domain_id) for domain_id in domain_ids]
+        if any(domain is None for domain in domains):
+            raise ValueError("physical EPR support domain is absent from prepared_stack")
+        if evidence["classification"] == "SA":
+            field_domains = [
+                domain for domain in domains
+                if materials.get(domain["material_id"], {}).get("kind") == "vacuum"
+            ]
+            if len(field_domains) != 1:
+                raise ValueError("physical SA support needs one vacuum field domain")
+            field_domain = field_domains[0]
+        else:
+            field_domain = domains[0]
+        support_bindings.append(
+            {
+                **surface,
+                "binding_id": (
+                    f"{evidence['contribution_id']}__"
+                    f"{canonical_sha256({'surface_id': surface['surface_id'], 'geometry_ref': surface['geometry_ref']})[:16]}"
+                ),
+                "effective_material_id": field_domain["material_id"],
+            }
+        )
     resolved_surfaces: list[dict[str, Any]] = []
     for requested in contribution_tuple:
         matches = [
@@ -798,7 +846,7 @@ def prepare_planar_geometry_input(
                         f"{requested.contribution_id}__"
                         f"{canonical_sha256({'surface_id': match['surface_id'], 'geometry_ref': match['geometry_ref']})[:16]}"
                     ),
-                    "effective_domain_id": effective_domains[0],
+                    "effective_domain_id": domain["semantic_id"],
                     "effective_material_id": domain["material_id"],
                     "effective_material": _plain(material),
                     "substrate_material": (
@@ -812,7 +860,9 @@ def prepare_planar_geometry_input(
                 }
             )
 
-    resolved_surfaces = _bind_physical_support_masks(resolved_surfaces)
+    resolved_surfaces = _bind_physical_support_masks(
+        resolved_surfaces, support_bindings
+    )
 
     if route == "A":
         profile = source.get("route_a_thin_film")

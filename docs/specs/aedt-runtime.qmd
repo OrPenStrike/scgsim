@@ -252,9 +252,13 @@ Each required field quantity is evaluated in an explicitly bound setup,
 `LastAdaptive` solution, mode, frequency, phase, and excitation context. That
 context is read back with the value: a saved expression name or expression
 digest alone is not solution identity because an unevaluated calculator stack
-can follow later context changes. Route-A sheet traces preserve the requested
-side; Route-B patches use the exact adjacent solution side. `Smooth` and field
-magnitude are not substitutes for selecting the requested side.
+can follow later context changes. Both Route A and Route B currently use
+analysis non-model sheets and a normal-based rule to choose the native side or
+adjacent side from the source `field_side`. The stored `effective_domain_id` is
+binding metadata, not a native domain restriction and not proof that the
+selected field belongs to that material. `Smooth` and field magnitude are not
+substitutes for side selection. The latest native expression and side behavior
+remain unverified; no field-success claim is made.
 
 ### Mode binding and pass cache
 
@@ -302,23 +306,144 @@ private Eigenmode analysis path; the offline resolver never imports PyAEDT or
 owns Desktop. `resolve_saved_solution()` verifies an immutable project plus
 complete result-directory inventory. `resolve_epr_result()` verifies and loads
 partial history or final saved-field results without filling missing values.
-The Plotly report consumes only those resolved records and displays missing
-native values as missing rather than zero.
+`plot_epr_result()` is a standalone Plotly function over those resolved records;
+it is not wired into the unified Visualizer. Missing native values remain
+missing rather than becoming zero. Film loss tangent and (p\tan\delta) are
+not implemented or reported.
 
-For a new run, prepare source polygons and materials with
-`prepare_planar_geometry_input()`, including explicit Route A/B, contribution
-identities, margins, and directed junction identities. Pass that geometry and
-an `EprAnalysisRequest` to `prepare_hfss_eigenmode_from_geometry()` with a
-new output directory. The generated `run_aedt.sh` performs the explicit
-native run; `--execute --prepare-only` saves and releases a prepared model but
-does not solve or produce field integrals. No-EPR Eigenmode handoffs omit the
-request and retain their separate one-shot path.
+#### Catalogue-driven handoff
+
+The inputs below are the real `GeometryBuildInput` and prepared-stack mapping
+from the existing in-tree SGB workflow, including the selected route and its
+material, vacuum-region, and (for Route A) thin-film provenance. See
+[Geometry and SGB Route A/B](../geometry-sgb.qmd#shared-source-facts-for-aedt).
+The first call requests no analysis contributions and exposes the public
+`contribution_catalog`; the selected contribution and source polygon are then
+checked against that catalogue before constructing `SurfaceEprSpec`.
+
+```python
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
+
+from scgsim.aedt import (
+    EprAnalysisRequest,
+    EigenmodeRunControl,
+    HandoffPlan,
+    PreparedPlanarGeometry,
+    SurfaceEprSpec,
+    prepare_hfss_eigenmode_from_geometry,
+    prepare_planar_geometry_input,
+)
+from scgsim.sgb import GeometryBuildInput
+
+
+def prepare_surface_epr_handoff(
+    *,
+    build_input: GeometryBuildInput,
+    prepared_stack: Mapping[str, Any],
+    contribution_id: str,
+    source_polygon_id: str,
+    film_thickness_m: float,
+    film_relative_permittivity: float,
+    margins_um: tuple[float, ...],
+    project_name: str,
+    design_name: str,
+    run_control: EigenmodeRunControl,
+    mode_indices: tuple[int, ...],
+    output_dir: Path,
+) -> tuple[PreparedPlanarGeometry, EprAnalysisRequest, HandoffPlan]:
+    catalogue_geometry = prepare_planar_geometry_input(
+        build_input,
+        prepared_stack=prepared_stack,
+        route="A",
+    )
+    for record in catalogue_geometry.contribution_catalog:
+        print(
+            record["contribution_id"],
+            record["interface_kind"],
+            record["field_side"],
+            record["source_polygon_ids"],
+        )
+
+    matches = [
+        record
+        for record in catalogue_geometry.contribution_catalog
+        if record["contribution_id"] == contribution_id
+    ]
+    if len(matches) != 1:
+        raise ValueError("select exactly one contribution_id from the catalogue")
+    record = matches[0]
+    if source_polygon_id not in record["source_polygon_ids"]:
+        raise ValueError("source_polygon_id is not listed for this contribution")
+
+    surface = SurfaceEprSpec(
+        contribution_id=record["contribution_id"],
+        source_polygon_id=source_polygon_id,
+        interface_kind=record["interface_kind"],
+        field_side=record["field_side"],
+        margins_um=margins_um,
+        film_thickness_m=film_thickness_m,
+        film_relative_permittivity=film_relative_permittivity,
+    )
+    geometry = prepare_planar_geometry_input(
+        build_input,
+        prepared_stack=prepared_stack,
+        route="A",
+        contributions=(surface,),
+    )
+    request = EprAnalysisRequest(
+        mode_indices=mode_indices,
+        surface_contribution_ids=(surface.contribution_id,),
+    )
+    handoff = prepare_hfss_eigenmode_from_geometry(
+        geometry=geometry,
+        project_name=project_name,
+        design_name=design_name,
+        run_control=run_control,
+        output_dir=output_dir,  # must be a new, unused directory
+        epr_request=request,
+    )
+    print("handoff:", handoff.run_dir)
+    print("script:", handoff.script_path)
+    print("spec:", handoff.spec_path)
+    print("receipt:", handoff.receipt_path)
+    print("archive:", handoff.archive_path)
+    return geometry, request, handoff
+```
+
+Call this local example with the existing SGB outputs, the exact IDs printed
+from the catalogue, PDK film properties, the selected `EigenmodeRunControl`,
+and a new path such as `runs/cpw-epr-prepare-only`. On the AEDT host, the
+generated script's explicit preparation-only invocation is
+`<handoff.run_dir>/run_aedt.sh --prepare-only`; this saves and releases the
+prepared model but does not solve or produce field integrals. Preparation
+consumes that handoff: its receipt is no longer `not_run`, so a later solve
+requires a newly prepared handoff in a different, unused `output_dir`. No-EPR
+Eigenmode handoffs omit the request and retain their separate one-shot path.
 
 After a completed saved-field run, `resolve_saved_solution()` verifies the
 sealed project and complete result directory. `analyze_epr()` operates on a
 separate workcopy and returns a resolved result; `resolve_epr_result()` can
 also load a result record offline, and `plot_epr_result()` plots recorded
-values without filling missing ones. `combine_epr_mode()` accepts one complete
+values without filling missing ones. For an offline plot, use the written
+result artifact and save the figure explicitly:
+
+```python
+from pathlib import Path
+
+from scgsim.aedt import plot_epr_result, resolve_epr_result
+
+result = resolve_epr_result(
+    Path("runs/cpw-epr-solve/results/epr/adaptive-epr-result.json")
+)
+figure = plot_epr_result(result, mode=1, show_convergence=True)
+report_path = Path("runs/cpw-epr-solve/reports/epr-result.html")
+report_path.parent.mkdir(parents=True, exist_ok=True)
+figure.write_html(report_path)
+```
+
+`combine_epr_mode()` accepts one complete
 raw pass/mode integral mapping, its exact prepared geometry, and the matching
 request for offline film-coefficient recombination. Changing film thickness
 or permittivity can reuse those raw integrals; changing a margin changes the
@@ -337,8 +462,12 @@ numerical EPR correctness, and a native expression failure remains fatal.
 History export starts from the native available solutions and selects the
 declared setup's adaptive passes. It records actual categories, quantities,
 contexts, trace axes, native units when reported, and their native item/mode
-association. The join key is run, setup, physical variation, native pass,
-native mode, item, and context; row position is not a key. Missing or partial
+association. Each cache quantity is queried with its persisted item context;
+reported postprocessing variables are filtered to the matching one-hot mode
+before the trace is indexed by adaptive pass. When those variables are absent
+from native axes, association requires exact persisted-item and scoped
+single-quantity query evidence. The join key is run, setup, physical variation,
+native pass, native mode, item, and context; row position is not a key. Missing or partial
 rows remain missing, blank units remain unknown, trace arrays retain their
 native axes and lengths, and SCGSim performs no interpolation or zero fill. The
 last completed solver pass comes from independent solver/convergence evidence
@@ -358,7 +487,12 @@ successful run remain reportable evidence, but cannot be relabelled as complete
 or fall back to another pass, mode, setup, or final-field result.
 
 Each pass/mode records raw native integrals before Python derives SI energy,
-participation, loss, or junction values. The raw set includes normal and
+participation, or junction values. Cache and saved-field integrals share one
+narrow, recipe-specific unit normalization: native values and reported units
+remain evidence, recognized whitespace differences are normalized, and a
+missing suffix is assigned scale one only from that exact CLC recipe's SI
+dimension. This is not a generic assumption that arbitrary values are SI.
+Unsupported reported units fail closed. The raw set includes normal and
 tangential surface-field squares, electric and magnetic domain integrals,
 separate real and imaginary junction-voltage integrals, and frequency. One
 denominator is reused for every contribution in a pass/mode. Junction voltage
@@ -367,8 +501,13 @@ derived without that same pass/mode frequency. Film coefficients may be
 recombined offline only when their complete raw integrals and identities are
 present.
 
-Patch energies use native calculator restrictions to the exact source polygon
-with holes and to a finite distance from its original boundary. Margin zero is
+Physical patch support is derived from the full source contribution topology
+before requested-contribution filtering; selecting fewer output contributions
+does not change another patch's physical boundary. The saved SA field-side
+domain ID is the selected vacuum domain, but remains provenance metadata rather
+than a native solver-domain restriction. Patch energies use native calculator
+restrictions to the exact source polygon with holes and to a finite distance
+from its original boundary. Margin zero is
 the full patch. A positive margin changes the field-integration domain, not the
 CAD. Polygon characteristic and finite-segment distance operations must be
 proved against AEDT 2024.2 before execution; a bounding box, smoothing, or

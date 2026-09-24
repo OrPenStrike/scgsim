@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import re
 import shutil
 import time
@@ -203,8 +204,14 @@ def solve_and_export_epr(prepared: PreparedEprHfss) -> dict[str, Any]:
     cache_items = (
         prepared.cache["items"] if spec.epr_request is not None else []
     )
+    persisted_cache_items = (
+        prepared.cache["serialized_readback"]["items"]
+        if spec.epr_request is not None else []
+    )
     started = time.perf_counter()
-    history = _adaptive_mode_history(prepared.app, spec, cache_items)
+    history = _adaptive_mode_history(
+        prepared.app, spec, cache_items, persisted_cache_items
+    )
     history_path = output_dir / "adaptive-mode-history.json"
     write_json(history_path, history)
     outputs[history_path.relative_to(run_dir).as_posix()] = file_sha256(history_path)
@@ -288,24 +295,36 @@ def _saved_field_evidence(
 
 
 def _canonical_integral(
-    scalar: dict[str, Any], *, expected_unit: str
+    scalar: dict[str, Any], *, purpose: str
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Bind a native scalar to the dimension established by its CLC recipe."""
+    """Normalize only the dimensions of the six owned CLC integral recipes."""
 
-    native_unit = str(scalar["unit"])
-    if native_unit not in {"", expected_unit}:
+    expected_unit = _purpose_unit(purpose)
+    native_unit = scalar["unit"]
+    suffix = "" if native_unit is None else str(native_unit).strip()
+    number = float(scalar["value"])
+    if not math.isfinite(number):
+        raise RuntimeError("native integral value is nonfinite")
+    # A blank suffix is not native unit verification: the scale is the SI
+    # dimension of this exact E/H/geometry integral recipe, never a generic
+    # assumption about arbitrary calculator values.
+    if suffix and re.sub(r"\s+", "", suffix) != expected_unit:
         raise RuntimeError(
             f"native integral unit differs: expected {expected_unit!r}, got {native_unit!r}"
         )
-    canonical = {"value": float(scalar["value"]), "unit": expected_unit}
+    canonical = {"value": number, "unit": expected_unit}
     evidence = {
-        "raw": scalar["raw"],
+        "raw": scalar.get("raw"),
+        "native_value": number,
         "native_unit": native_unit,
         "canonical_unit": expected_unit,
+        "scale_factor": 1.0,
+        "scale_basis": (
+            f"{purpose}:field_integral_operations_or_"
+            "junction_voltage_operations_SI_dimensional_recipe"
+        ),
         "unit_binding": (
-            "native_suffix"
-            if native_unit == expected_unit
-            else "calculator_operation_dimension"
+            "native_suffix" if suffix else "recipe_basis_native_suffix_absent"
         ),
     }
     return canonical, evidence
@@ -407,7 +426,7 @@ def _evaluate_mode_integrals(
             )
         )
         value, item_evidence = _canonical_integral(
-            scalar, expected_unit=_purpose_unit(purpose)
+            scalar, purpose=purpose
         )
         _store_integral(raw, purpose=purpose, selection=selection, value=value)
         evidence.append(
@@ -588,11 +607,24 @@ def _solution_trace(data: Any, expression: str) -> dict[str, Any]:
     real, imaginary = data.full_matrix_real_imag
     variation_keys = tuple(data.variations[0]) if data.variations else ()
     intrinsic_keys = tuple(data.intrinsics_by_variation(0)) if data.variations else ()
+    if any(
+        tuple(variation) != variation_keys
+        or tuple(data.intrinsics_by_variation(index)) != intrinsic_keys
+        for index, variation in enumerate(data.variations)
+    ):
+        raise RuntimeError("native adaptive trace coordinate columns differ by variation")
     columns = [*variation_keys, *intrinsic_keys, "value"]
+    real_rows = real[expression].tolist()
+    imaginary_rows = imaginary[expression].tolist()
+    if any(
+        len(row) != len(columns)
+        for row in (*real_rows, *imaginary_rows)
+    ):
+        raise RuntimeError("native adaptive trace coordinate width differs")
     return {
         "columns": columns,
-        "real_rows": real[expression].tolist(),
-        "imaginary_rows": imaginary[expression].tolist(),
+        "real_rows": real_rows,
+        "imaginary_rows": imaginary_rows,
         "unit": data.units_data.get(expression),
     }
 
@@ -609,15 +641,19 @@ def _trace_by_pass(trace: dict[str, Any]) -> dict[int, float]:
             raise RuntimeError("native adaptive trace Pass coordinate is invalid")
         pass_value = int(pass_number)
         value = float(row[-1])
+        if not math.isfinite(value):
+            raise RuntimeError("native adaptive trace value is nonfinite")
         if pass_value in result:
             raise RuntimeError("native adaptive trace repeats one Pass coordinate")
         result[pass_value] = value
     return result
 
 
-def _trace_context_status(
-    trace: dict[str, Any], item: dict[str, Any]
-) -> dict[str, Any]:
+def _trace_for_cache_context(
+    trace: dict[str, Any], item: dict[str, Any], query: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Select the actual one-hot rows before interpreting Pass coordinates."""
+
     expected = {
         name: float(value)
         for name, value in re.findall(
@@ -627,25 +663,70 @@ def _trace_context_status(
     columns = trace["columns"]
     present = {name for name in expected if name in columns}
     if not present:
-        return {
-            "status": "not_reported",
+        if "Phase" in columns and any(
+            float(row[columns.index("Phase")]) != 0.0
+            for row in trace["real_rows"]
+        ):
+            return trace, {
+                "status": "mismatch",
+                "reason": "native phase coordinate differs from scoped query",
+                "expected_postprocessing_variables": expected,
+            }
+        status = (
+            "verified_persisted_scoped_query"
+            if query.get("persisted_binding") == "exact"
+            and query.get("scope") == "one_hot_one_quantity"
+            and query.get("returned_expressions") == [query.get("quantity")]
+            and query.get("quantity_binding") in {"title", "unique_expression"}
+            else "not_reported"
+        )
+        return trace, {
+            "status": status,
             "expected_postprocessing_variables": expected,
+            "evidence": (
+                "persisted_item_and_scoped_native_query"
+                if status.startswith("verified") else None
+            ),
         }
     if present != set(expected):
-        return {
+        return trace, {
             "status": "partial",
             "expected_postprocessing_variables": expected,
             "reported_postprocessing_variables": sorted(present),
         }
-    for row in trace["real_rows"]:
-        if any(float(row[columns.index(name)]) != value for name, value in expected.items()):
-            return {
+    if len(trace["real_rows"]) != len(trace["imaginary_rows"]):
+        return trace, {
+            "status": "mismatch",
+            "reason": "native real/imaginary coordinate counts differ",
+            "expected_postprocessing_variables": expected,
+        }
+    selected_real: list[list[float]] = []
+    selected_imaginary: list[list[float]] = []
+    for real, imaginary in zip(trace["real_rows"], trace["imaginary_rows"]):
+        if real[:-1] != imaginary[:-1]:
+            return trace, {
                 "status": "mismatch",
+                "reason": "native real/imaginary coordinates differ",
                 "expected_postprocessing_variables": expected,
             }
-    return {
+        if "Phase" in columns and float(real[columns.index("Phase")]) != 0.0:
+            continue
+        if all(
+            float(real[columns.index(name)]) == value
+            for name, value in expected.items()
+        ):
+            selected_real.append(real)
+            selected_imaginary.append(imaginary)
+    if not selected_real:
+        return trace, {
+            "status": "mismatch",
+            "reason": "no native rows match the persisted one-hot context",
+            "expected_postprocessing_variables": expected,
+        }
+    return {**trace, "real_rows": selected_real, "imaginary_rows": selected_imaginary}, {
         "status": "verified",
         "expected_postprocessing_variables": expected,
+        "excluded_context_rows": len(trace["real_rows"]) - len(selected_real),
     }
 
 
@@ -656,8 +737,8 @@ def _adaptive_epr_result(
 ) -> EprResult:
     frequency_traces = history["frequency_traces"]
     cache = history["cache_integral_traces"]
-    item_by_title = {item["title"]: item for item in cache["items"]}
     trace_by_title = cache["traces"]
+    query_by_title = cache.get("queries", {})
     rows: list[dict[str, Any]] = []
     selected_modes = (
         tuple(range(1, spec.run_control.num_modes + 1))
@@ -668,18 +749,26 @@ def _adaptive_epr_result(
         frequency_trace = frequency_traces[f"Mode({mode})"]
         frequencies = _trace_by_pass(frequency_trace)
         mode_items = [item for item in cache["items"] if item["mode"] == mode]
-        item_values = {
-            item["title"]: _trace_by_pass(trace_by_title[item["title"]])
-            for item in mode_items
-            if item["title"] in trace_by_title
-        }
-        item_contexts = {
-            item["title"]: _trace_context_status(
-                trace_by_title[item["title"]], item
+        item_values: dict[str, dict[int, float]] = {}
+        item_contexts: dict[str, dict[str, Any]] = {}
+        for item in mode_items:
+            title = item["title"]
+            if title not in trace_by_title:
+                continue
+            scoped_trace, context = _trace_for_cache_context(
+                trace_by_title[title], item, query_by_title.get(title, {})
             )
-            for item in mode_items
-            if item["title"] in trace_by_title
-        }
+            item_contexts[title] = context
+            if not context["status"].startswith("verified"):
+                continue
+            try:
+                item_values[title] = _trace_by_pass(scoped_trace)
+            except RuntimeError as exc:
+                item_contexts[title] = {
+                    **context,
+                    "status": "invalid_pass_axis",
+                    "error": str(exc),
+                }
         pass_ids = sorted(
             set(frequencies).union(
                 *(set(values) for values in item_values.values())
@@ -694,7 +783,7 @@ def _adaptive_epr_result(
             invalid_context = [
                 title
                 for title, status in item_contexts.items()
-                if status["status"] != "verified"
+                if not status["status"].startswith("verified")
             ]
             row: dict[str, Any] = {
                 "mode": mode,
@@ -706,33 +795,47 @@ def _adaptive_epr_result(
             }
             raw = _empty_raw_integrals()
             integral_evidence: list[dict[str, Any]] = []
+            unit_mismatches: list[dict[str, Any]] = []
             for item in mode_items:
                 title = item["title"]
                 values = item_values.get(title, {})
                 if pass_id not in values:
                     continue
                 native_unit = trace_by_title[title].get("unit")
-                expected_unit = _purpose_unit(item["purpose"])
                 context = item_contexts[title]
+                try:
+                    value, unit_evidence = _canonical_integral(
+                        {"value": values[pass_id], "unit": native_unit},
+                        purpose=item["purpose"],
+                    )
+                except RuntimeError as exc:
+                    unit_mismatches.append(
+                        {
+                            "title": title,
+                            "native_unit": native_unit,
+                            "expected_unit": _purpose_unit(item["purpose"]),
+                            "error": str(exc),
+                        }
+                    )
+                    continue
                 integral_evidence.append(
                     {
                         "title": title,
                         "purpose": item["purpose"],
-                        "native_value": values[pass_id],
-                        "native_unit": native_unit,
-                        "expected_unit": expected_unit,
                         "context": context,
+                        **unit_evidence,
                     }
                 )
-                if native_unit == expected_unit and context["status"] == "verified":
-                    _store_integral(
-                        raw,
-                        purpose=item["purpose"],
-                        selection=item["selection"],
-                        value={"value": values[pass_id], "unit": native_unit},
-                    )
+                _store_integral(
+                    raw,
+                    purpose=item["purpose"],
+                    selection=item["selection"],
+                    value=value,
+                )
             row["raw_integrals"] = raw
             row["raw_integral_evidence"] = integral_evidence
+            if unit_mismatches:
+                row["unit_mismatches"] = unit_mismatches
             frequency = frequencies.get(pass_id)
             if frequency is None:
                 row["missing_frequency"] = True
@@ -748,24 +851,8 @@ def _adaptive_epr_result(
                 rows.append(row)
                 continue
             raw["frequency_hz"] = {"value": frequency_hz, "unit": "Hz"}
-            if missing or invalid_context:
+            if missing or invalid_context or unit_mismatches:
                 row["frequency_hz"] = frequency_hz
-                rows.append(row)
-                continue
-            unit_mismatches = [
-                {
-                    "title": item["title"],
-                    "native_unit": trace_by_title[item["title"]].get("unit"),
-                    "expected_unit": _purpose_unit(item["purpose"]),
-                }
-                for item in mode_items
-                if item["title"] in trace_by_title
-                and trace_by_title[item["title"]].get("unit")
-                != _purpose_unit(item["purpose"])
-            ]
-            if unit_mismatches:
-                row["unit_mismatches"] = unit_mismatches
-            if row.get("unit_mismatches"):
                 rows.append(row)
                 continue
             try:
@@ -801,7 +888,10 @@ def _adaptive_epr_result(
 
 
 def _adaptive_mode_history(
-    app: Any, spec: HfssEprSpec, cache_items: list[dict[str, Any]]
+    app: Any,
+    spec: HfssEprSpec,
+    cache_items: list[dict[str, Any]],
+    persisted_cache_items: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Return raw frequency and cache traces without positional joins."""
 
@@ -842,6 +932,7 @@ def _adaptive_mode_history(
         "requested_titles": cache_titles,
         "items": cache_items,
         "traces": {},
+        "queries": {},
     }
     if cache_titles:
         try:
@@ -869,27 +960,94 @@ def _adaptive_mode_history(
                 ]
             cache_observation["available_quantity_categories"] = field_categories
             cache_observation["available_quantities"] = field_quantities
-            cached = app.post.get_solution_data_per_variation(
-                "Fields", solution, [], {"Pass": "All"}, cache_titles
-            )
-            if cached:
-                cached.primary_sweep = "Pass"
-                returned = list(cached.expressions)
-                cache_observation["returned_titles"] = returned
-                cache_observation["missing_titles"] = sorted(
-                    set(cache_titles) - set(returned)
+            persisted_by_title = {
+                item["title"]: item for item in persisted_cache_items
+            }
+            expression_counts = {
+                expression: sum(
+                    item["expression"] == expression for item in cache_items
                 )
-                cache_observation["unexpected_titles"] = sorted(
-                    set(returned) - set(cache_titles)
-                )
-                cache_observation["traces"] = {
-                    title: _solution_trace(cached, title)
-                    for title in returned
-                    if title in set(cache_titles)
+                for expression in {item["expression"] for item in cache_items}
+            }
+            if len(persisted_by_title) != len(persisted_cache_items):
+                raise RuntimeError("persisted EPR cache titles are not unique")
+            for item in cache_items:
+                title = item["title"]
+                query: dict[str, Any] = {
+                    "persisted_item": persisted_by_title.get(title),
+                    "scope": "one_hot_one_quantity",
                 }
-                cache_observation["status"] = (
-                    "complete" if set(returned) == set(cache_titles) else "partial"
+                cache_observation["queries"][title] = query
+                persisted = persisted_by_title.get(title)
+                if persisted != {
+                    "title": title,
+                    "expression": item["expression"],
+                    "intrinsics": item["intrinsics"],
+                }:
+                    query["error"] = "persisted cache item expression/context differs"
+                    continue
+                query["persisted_binding"] = "exact"
+                if item["intrinsics"] != _cache_intrinsics(
+                    spec.run_control.num_modes, item["mode"]
+                ):
+                    query["error"] = "cache item is not the complete one-hot context"
+                    continue
+                matches = [
+                    (category_name, quantity)
+                    for category_name, names in field_quantities.items()
+                    for quantity in names
+                    if quantity in {persisted["title"], persisted["expression"]}
+                ]
+                query["inventory_matches"] = matches
+                if len(matches) != 1:
+                    query["error"] = "native quantity binding is missing or ambiguous"
+                    continue
+                quantity = matches[0][1]
+                query["quantity"] = quantity
+                query["quantity_binding"] = (
+                    "title" if quantity == persisted["title"]
+                    else "unique_expression"
+                    if expression_counts[quantity] == 1
+                    else "shared_expression_requires_reported_axes"
                 )
+                sweeps = {"Pass": "All", "Phase": "0deg"}
+                sweeps.update(
+                    {
+                        f"scgsim_epr_pp_mode_{index}": (
+                            "1" if index == item["mode"] else "0"
+                        )
+                        for index in range(1, spec.run_control.num_modes + 1)
+                    }
+                )
+                query["sweeps"] = sweeps
+                try:
+                    cached = app.post.get_solution_data_per_variation(
+                        "Fields", solution, [], sweeps, [quantity]
+                    )
+                    if not cached:
+                        raise RuntimeError("native scoped cache report is unavailable")
+                    returned = list(cached.expressions)
+                    query["returned_expressions"] = returned
+                    if returned != [quantity]:
+                        raise RuntimeError("native scoped cache quantity differs")
+                    cached.primary_sweep = "Pass"
+                    cache_observation["traces"][title] = _solution_trace(
+                        cached, quantity
+                    )
+                    query["status"] = "reported"
+                except Exception as exc:  # noqa: BLE001 -- retain per-item partial history.
+                    query["error"] = f"{type(exc).__name__}: {exc}"
+            returned_titles = sorted(cache_observation["traces"])
+            cache_observation["returned_titles"] = returned_titles
+            cache_observation["missing_titles"] = sorted(
+                set(cache_titles) - set(returned_titles)
+            )
+            cache_observation["unexpected_titles"] = []
+            cache_observation["status"] = (
+                "complete"
+                if len(returned_titles) == len(cache_titles)
+                else "partial"
+            )
         except Exception as exc:  # noqa: BLE001 -- partial native history is evidence.
             cache_observation["error"] = f"{type(exc).__name__}: {exc}"
     return {

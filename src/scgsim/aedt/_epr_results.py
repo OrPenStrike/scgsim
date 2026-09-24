@@ -292,6 +292,11 @@ def plot_epr_result(
     figure = make_subplots(
         rows=2 if convergence_view else 1,
         cols=1,
+        specs=(
+            [[{}], [{"secondary_y": True}]]
+            if convergence_view
+            else [[{}]]
+        ),
         shared_xaxes=False,
         vertical_spacing=0.16,
         subplot_titles=(
@@ -432,10 +437,10 @@ def plot_epr_result(
                     y=[frequency_by_pass.get(item) for item in pass_axis],
                     mode="lines+markers",
                     connectgaps=False,
-                    yaxis="y3",
                 ),
                 row=2,
                 col=1,
+                secondary_y=True,
             )
     figure.update_layout(
         barmode="group",
@@ -453,14 +458,18 @@ def plot_epr_result(
     figure.update_yaxes(title_text="Participation", row=1, col=1)
     if convergence_view:
         figure.update_xaxes(title_text="Adaptive pass", row=2, col=1)
-        figure.update_yaxes(title_text="Participation / energy-balance ratio", row=2, col=1)
-        figure.update_layout(
-            yaxis3={
-                "title": "Frequency (Hz)",
-                "overlaying": "y2",
-                "side": "right",
-                "showgrid": False,
-            }
+        figure.update_yaxes(
+            title_text="Participation / energy-balance ratio",
+            row=2,
+            col=1,
+            secondary_y=False,
+        )
+        figure.update_yaxes(
+            title_text="Frequency (Hz)",
+            row=2,
+            col=1,
+            secondary_y=True,
+            showgrid=False,
         )
     if unavailable:
         figure.add_annotation(
