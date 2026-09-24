@@ -22,6 +22,10 @@ AEDT handoff/run/resolve workflows for HFSS Driven Terminal/Modal, HFSS
 Eigenmode, Q3D, and Q2D. These are implemented candidates, not V1-stable
 contracts.
 
+The package supports Python 3.12 and 3.13. The optional AEDT integration pins
+PyAEDT 1.3.0; Python 3.13 package support does not by itself establish native
+AEDT 2024.2 operation correctness.
+
 OrPen SC PDK owns the public component-simulation notebooks. SCGSim owns no
 duplicate notebook source and has no runtime dependency on OrPen.
 
