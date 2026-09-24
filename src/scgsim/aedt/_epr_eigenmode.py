@@ -1048,7 +1048,7 @@ def _author_epr_expressions(
     )
     for selection in native_geometry["surface_selections"]:
         binding = bindings[selection["binding_id"]]
-        if binding["contribution_id"] not in selected_contributions:
+        if selection["contribution_id"] not in selected_contributions:
             continue
         plane = binding["mask_plane"]
         for margin in binding["margins_um"]:
@@ -1085,6 +1085,7 @@ def _author_epr_expressions(
                     selection_name=selection["selection_name"],
                     mask_operations=mask,
                     adjacent_side=selection["adjacent_side"],
+                    normal_vector=selection["native_normal"],
                 )
                 expressions.append(
                     author_named_expression(
@@ -1100,6 +1101,10 @@ def _author_epr_expressions(
                         selection={**selection, "margin_um": float(margin)},
                         evidence_dir=evidence_dir,
                         namespace=namespace,
+                        adjacent_selection_name=(
+                            selection["selection_name"]
+                            if selection["adjacent_side"] else None
+                        ),
                     )
                 )
             area_operations = field_integral_operations(

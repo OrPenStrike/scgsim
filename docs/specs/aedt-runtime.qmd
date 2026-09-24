@@ -23,6 +23,9 @@ PDK geometry and material identities
 The lifecycle fixes AEDT 2024.2 and PyAEDT 1.3.0, copies all required inputs,
 opens a new AEDT Desktop only on explicit execution, saves and releases the
 owned project, and fails closed on missing native evidence or result bytes.
+The package permits Python 3.12 and 3.13 with this unchanged PyAEDT pin;
+interpreter compatibility and native AEDT expression correctness are separate
+claims.
 PDK superconductors lower to PEC without replacing their source-material
 identity. Native HFSS solids use the `pec` material with Solve Inside disabled;
 native HFSS sheets use the `SCGSimPEC` Perfect E boundary. Completion requires
@@ -301,6 +304,35 @@ complete result-directory inventory. `resolve_epr_result()` verifies and loads
 partial history or final saved-field results without filling missing values.
 The Plotly report consumes only those resolved records and displays missing
 native values as missing rather than zero.
+
+For a new run, prepare source polygons and materials with
+`prepare_planar_geometry_input()`, including explicit Route A/B, contribution
+identities, margins, and directed junction identities. Pass that geometry and
+an `EprAnalysisRequest` to `prepare_hfss_eigenmode_from_geometry()` with a
+new output directory. The generated `run_aedt.sh` performs the explicit
+native run; `--execute --prepare-only` saves and releases a prepared model but
+does not solve or produce field integrals. No-EPR Eigenmode handoffs omit the
+request and retain their separate one-shot path.
+
+After a completed saved-field run, `resolve_saved_solution()` verifies the
+sealed project and complete result directory. `analyze_epr()` operates on a
+separate workcopy and returns a resolved result; `resolve_epr_result()` can
+also load a result record offline, and `plot_epr_result()` plots recorded
+values without filling missing ones. `combine_epr_mode()` accepts one complete
+raw pass/mode integral mapping, its exact prepared geometry, and the matching
+request for offline film-coefficient recombination. Changing film thickness
+or permittivity can reuse those raw integrals; changing a margin changes the
+integration domain and requires a new saved-field evaluation. None of these
+offline APIs substitutes a historical cache row for a final saved-field row.
+
+The earlier A-r5 no-solve attempt loaded same-side surface expressions but
+failed to load an opposite-side sheet expression written with an unverified
+CLC command. The current candidate loads the spatial integrand, then uses
+the PyAEDT 1.3.0 native reporter's `EnterAdjacentSurf` operation to create
+and save the complete named expression; the same authoring function serves
+cache setup and saved-field analysis. Those current expression bytes have not
+been natively verified. Authoring does not prove field-side selection or
+numerical EPR correctness, and a native expression failure remains fatal.
 
 History export starts from the native available solutions and selects the
 declared setup's adaptive passes. It records actual categories, quantities,

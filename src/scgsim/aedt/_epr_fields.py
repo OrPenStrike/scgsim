@@ -78,8 +78,8 @@ def _hard_step(value: Sequence[str]) -> list[str]:
     # H(s >= 0) = 1 - atan2(+0, s) / atan2(+0, -1). Native signed-zero
     # behavior is part of the operation evidence and is never epsilon-shifted.
     canonical = _binary(value, _constant(0.0), "+")
-    numerator = [*_constant(0.0), *canonical, "Operation('ATan2')"]
-    denominator = [*_constant(0.0), *_constant(-1.0), "Operation('ATan2')"]
+    numerator = [*_constant(0.0), *canonical, "Operation('BMathFunc', 'Atan2')"]
+    denominator = [*_constant(0.0), *_constant(-1.0), "Operation('BMathFunc', 'Atan2')"]
     return _binary(_constant(1.0), _binary(numerator, denominator, "/"), "-")
 
 
@@ -514,6 +514,7 @@ def field_integral_operations(
     selection_name: str,
     mask_operations: Sequence[str] | None = None,
     adjacent_side: bool = False,
+    normal_vector: Sequence[float] | None = None,
 ) -> list[str]:
     """Return the documented HFSS stack for one raw integral quantity."""
 
@@ -551,9 +552,14 @@ def field_integral_operations(
             "Operation('Integrate')",
         ]
     elif quantity in {"electric_normal", "electric_tangential", "masked_area"}:
+        # Area is independent of which field side is sampled.
+        enter_surface = (
+            "EnterAdjacentSurf"
+            if adjacent_side and quantity != "masked_area"
+            else "EnterSurface"
+        )
         if quantity == "masked_area":
             value = _constant(1.0)
-            enter_surface = "EnterAdjacentSurf" if adjacent_side else "EnterSurface"
             terminal = [
                 f"{enter_surface}('{selection_name}')",
                 "Operation('SurfaceValue')",
@@ -562,16 +568,30 @@ def field_integral_operations(
             if mask_operations:
                 value = [*value, *mask_operations, "Operation('*')"]
             return [*value, *terminal]
+        if normal_vector is None or len(normal_vector) != 3 or any(
+            isinstance(item, bool)
+            or not isinstance(item, (int, float))
+            or not math.isfinite(float(item))
+            for item in normal_vector
+        ):
+            raise ValueError("surface field integral requires a finite native normal")
+        length = math.sqrt(sum(float(item) ** 2 for item in normal_vector))
+        if not math.isfinite(length) or length == 0.0:
+            raise ValueError("surface field integral requires a finite nonzero native normal")
+        vector = "Vector_Constant(" + ", ".join(
+            f"{float(item) / length:.17g}" for item in normal_vector
+        ) + ")"
+        # A bound Normal scalar cannot be multiplied by the spatial mask in CLC.
         normal_real = [
             "Fundamental_Quantity('E')",
             "Operation('Real')",
-            "Operation('Normal')",
+            vector,
             "Operation('Dot')",
         ]
         normal_imag = [
             "Fundamental_Quantity('E')",
             "Operation('Imag')",
-            "Operation('Normal')",
+            vector,
             "Operation('Dot')",
         ]
         normal_square = _binary(_square(normal_real), _square(normal_imag), "+")
@@ -586,10 +606,9 @@ def field_integral_operations(
                 "+",
             )
             value = _binary(full_square, normal_square, "-")
-        # PyAEDT 1.3's bound native reporter exposes EnterAdjacentSurf for the
-        # documented opposite side of a sheet.  Keep the exact native command
-        # in the saved calculator expression rather than guessing a side.
-        enter_surface = "EnterAdjacentSurf" if adjacent_side else "EnterSurface"
+        # This records side intent in the expression identity.  The adjacent
+        # expression is authored through the native reporter, not this CLC
+        # spelling, whose saved-file form is not established by PyAEDT.
         terminal = [
             f"{enter_surface}('{selection_name}')",
             "Operation('SurfaceValue')",
@@ -702,6 +721,7 @@ def author_named_expression(
     selection: Mapping[str, Any],
     evidence_dir: Path,
     namespace: str = "prepared",
+    adjacent_selection_name: str | None = None,
 ) -> dict[str, Any]:
     """Author one immutable expression without requiring solved fields."""
 
@@ -738,14 +758,50 @@ def author_named_expression(
     calculator = app.post.fields_calculator
     if calculator.is_expression_defined(name):
         raise RuntimeError(f"HFSS expression already exists: {name!r}")
-    authored = calculator.create_expression_file(name, list(operations))
-    if authored is False or not isinstance(authored, str):
-        raise RuntimeError(f"HFSS expression authoring failed: {name!r}")
-    source = Path(authored)
     evidence_dir.mkdir(parents=True, exist_ok=True)
     retained = evidence_dir / f"{name}.clc"
-    retained.write_bytes(source.read_bytes())
-    calculator.ofieldsreporter.LoadNamedExpressions(str(source), "Fields", [name])
+    if adjacent_selection_name is None:
+        authored = calculator.create_expression_file(name, list(operations))
+        if authored is False or not isinstance(authored, str):
+            raise RuntimeError(f"HFSS expression authoring failed: {name!r}")
+        source = Path(authored)
+        retained.write_bytes(source.read_bytes())
+        calculator.ofieldsreporter.LoadNamedExpressions(str(source), "Fields", [name])
+    else:
+        if (
+            selection.get("selection_name") != adjacent_selection_name
+            or list(operations[-3:])
+            != [
+                f"EnterAdjacentSurf('{adjacent_selection_name}')",
+                "Operation('SurfaceValue')",
+                "Operation('Integrate')",
+            ]
+        ):
+            raise ValueError("adjacent surface expression selection is inconsistent")
+        integrand_name = f"{name}_integrand"
+        authored = calculator.create_expression_file(
+            integrand_name, list(operations[:-3])
+        )
+        if authored is False or not isinstance(authored, str):
+            raise RuntimeError(f"HFSS adjacent integrand authoring failed: {name!r}")
+        integrand_bytes = Path(authored).read_bytes()
+        (evidence_dir / f"{integrand_name}.clc").write_bytes(integrand_bytes)
+        reporter = calculator.ofieldsreporter
+        reporter.LoadNamedExpressions(str(authored), "Fields", [integrand_name])
+        if not calculator.is_expression_defined(integrand_name):
+            raise RuntimeError(f"HFSS adjacent integrand was not defined: {name!r}")
+        reporter.CalcStack("clear")
+        reporter.CopyNamedExprToStack(integrand_name)
+        reporter.EnterAdjacentSurf(adjacent_selection_name)
+        reporter.CalcOp("SurfaceValue")
+        reporter.CalcOp("Integrate")
+        reporter.AddNamedExpression(name, "Fields")
+        if not calculator.is_expression_defined(name):
+            raise RuntimeError(f"HFSS adjacent expression was not defined: {name!r}")
+        reporter.SaveNamedExpressions(str(retained), [name], True)
+        reporter.CalcStack("clear")
+        if not retained.is_file() or retained.stat().st_size == 0:
+            raise RuntimeError(f"HFSS adjacent expression was not saved: {name!r}")
     if not calculator.is_expression_defined(name):
         raise RuntimeError(f"HFSS expression was not defined: {name!r}")
     return {
