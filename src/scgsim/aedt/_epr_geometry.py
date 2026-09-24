@@ -925,20 +925,7 @@ def _polygon_sheet(app: Any, polygon: Mapping[str, Any], *, name: str, z_um: flo
     return app.modeler[name]
 
 
-def _positive_z_exterior(exterior: Sequence[Sequence[float]]) -> list[Sequence[float]]:
-    if len(exterior) < 3:
-        raise ValueError("solid planar exterior needs at least three vertices")
-    signed_area_twice = sum(
-        float(point[0]) * float(exterior[(index + 1) % len(exterior)][1])
-        - float(exterior[(index + 1) % len(exterior)][0]) * float(point[1])
-        for index, point in enumerate(exterior)
-    )
-    if not math.isfinite(signed_area_twice) or signed_area_twice == 0.0:
-        raise ValueError("solid planar exterior has invalid winding")
-    return list(reversed(exterior)) if signed_area_twice < 0.0 else list(exterior)
-
-
-def _positive_z_solid(
+def _swept_z_solid(
     app: Any,
     polygon: Mapping[str, Any],
     *,
@@ -946,27 +933,16 @@ def _positive_z_solid(
     z_min_um: float,
     z_max_um: float,
 ) -> Any:
-    """Thicken a planar loop toward its declared upper Z, regardless of winding."""
+    """Sweep a planar loop along explicit global +Z, independent of its normal."""
 
     if z_max_um <= z_min_um:
         raise ValueError(f"solid {name!r} has empty Z extent")
-    native_polygon = dict(polygon)
-    native_polygon["exterior"] = _positive_z_exterior(polygon["exterior"])
-    sheet = _polygon_sheet(app, native_polygon, name=name, z_um=z_min_um)
-    faces = sheet.faces
-    if not faces or any(
-        face.normal is None
-        or len(face.normal) != 3
-        or not all(math.isfinite(float(value)) for value in face.normal)
-        or float(face.normal[2]) <= 0.0
-        for face in faces
-    ):
-        raise RuntimeError(f"solid {name!r} source sheet does not face positive Z")
-    body = app.modeler.thicken_sheet(
-        sheet.name, f"{z_max_um - z_min_um:.17g}um", both_sides=False
+    sheet = _polygon_sheet(app, polygon, name=name, z_um=z_min_um)
+    body = app.modeler.sweep_along_vector(
+        sheet.name, ["0um", "0um", f"{z_max_um - z_min_um:.17g}um"]
     )
     if body is False or body is None:
-        raise RuntimeError(f"failed to thicken solid {name!r}")
+        raise RuntimeError(f"failed to sweep solid {name!r} along positive Z")
     bounds = body.bounding_box
     scale = max(1.0, abs(z_min_um), abs(z_max_um))
     if (
@@ -1104,7 +1080,7 @@ def _solution_body(app: Any, entity: Mapping[str, Any]) -> Any:
         "holes": geometry.get("hole_loops", ()),
     }
     name = _native_name("domain", entity["semantic_id"])
-    body = _positive_z_solid(
+    body = _swept_z_solid(
         app, polygon, name=name, z_min_um=z_min, z_max_um=z_max
     )
     body.material_name = str(entity["material_id"])
@@ -1417,7 +1393,7 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
                     raise ValueError(
                         f"finite conductor {entity['semantic_id']!r} requires positive thickness"
                     )
-                obj = _positive_z_solid(
+                obj = _swept_z_solid(
                     app,
                     polygons[polygon_id],
                     name=name,
