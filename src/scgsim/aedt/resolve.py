@@ -21,6 +21,7 @@ from ._runtime_provenance import (
 )
 from .spec import (
     HfssDrivenSpec,
+    HfssEprSpec,
     HfssEigenmodeSpec,
     ModalPort,
     Q2dSpec,
@@ -115,10 +116,6 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
     receipt_schema = receipt["schema_version"]
     if receipt_schema == RECEIPT_V1:
         _reject_legacy_v2_markers(root, receipt)
-    elif receipt_schema == RECEIPT_V2:
-        _validate_completion_cohort(root, receipt)
-    else:
-        _validate_completion_cohort(root, receipt)
     save = receipt.get("save")
     if (
         not isinstance(save, dict)
@@ -133,20 +130,44 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
     if not isinstance(source, dict) or source.get("spec") != "aedt_spec.json":
         raise RuntimeError("receipt source paths are not canonical")
     spec_path = _verified(root, "aedt_spec.json", source, "spec_sha256")
-    if mode == "q2d":
+    spec = parse_aedt_spec(read_json(spec_path), base_dir=root)
+    if receipt_schema in {RECEIPT_V2, RECEIPT_V3}:
+        _validate_completion_cohort(root, receipt, spec)
+    if isinstance(spec, HfssEprSpec):
+        expected_source = {
+            "spec",
+            "spec_sha256",
+            "planar_source_sha256",
+            "planar_model_sha256",
+        }
+        if set(source) != expected_source:
+            raise RuntimeError("body-first Eigenmode source members are not canonical")
+        if (
+            source["planar_source_sha256"] != spec.geometry.source_sha256
+            or source["planar_model_sha256"] != spec.geometry.model_sha256
+        ):
+            raise RuntimeError("body-first Eigenmode source identity differs")
+    elif mode == "q2d":
         if set(source) != {"spec", "spec_sha256"}:
             raise RuntimeError("Q2D receipt must not contain a GDS source")
     else:
         if source.get("gds") != "geometry/design.gds":
             raise RuntimeError("receipt GDS path is not canonical")
         _verified(root, "geometry/design.gds", source, "gds_sha256")
-    spec = parse_aedt_spec(read_json(spec_path), base_dir=root)
     if (
         mode not in {"terminal", "modal", "eigenmode", "q3d", "q2d"}
         or spec.mode != mode
     ):
         raise RuntimeError("AEDT receipt mode is invalid")
-    _validate_readback(root, receipt, spec)
+    if isinstance(spec, HfssEprSpec):
+        if receipt.get("workflow_status") != "completed":
+            raise RuntimeError("body-first Eigenmode receipt is not a completed solve")
+        if not isinstance(receipt.get("geometry"), dict) or not isinstance(
+            receipt.get("setup"), dict
+        ):
+            raise RuntimeError("body-first Eigenmode native readback is incomplete")
+    else:
+        _validate_readback(root, receipt, spec)
     if receipt_schema == RECEIPT_V3 and isinstance(
         spec, (HfssDrivenSpec, HfssEigenmodeSpec)
     ):
@@ -208,6 +229,62 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
             convergence=receipt["convergence"],
         )
     if mode == "eigenmode":
+        if isinstance(spec, HfssEprSpec):
+            saved_manifest = "saved-solution-manifest.json"
+            saved_receipt = "metadata/saved-solution-receipt.json"
+            expected = {
+                project_relative,
+                "results/epr/eigenmodes.csv",
+                "results/epr/eigenmodes.eig",
+                "results/epr/adaptive-convergence.prop",
+                "results/epr/adaptive-mode-history.json",
+            }
+            if spec.epr_request is not None:
+                expected.add("results/epr/adaptive-epr-result.json")
+                saved_summary = receipt.get("saved_solution")
+                if isinstance(saved_summary, dict) and saved_summary.get(
+                    "status"
+                ) == "complete":
+                    from ._epr_results import resolve_saved_solution
+
+                    saved = resolve_saved_solution(root / saved_manifest)
+                    expected_saved_summary = {
+                        "status": "complete",
+                        "manifest": saved_manifest,
+                        "manifest_sha256": file_sha256(root / saved_manifest),
+                        "receipt": saved_receipt,
+                        "receipt_sha256": file_sha256(root / saved_receipt),
+                        "content_sha256": saved.content_sha256,
+                        "identity": dict(saved.identity),
+                        "member_count": len(saved.members),
+                    }
+                    if saved_summary != expected_saved_summary:
+                        raise RuntimeError(
+                            "completed EPR saved-solution binding is invalid"
+                        )
+                    expected.update({saved_manifest, saved_receipt})
+                elif not (
+                    isinstance(saved_summary, dict)
+                    and saved_summary.get("status") == "unavailable"
+                    and isinstance(saved_summary.get("error"), str)
+                    and saved_summary["error"]
+                ):
+                    raise RuntimeError(
+                        "completed EPR run lacks an explicit saved-solution status"
+                    )
+            if set(outputs) != expected:
+                raise RuntimeError(
+                    "body-first Eigenmode output manifest is not canonical"
+                )
+            return ResolvedRun(
+                "eigenmode",
+                project,
+                _verified(root, "results/epr/eigenmodes.csv", outputs),
+                None,
+                _verified(root, "results/epr/eigenmodes.eig", outputs),
+                receipt_path,
+                convergence=receipt["convergence"],
+            )
         expected = {
             project_relative,
             "results/eigenmode/eigenmodes.csv",
@@ -273,7 +350,9 @@ def _reject_legacy_v2_markers(root: Path, receipt: dict[str, Any]) -> None:
             raise RuntimeError("legacy receipt conflicts with v2 expectation markers")
 
 
-def _validate_completion_cohort(root: Path, receipt: dict[str, Any]) -> None:
+def _validate_completion_cohort(
+    root: Path, receipt: dict[str, Any], spec: Any
+) -> None:
     """Verify the immutable preparation cohort and complete execution provenance."""
     receipt_schema = receipt.get("schema_version")
     if receipt_schema not in {RECEIPT_V2, RECEIPT_V3}:
@@ -293,13 +372,20 @@ def _validate_completion_cohort(root: Path, receipt: dict[str, Any]) -> None:
         )
     metadata = read_json(metadata_path)
     manifest = read_json(manifest_path)
+    epr = isinstance(spec, HfssEprSpec)
+    expected_manifest_schema = (
+        "scgsim.aedt.handoff-manifest.v2"
+        if epr
+        else "scgsim.aedt.handoff-manifest.v1"
+    )
     if (
         not isinstance(metadata, dict)
-        or metadata.get("schema_version") != "scgsim.aedt.handoff.v1"
+        or metadata.get("schema_version")
+        != ("scgsim.aedt.handoff.v2" if epr else "scgsim.aedt.handoff.v1")
         or metadata.get("status") != "prepared"
         or metadata.get("mode") != mode
         or not isinstance(manifest, dict)
-        or manifest.get("schema_version") != "scgsim.aedt.handoff-manifest.v1"
+        or manifest.get("schema_version") != expected_manifest_schema
     ):
         raise RuntimeError(f"completed {version} preparation cohort is invalid")
 
@@ -307,8 +393,10 @@ def _validate_completion_cohort(root: Path, receipt: dict[str, Any]) -> None:
         "spec": "aedt_spec.json",
         "receipt": "metadata/aedt_run_receipt.json",
     }
-    if mode != "q2d":
+    if mode != "q2d" and not epr:
         expected_files["gds"] = "geometry/design.gds"
+    if epr and metadata.get("workflow") not in {"body_first_eigenmode", "epr"}:
+        raise RuntimeError("body-first Eigenmode preparation workflow is invalid")
     if metadata.get("files") != expected_files:
         raise RuntimeError(f"completed {version} preparation file map is not canonical")
 
@@ -354,7 +442,7 @@ def _validate_completion_cohort(root: Path, receipt: dict[str, Any]) -> None:
         raise RuntimeError(f"completed {version} preparation hash bindings are invalid")
 
     expected_paths = ["run_aedt.sh", "aedt_spec.json"]
-    if mode != "q2d":
+    if mode != "q2d" and not epr:
         expected_paths.append("geometry/design.gds")
     expected_paths += [
         "metadata/aedt_handoff_metadata.json",

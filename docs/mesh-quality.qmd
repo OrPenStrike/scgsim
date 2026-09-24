@@ -132,10 +132,33 @@ separate.
 strictly serializes the complete header before exclusively creating the output,
 then streams nodes and elements without materializing the complete report. It
 refuses to overwrite either an existing path or the mesh itself. Nonfinite or
-unavailable numerical values are serialized as `null` with an explicit reason;
-JSON never contains `NaN` or `Infinity` tokens. A later operating-system write
+unavailable numerical values are serialized as `null` with an explicit reason.
+Exact-singular condition number is the distinct JSON string `"+inf"`; JSON
+never contains bare `NaN` or `Infinity` tokens. A later operating-system write
 failure can leave a partial newly created output file; this is streaming output,
 not an atomic replacement protocol.
+
+Text summaries use `+inf` for an exact-singular condition number. Strict JSON
+cannot encode infinity as a number, so the corresponding value is the string
+`"+inf"`; its status retains the distinction from missing or unresolved data.
+
+```python
+from pathlib import Path
+
+from scgsim.palace import check_mesh_quality
+
+report = check_mesh_quality(Path("model.msh"), length_scale_m=1e-6)
+print(report.show_summary())
+print(report.show_worst_elements(metric="kappa_j", limit=10))
+figure = report.show_elements(metric="volume", limit=10)
+report.save_json(Path("mesh-quality.json"))
+figure.show()
+```
+
+The two-group limit applies independently to comparable ranked elements and
+the visible unavailable/remainder group, so `limit=10` can display as many as
+twenty rows or elements. `save_json()` refuses an existing destination; choose
+a new path for each diagnostic capture.
 
 This V1 surface does not reorder tetrahedra to match solver orientation, repair
 connectivity, evaluate higher-order tetrahedra, infer solver-side acceptance,

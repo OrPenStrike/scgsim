@@ -6,7 +6,7 @@ This module never imports a family or owns a Desktop transaction.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -14,6 +14,68 @@ from types import MappingProxyType
 from typing import Any
 
 from .spec import AedtSpec, LOCKED_PYAEDT, HfssSpec, Q3dSpec, parse_aedt_spec
+
+
+def _positive_identity(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise RuntimeError(f"{label} is invalid")
+    return value
+
+
+def _native_desktop_process_id(desktop: Any, label: str) -> int:
+    try:
+        value = desktop.odesktop.GetProcessID()
+    except (AttributeError, TypeError) as exc:
+        raise RuntimeError(f"{label} is unavailable") from exc
+    return _positive_identity(value, label)
+
+
+def owned_application_constructor(
+    factory: Callable[..., Any], desktop: Any
+) -> Callable[..., Any]:
+    """Pin one family application constructor to the transaction-owned Desktop."""
+
+    expected_pid = _positive_identity(
+        getattr(desktop, "aedt_process_id", None),
+        "owned AEDT Desktop process identity",
+    )
+    expected_port = _positive_identity(
+        getattr(desktop, "port", None), "owned AEDT Desktop endpoint"
+    )
+    native_pid = _native_desktop_process_id(
+        desktop, "owned AEDT Desktop native process identity"
+    )
+    if native_pid != expected_pid:
+        raise RuntimeError("owned AEDT Desktop native process identity is inconsistent")
+
+    def construct(*args: Any, **kwargs: Any) -> Any:
+        if "aedt_process_id" in kwargs or "port" in kwargs:
+            raise TypeError("family application cannot override the owned AEDT identity")
+        app = factory(
+            *args,
+            aedt_process_id=expected_pid,
+            port=expected_port,
+            **kwargs,
+        )
+        app_desktop = getattr(app, "desktop_class", None)
+        actual_pid = _positive_identity(
+            getattr(app_desktop, "aedt_process_id", None),
+            "family application Desktop process identity",
+        )
+        actual_port = _positive_identity(
+            getattr(app_desktop, "port", None),
+            "family application Desktop endpoint",
+        )
+        if actual_pid != expected_pid or actual_port != expected_port:
+            raise RuntimeError("family application did not bind the owned AEDT Desktop")
+        actual_native_pid = _native_desktop_process_id(
+            app_desktop, "family application native process identity"
+        )
+        if actual_native_pid != expected_pid:
+            raise RuntimeError("family application native process identity changed")
+        return app
+
+    return construct
 
 
 def _freeze_payload(value: Any) -> Any:
@@ -465,6 +527,7 @@ __all__ = [
     "import_and_bind",
     "native_boundary_names",
     "native_object_property",
+    "owned_application_constructor",
     "pyaedt_version",
     "q3d_region_bounds",
     "saved_setup_properties",

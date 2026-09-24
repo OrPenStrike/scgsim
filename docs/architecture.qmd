@@ -27,8 +27,11 @@ flowchart LR
 
 The SGB path shown here is the current Palace geometry path. AEDT consumes its
 existing declared portable GDS or Q2D inputs and family-specific specs; it does
-not yet consume the semantic-core/SGB geometry flow. A future AEDT semantic
-binding is excluded from this refactor rather than represented as a placeholder.
+not yet consume the semantic-core/SGB geometry flow. The converging AEDT
+Surface-EPR work starts from the same normalized `GeometryBuildInput` source
+facts, before SGB topology construction, and adds an AEDT-owned binding sidecar.
+It does not feed Gmsh faces or tags into AEDT and does not reinterpret an AEDT
+native observation as source geometry or contact intent.
 
 ## Contract boundaries
 
@@ -71,6 +74,16 @@ contribution do not create additional contributions, and missing evidence stays
 unknown rather than becoming guessed contact.
 Classification requires an established conductor and solution-domain role;
 an observation by itself is evidence, not proof of physical contact.
+
+The shared frontend boundary contains source polygons, holes, material and
+effective-domain identities, Z/thickness, route representations, and
+ownership. Source-linked junction declarations alongside that existing DTO
+retain terminal nets, direction, dimensions, inductance, and capacitance;
+those fields are not retroactively attributed to `GeometryBuildInput`. Palace
+may lower the source facts through SGB into conformal topology. AEDT instead
+creates its own native bodies, sheets, faces, and calculator selections and
+records an explicit source-to-native binding. Neither backend may make its
+native identity the other's input.
 
 Material identity, geometry approximation, PEC approximation, and native
 implementation are separate facts. The core classifies already-valid values;
@@ -205,6 +218,38 @@ transaction before PyAEDT import and Desktop construction. New HFSS V3 receipts
 also keep source material identity distinct from verified native PEC
 implementation: solids are native `pec` with Solve Inside disabled, while
 sheets receive Perfect E and must have complete native face coverage.
+
+The converging Eigenmode EPR lifecycle is an explicit additive path under that
+same transaction owner. It does not reinterpret the historical one-shot
+prepare--solve--export path or broaden the meaning of an ordinary completed
+receipt. Before its one solve, the EPR path declares geometry bindings,
+junctions, contributions, margins, calculator definitions, and native pass
+cache items. After the solver stops it exports the recorded pass/mode history;
+if the solve raises or returns failure, the transaction preserves that original
+error, releases the owned Desktop, and performs no automatic save or partial
+export recovery. The existing complete-convergence reader remains unchanged;
+history exported after a successful solve records its own completed pass
+identities and status.
+
+Mode selection is postprocessing state, not a physical design variation. A
+complete Eigenmode source vector selects exactly one native mode with the
+dimensionless relative control `1`, with every other mode `0`, and binds phase
+and the selected solution explicitly. `EigenPeakElectricField` names the
+native normalization convention; this control is not a measured `1 V/m` field.
+The vector order and persisted native source entries are evidence; inherited
+GUI state and a synthetic `Mode` intrinsic are not. Pass-cache identity
+separately binds setup, physical variation, adaptive pass, native mode, item
+definition, dependencies, context, and solution. Item titles and row positions
+are never identity.
+
+Historical cache resolution and final saved-field analysis are independent
+capabilities. The history reader returns only the pass/mode values that AEDT
+actually recorded, preserving axes and missingness. Final analysis closes and
+seals the solved project plus its complete result directory, reopens a distinct
+working copy with solve guards installed, and evaluates the last saved fields
+without modifying the original. Missing final fields do not fall back to an
+earlier cache pass, and a new postsolve margin is a final-field calculation,
+not invented pass history.
 
 See [Folder tree and ownership](ownership.qmd) for repository placement and
 [Headless Geometry Preview](geometry-preview.qmd) for the static and connected

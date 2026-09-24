@@ -40,8 +40,12 @@ run.py: release Desktop -> write final receipt
 ```
 
 The normal command and diagnostic instrumentation use the same private family
-preparation functions. There is no public no-solve API, alternative model
-builder, base backend, or second Desktop owner.
+preparation functions. The EPR candidate adds `--execute --prepare-only`
+through this same transaction and native builder. It saves and reads back the
+prepared model, releases the owned Desktop, and reports
+`native_preparation_only` with `solver_invoked=false`; it is a native
+preparation, not a mock solve. The ordinary one-shot families keep their
+existing solve/export behavior and do not acquire a second Desktop owner.
 
 Each family binds its request once before native preparation. The private bound
 request fixes the absolute run workspace and a detached immutable spec payload;
@@ -138,7 +142,7 @@ version checks, receipts, and path/hash validation:
 |---|---|---|
 | HFSS Driven Terminal | terminal ports with explicit reference conductors | ordered terminal S-parameters and Touchstone |
 | HFSS Driven Modal | modal ports with exact integration lines | ordered modal S-parameters, impedance, and Touchstone |
-| HFSS Eigenmode | no ports or driven sweep; explicit mode count and search frequency | mode frequency, damping/Q, and convergence evidence |
+| HFSS Eigenmode | the existing runtime remains port-free, with explicit mode count and search frequency; the EPR frontend separately declares linearized Lumped RLC junction sheets as model elements, not driven excitation ports | ordinary mode frequency, damping/Q, and convergence evidence remain unchanged; EPR history and saved-field results use their separate result contract |
 | Q3D | exact nets with source/sink assignments; optional exact six-face Region ground seal | native capacitance and, when enabled, resistance/inductance matrices |
 | Q2D | explicit cross-section geometry and conductor/reference assignments | per-unit-length capacitance/conductance and resistance/inductance matrices |
 
@@ -224,6 +228,195 @@ the requested padding and this zero-offset finalization explicitly.
 The prior failed `_01` project remains immutable diagnostic evidence. There is
 no compatibility fallback, physical bridge, or unite path. This replacement
 contract remains `CONVERGING`.
+
+## Eigenmode saved fields and Surface-EPR direction
+
+The converging Eigenmode Surface-EPR path is an additive lifecycle, not a
+reinterpretation of a completed V1/V2/V3 receipt. It starts from shared source
+polygons, holes, material/domain facts, route profile, and declared junction
+intent, then records a separate AEDT binding from those facts to native bodies,
+sheets, faces, material sides, and calculator selections. Native adjacency is
+observed geometry evidence and is not proof of source contact intent.
+
+The native construction target is planar Route A and Route B with real
+isotropic dielectrics and PEC conductors. Covered polygon sheets, local hole
+subtraction, sweeps or thickenings, and explicit boxes are allowed; blanket
+geometry unites or subtractions are not. Curved or tilted geometry,
+anisotropic or dispersive materials, open-radiation models, Driven EPR, and
+multi-sheet junctions remain excluded.
+
+Each required field quantity is evaluated in an explicitly bound setup,
+`LastAdaptive` solution, mode, frequency, phase, and excitation context. That
+context is read back with the value: a saved expression name or expression
+digest alone is not solution identity because an unevaluated calculator stack
+can follow later context changes. Route-A sheet traces preserve the requested
+side; Route-B patches use the exact adjacent solution side. `Smooth` and field
+magnitude are not substitutes for selecting the requested side.
+
+### Mode binding and pass cache
+
+Eigenmode postprocessing uses a complete native-order source vector. A numeric
+control vector selects one entry with the dimensionless relative weight `1`
+and sets every other entry to `0`; phase is explicit for every entry. These are
+native `EigenPeakElectricField` source controls, not a measurement or assertion
+of `1 V/m`. The cache-oriented form instead creates native postprocessing
+variables, feeds their names to the same source magnitudes, and supplies a
+concrete one-hot variable assignment for each calculation context. The path
+neither calls `GetAllSources` as a prerequisite nor passes `Mode` as a
+calculator intrinsic. It submits both forms through native `EditSources`, reads
+back the persisted numeric or symbolic source entries, the native
+postprocessing-variable values, and the solution context, then evaluates
+discriminating local integrals for modes 1 and 2 before restoring mode 1. These
+variables are postprocessing state only. They are not design variations, and
+their amplitudes must not become an independent Cartesian variation space.
+
+This mode check is distinct from adaptive-pass caching. The EPR runtime
+compiles the complete cache item set and submits it in one setup edit; repeated
+enable calls are not assumed to append. Every submitted item explicitly sets
+`IsConvergence=False`. Exact native readback of that flag remains unresolved:
+the verified AEDT 2024.2 saved-setup representation retains item titles,
+expressions, intrinsic assignments, numeric report type, and value context but
+does not expose the submitted convergence flag or convergence fields. SCGSim
+records that readback as unavailable rather than interpreting omission as
+`false` or reverse-engineering the numeric value context. This limits the
+native-readback claim but does not block submission, later native history
+export, or unrelated saved-field work. A cache item is identified by
+its namespaced definition plus bound context, never by a display title alone.
+Multi-face quantities use a verified native face list or an explicit sum of
+individually bound faces.
+
+### Public EPR candidate surface
+
+`prepare_planar_geometry_input()` validates and detaches shared source
+polygons, holes, entities, solution domains, Route A/B selection, junctions,
+and surface-analysis requests. `prepare_hfss_eigenmode_from_geometry()` binds
+that source request to an HFSS Eigenmode spec and emits one portable handoff;
+the old GDS authoring API remains available and unchanged.
+
+`analyze_epr()` is the only public entry that may perform native saved-field
+analysis. It enters the same `run.py` transaction owner and delegates to the
+private Eigenmode analysis path; the offline resolver never imports PyAEDT or
+owns Desktop. `resolve_saved_solution()` verifies an immutable project plus
+complete result-directory inventory. `resolve_epr_result()` verifies and loads
+partial history or final saved-field results without filling missing values.
+The Plotly report consumes only those resolved records and displays missing
+native values as missing rather than zero.
+
+History export starts from the native available solutions and selects the
+declared setup's adaptive passes. It records actual categories, quantities,
+contexts, trace axes, native units when reported, and their native item/mode
+association. The join key is run, setup, physical variation, native pass,
+native mode, item, and context; row position is not a key. Missing or partial
+rows remain missing, blank units remain unknown, trace arrays retain their
+native axes and lengths, and SCGSim performs no interpolation or zero fill. The
+last completed solver pass comes from independent solver/convergence evidence
+and is not inferred from the largest cached pass. Adaptive history and a
+separately reopened `LastAdaptive` saved-field evaluation are different
+evidence surfaces and never substitute for each other.
+
+Native execution remains bound to one explicitly owned Desktop PID, endpoint,
+project, design, and setup. Preparation, solve, cache inspection, project
+save/reopen, and result analysis retain that binding and record release or
+bounded cleanup separately. Authorized EPR solves use two cores, one task, zero
+GPUs, and disabled automatic HPC selection, with the applied settings read back
+before dispatch. A solve exception or false return remains the primary failure;
+SCGSim releases the owned Desktop without automatically saving or exporting a
+partial result. Partial cache or saved records produced by an otherwise
+successful run remain reportable evidence, but cannot be relabelled as complete
+or fall back to another pass, mode, setup, or final-field result.
+
+Each pass/mode records raw native integrals before Python derives SI energy,
+participation, loss, or junction values. The raw set includes normal and
+tangential surface-field squares, electric and magnetic domain integrals,
+separate real and imaginary junction-voltage integrals, and frequency. One
+denominator is reused for every contribution in a pass/mode. Junction voltage
+can remain available when frequency is absent, but inductive energy cannot be
+derived without that same pass/mode frequency. Film coefficients may be
+recombined offline only when their complete raw integrals and identities are
+present.
+
+Patch energies use native calculator restrictions to the exact source polygon
+with holes and to a finite distance from its original boundary. Margin zero is
+the full patch. A positive margin changes the field-integration domain, not the
+CAD. Polygon characteristic and finite-segment distance operations must be
+proved against AEDT 2024.2 before execution; a bounding box, smoothing, or
+Python-side sampled mask is not an accepted fallback.
+
+For a continuous physical planar patch, the mask is
+
+\[
+\chi_{patch}\,
+\mathbf{1}[d_{finite\ original\ boundary}\geq margin].
+\]
+
+Hole interiors are excluded, coplanar artificial seams are removed, and each
+true top/sidewall crease remains a boundary of its own eroded physical face.
+Small surviving pieces remain; an empty mask is a legitimate zero. Margins are
+alternative evaluations rather than additive contributions, and MA/MS on one
+sheet remain distinct contributions.
+
+With peak phasors, film thickness \(t\), film relative permittivity
+\(\epsilon_f\), and substrate relative permittivity \(\epsilon_s\), the fixed
+surface estimates are
+
+\[
+U_{MA}=\frac{\epsilon_0 t}{2\epsilon_f}\int |E_{n,air}|^2\,dA,
+\quad
+U_{MS}=\frac{\epsilon_0 t\epsilon_s^2}{2\epsilon_f}
+\int |E_{n,substrate}|^2\,dA,
+\]
+
+\[
+U_{SA}=\frac{\epsilon_0 t}{2}\int
+\left(\epsilon_f|E_{t,air}|^2+\frac{|E_{n,air}|^2}{\epsilon_f}\right)dA.
+\]
+
+The unique electric normalization is
+\(U_E=\epsilon_0/2\sum_D\int_D\epsilon_r|E|^2dV\) and
+\(U_{norm}=U_E+\sum_j U_{C,j}\). Thin-film estimates are not added back into
+that denominator. MM stays semantic evidence but is excluded from dielectric
+film energy.
+
+For a junction sheet of width \(w\), directed length unit vector
+\(\hat{\ell}\), and terminal direction A to B, the formal complex voltage is
+
+\[
+V=\frac{1}{w}\int_{sheet}E\!\cdot\!\hat{\ell}\,dA.
+\]
+
+Its real and imaginary parts are integrated separately over the same sheet,
+direction, and bound solution context and then combined. A precreated directed
+line integral is retained only as a diagnostic; it need not equal the area
+average for a nonuniform field. The convention is \(e^{+i\omega t}\), with
+\(\omega=2\pi\operatorname{Re}(f)\),
+\(I_L=V/(i\omega L)\), \(U_L=L|I_L|^2/2\), and
+\(U_C=C|V|^2/2\). Formal \(p_L=U_L/U_{norm}\) and
+\(p_C=U_C/U_{norm}\) are nonnegative. A separately labelled Palace comparison
+may retain the signed quantity
+\(\operatorname{copysign}(p_L,\operatorname{Re}I_L)\), which is not invariant
+under arbitrary phase rotation. The junction contract does not silently add
+resistance, Kerr, or a Palace port result.
+
+Execution must request saved fields, save both the project and complete result
+directory, close the owned Desktop, archive immutable bytes, copy them to a
+working analysis location, reopen that copy, and perform analysis without any
+solve or export call. A missing result directory, unavailable expression
+definition, context mismatch, or guarded solver attempt fails closed. The
+analysis receipt keeps declared, planned, observed, and evaluated evidence
+separate and never rewrites the normal run receipt into success.
+
+Ordinary result resolution defaults to the last completed solver pass. A caller
+may explicitly select another recorded pass and mode, but a missing value never
+falls back to an earlier pass. Historical cache data and the independently
+validated final saved-field result remain separate report inputs: a fresh
+postsolve margin may use only the final field result and cannot be inserted into
+the adaptive history curve.
+
+Method references are fixed to AEDT 2024.2 Fields Calculator geometry,
+general, and scalar commands, PyAEDT 1.3.0 installed source, Palace revision
+`5168949c8312dde19cbc4c74cdd858b9ecff74e6`, and pyEPR revision
+`29d4513a52df8b530656afcd7aff249c6add639c` for comparison only. pyEPR is not a
+runtime dependency or an authority that replaces the formulas above.
 
 ## Current exclusions
 
