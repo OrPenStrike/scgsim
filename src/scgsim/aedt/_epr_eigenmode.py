@@ -24,7 +24,7 @@ from ._epr_fields import (
 )
 from ._epr_geometry import bind_saved_planar_geometry, prepare_native_planar_geometry
 from ._epr_models import EprResult, detached
-from ._epr_results import combine_epr_mode
+from ._epr_results import combine_epr_mode, surface_integral_groups
 from ._hfss_convergence import read_hfss_convergence
 from ._hfss_runtime import _export_eigenmode
 from ._native_common import (
@@ -346,12 +346,24 @@ def _store_integral(
     elif purpose.startswith("electric_normal_") or purpose.startswith(
         "electric_tangential_"
     ):
-        key = f"{selection['binding_id']}@{float(selection['margin_um']):.17g}"
+        key = selection["group_id"]
+        if (
+            key in raw["surface_group_provenance"]
+            and raw["surface_group_provenance"][key] != selection
+        ):
+            raise RuntimeError("surface group expression provenance differs")
+        raw["surface_group_provenance"][key] = selection
         record = raw["surface_integrals_v2"].setdefault(key, {})
         component = "normal" if purpose.startswith("electric_normal_") else "tangential"
         record[component] = value
     elif purpose.startswith("masked_area_"):
-        key = f"{selection['binding_id']}@{float(selection['margin_um']):.17g}"
+        key = selection["group_id"]
+        if (
+            key in raw["surface_group_provenance"]
+            and raw["surface_group_provenance"][key] != selection
+        ):
+            raise RuntimeError("surface group expression provenance differs")
+        raw["surface_group_provenance"][key] = selection
         raw["masked_areas_m2"][key] = value
     elif purpose.startswith("junction_voltage_real_") or purpose.startswith(
         "junction_voltage_imag_"
@@ -391,6 +403,8 @@ def _empty_raw_integrals() -> dict[str, Any]:
         "relative_permeability": {},
         "surface_integrals_v2": {},
         "masked_areas_m2": {},
+        "surface_granularity": "owner_interface_margin.v1",
+        "surface_group_provenance": {},
         "junction_integrals_v_m": {},
     }
 
@@ -1199,6 +1213,18 @@ def _author_epr_expressions(
     bindings = {
         str(item["binding_id"]): item for item in spec.geometry.surface_bindings
     }
+    groups = surface_integral_groups(spec.geometry, request)
+    native_by_binding = {
+        item["binding_id"]: item for item in native_geometry["surface_selections"]
+    }
+    if len(native_by_binding) != len(native_geometry["surface_selections"]):
+        raise RuntimeError("native EPR surface binding IDs are not unique")
+    group_by_member = {
+        (member["binding_id"], group["margin_um"]): group
+        for group in groups
+        for member in group["members"]
+    }
+    grouped_constituents: dict[tuple[str, str], list[dict[str, Any]]] = {}
     selected_contributions = (
         {item.contribution_id for item in spec.geometry.contributions}
         if request.surface_contribution_ids is None
@@ -1206,7 +1232,10 @@ def _author_epr_expressions(
     )
     for selection in native_geometry["surface_selections"]:
         binding = bindings[selection["binding_id"]]
-        if selection["contribution_id"] not in selected_contributions:
+        if (
+            selection["contribution_id"] not in selected_contributions
+            or binding["contribution"]["classification"] == "MM"
+        ):
             continue
         plane = binding["mask_plane"]
         for margin in binding["margins_um"]:
@@ -1245,44 +1274,95 @@ def _author_epr_expressions(
                     adjacent_side=selection["adjacent_side"],
                     normal_vector=selection["native_normal"],
                 )
-                expressions.append(
-                    author_named_expression(
-                        app,
-                        purpose=(
-                            f"{quantity}_{selection['binding_id']}_"
-                            f"{float(margin):.17g}um"
-                        ),
-                        operations=operations,
-                        solution=solution,
-                        phase_degrees=0.0,
-                        dependencies=dependencies,
-                        selection={**selection, "margin_um": float(margin)},
-                        evidence_dir=evidence_dir,
-                        namespace=namespace,
-                        adjacent_selection_name=(
-                            selection["selection_name"]
-                            if selection["adjacent_side"] else None
-                        ),
-                    )
+                authored = author_named_expression(
+                    app,
+                    purpose=(
+                        f"{quantity}_{selection['binding_id']}_"
+                        f"{float(margin):.17g}um"
+                    ),
+                    operations=operations,
+                    solution=solution,
+                    phase_degrees=0.0,
+                    dependencies=dependencies,
+                    selection={**selection, "margin_um": float(margin)},
+                    evidence_dir=evidence_dir,
+                    namespace=namespace,
+                    adjacent_selection_name=(
+                        selection["selection_name"]
+                        if selection["adjacent_side"] else None
+                    ),
                 )
+                group = group_by_member[(selection["binding_id"], float(margin))]
+                grouped_constituents.setdefault(
+                    (group["group_id"], quantity), []
+                ).append(authored)
             area_operations = field_integral_operations(
                 quantity="masked_area",
                 selection_name=selection["selection_name"],
                 mask_operations=mask,
                 adjacent_side=selection["adjacent_side"],
             )
+            authored = author_named_expression(
+                app,
+                purpose=(
+                    f"masked_area_{selection['binding_id']}_"
+                    f"{float(margin):.17g}um"
+                ),
+                operations=area_operations,
+                solution=solution,
+                phase_degrees=0.0,
+                dependencies=dependencies,
+                selection={**selection, "margin_um": float(margin)},
+                evidence_dir=evidence_dir,
+                namespace=namespace,
+            )
+            group = group_by_member[(selection["binding_id"], float(margin))]
+            grouped_constituents.setdefault(
+                (group["group_id"], "masked_area"), []
+            ).append(authored)
+    for group in groups:
+        native_members = [
+            {
+                "binding_id": member["binding_id"],
+                "selection_name": native_by_binding[member["binding_id"]][
+                    "selection_name"
+                ],
+                "adjacent_side": native_by_binding[member["binding_id"]]["adjacent_side"],
+                "native_normal": native_by_binding[member["binding_id"]]["native_normal"],
+                "effective_domain_id": native_by_binding[member["binding_id"]][
+                    "effective_domain_id"
+                ],
+            }
+            for member in group["members"]
+        ]
+        for quantity in ("electric_normal", "electric_tangential", "masked_area"):
+            members = grouped_constituents.get((group["group_id"], quantity), [])
+            if len(members) != len(group["members"]):
+                raise RuntimeError("grouped EPR expression lacks a physical member")
+            members.sort(key=lambda item: item["identity"]["selection"]["binding_id"])
+            operations: list[str] = []
+            for member in members:
+                operations.append(f"NameOfExpression('{member['name']}')")
+                if len(operations) > 1:
+                    operations.append("Operation('+')")
+            dependencies = {
+                key: value
+                for member in members
+                for key, value in member["identity"]["dependencies"].items()
+            }
             expressions.append(
                 author_named_expression(
                     app,
-                    purpose=(
-                        f"masked_area_{selection['binding_id']}_"
-                        f"{float(margin):.17g}um"
-                    ),
-                    operations=area_operations,
+                    purpose=f"{quantity}_{group['group_id']}",
+                    operations=operations,
                     solution=solution,
                     phase_degrees=0.0,
                     dependencies=dependencies,
-                    selection={**selection, "margin_um": float(margin)},
+                    selection={
+                        "kind": "surface_group",
+                        **group,
+                        "native_member_selections": native_members,
+                    },
                     evidence_dir=evidence_dir,
                     namespace=namespace,
                 )

@@ -46,6 +46,128 @@ def _quantity(value: Any, name: str, unit: str, *, nonnegative: bool = True) -> 
     return _finite(item.get("value"), name, nonnegative=nonnegative)
 
 
+def surface_integral_groups(
+    prepared: PreparedPlanarGeometry,
+    request: EprAnalysisRequest | None,
+) -> tuple[dict[str, Any], ...]:
+    """Partition physical bindings only where one exact film coefficient applies."""
+
+    selected = (
+        {item.contribution_id for item in prepared.contributions}
+        if request is None or request.surface_contribution_ids is None
+        else set(request.surface_contribution_ids)
+    )
+    specs = {item.contribution_id: item for item in prepared.contributions}
+    domains = {
+        item["semantic_id"]: item for item in prepared.source["solution_regions"]
+    }
+    conductor_ids = {
+        item["semantic_id"] for item in prepared.source["conductors"]
+    }
+    groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for binding in prepared.surface_bindings:
+        record = _exact_mapping(binding["contribution"], "surface provenance")
+        contribution_id = record["contribution_id"]
+        if contribution_id not in selected:
+            continue
+        spec = specs[contribution_id]
+        if spec.interface_kind == "MM":
+            continue
+        source_owners = tuple(record["source_owner_ids"])
+        if spec.interface_kind == "SA":
+            owner_id = binding["substrate_domain_id"]
+            if (
+                owner_id not in source_owners
+                or owner_id not in domains
+                or prepared.source["materials"][domains[owner_id]["material_id"]]["kind"]
+                != "dielectric"
+            ):
+                raise ValueError("SA group lacks its physical dielectric owner")
+        else:
+            owner_id = binding["owner_semantic_id"]
+            if owner_id not in source_owners or owner_id not in conductor_ids:
+                raise ValueError("metal group lacks its physical conductor owner")
+        material = (
+            binding["substrate_material"]
+            if spec.interface_kind in {"MS", "SA"}
+            else binding["effective_material"]
+        )
+        epsilon_s = _finite(material["permittivity"], "group substrate permittivity")
+        if epsilon_s <= 0.0:
+            raise ValueError("group substrate permittivity must be positive")
+        signature = (
+            owner_id,
+            spec.interface_kind,
+            spec.film_thickness_m,
+            spec.film_relative_permittivity,
+            epsilon_s,
+        )
+        member = {
+            "binding_id": binding["binding_id"],
+            "contribution_id": contribution_id,
+            "source_polygon_id": spec.source_polygon_id,
+            "source_owner_ids": list(source_owners),
+            "field_side": spec.field_side,
+            "effective_domain_id": binding["effective_domain_id"],
+            "effective_material_id": binding["effective_material_id"],
+            "substrate_domain_id": binding["substrate_domain_id"],
+            "geometry_ref": detached(binding["geometry_ref"]),
+        }
+        for margin in spec.margins_um:
+            groups.setdefault((*signature, float(margin)), []).append(member)
+    result: list[dict[str, Any]] = []
+    for signature, members in sorted(groups.items(), key=lambda item: repr(item[0])):
+        (
+            owner_id,
+            interface_kind,
+            thickness,
+            film_epsilon,
+            substrate_epsilon,
+            margin,
+        ) = signature
+        members.sort(key=lambda item: (item["binding_id"], item["contribution_id"]))
+        if len({item["binding_id"] for item in members}) != len(members):
+            raise ValueError("surface group repeats a physical binding")
+        group_identity = {
+            "owner_id": owner_id,
+            "interface_kind": interface_kind,
+            "film_thickness_m": thickness,
+            "film_relative_permittivity": film_epsilon,
+            "substrate_relative_permittivity": substrate_epsilon,
+            "margin_um": margin,
+        }
+        group_id = "surface_group_" + hashlib.sha256(
+            json.dumps(group_identity, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()[:24]
+        result.append({"group_id": group_id, **group_identity, "members": members})
+    if len({item["group_id"] for item in result}) != len(result):
+        raise ValueError("surface group identities are not unique")
+    return tuple(result)
+
+
+def _surface_energy_j(
+    interface_kind: str,
+    thickness_m: float,
+    film_epsilon: float,
+    substrate_epsilon: float,
+    normal: float,
+    tangential: float,
+) -> float:
+    if interface_kind == "MA":
+        return _EPSILON_0_F_PER_M * thickness_m * normal / (2.0 * film_epsilon)
+    if interface_kind == "MS":
+        return (
+            _EPSILON_0_F_PER_M * thickness_m * substrate_epsilon**2
+            * normal / (2.0 * film_epsilon)
+        )
+    if interface_kind == "SA":
+        return (
+            _EPSILON_0_F_PER_M * thickness_m
+            * (film_epsilon * tangential + normal / film_epsilon) / 2.0
+        )
+    raise ValueError(f"unsupported surface interface {interface_kind!r}")
+
+
 def resolve_saved_solution(manifest_path: str | Path) -> SavedSolution:
     """Verify one explicitly sealed saved-field cohort without opening AEDT."""
 
@@ -357,7 +479,8 @@ def plot_epr_result(
         values: list[float] = []
         for surface in row.get("surface_contributions", ()):
             labels.append(
-                f"surface:{surface['contribution_id']}@{surface['margin_um']:g}um"
+                f"surface:{surface.get('group_id', surface.get('contribution_id'))}"
+                f"@{surface['margin_um']:g}um"
             )
             values.append(float(surface["participation"]))
         for junction in row.get("junctions", ()):
@@ -405,7 +528,7 @@ def plot_epr_result(
                 )
                 for surface in row["surface_contributions"]:
                     label = (
-                        f"surface:{surface['contribution_id']}@"
+                        f"surface:{surface.get('group_id', surface.get('contribution_id'))}@"
                         f"{surface['margin_um']:g}um"
                     )
                     series.setdefault(label, {})[native] = float(
@@ -650,7 +773,9 @@ def combine_epr_mode(
 
     bindings: dict[str, list[Mapping[str, Any]]] = {}
     for item in prepared.surface_bindings:
-        contribution = _exact_mapping(item.get("contribution"), "surface binding contribution")
+        contribution = _exact_mapping(
+            item.get("contribution"), "surface binding contribution"
+        )
         contribution_id = contribution.get("contribution_id")
         if not isinstance(contribution_id, str) or not contribution_id:
             raise ValueError("surface binding contribution id is invalid")
@@ -661,24 +786,69 @@ def combine_epr_mode(
         if request is None or request.surface_contribution_ids is None
         else set(request.surface_contribution_ids)
     )
-    expected_surface_keys = {
-        f"{binding['binding_id']}@{margin:.17g}"
-        for binding in prepared.surface_bindings
-        if binding["contribution"]["contribution_id"] in selected_surfaces
-        for margin in specs_by_id[
-            binding["contribution"]["contribution_id"]
-        ].margins_um
-        if specs_by_id[
-            binding["contribution"]["contribution_id"]
-        ].interface_kind
-        in {"MA", "MS", "SA"}
-    }
-    if set(surface) != expected_surface_keys:
-        raise ValueError("surface integrals do not match prepared contribution margins")
-    if set(masked_areas) != expected_surface_keys:
-        raise ValueError("masked areas do not match prepared contribution margins")
     surface_rows: list[dict[str, Any]] = []
-    for spec in prepared.contributions:
+    granularity = raw.get("surface_granularity")
+    if granularity == "owner_interface_margin.v1":
+        groups = surface_integral_groups(prepared, request)
+        expected_groups = {item["group_id"]: item for item in groups}
+        provenance = _exact_mapping(
+            raw.get("surface_group_provenance"), "surface group provenance"
+        )
+        if (
+            set(surface) != set(expected_groups)
+            or set(masked_areas) != set(expected_groups)
+            or set(provenance) != set(expected_groups)
+        ):
+            raise ValueError("grouped surface integrals do not cover prepared groups")
+        for group_id, group in expected_groups.items():
+            native_group = _exact_mapping(provenance[group_id], "native surface group")
+            if any(native_group.get(key) != value for key, value in group.items()):
+                raise ValueError(f"surface group provenance differs for {group_id!r}")
+            values = _exact_mapping(surface[group_id], "grouped surface integral")
+            normal = _quantity(values.get("normal"), "normal group integral", "V^2")
+            tangential = _quantity(
+                values.get("tangential"), "tangential group integral", "V^2"
+            )
+            energy = _surface_energy_j(
+                group["interface_kind"],
+                group["film_thickness_m"],
+                group["film_relative_permittivity"],
+                group["substrate_relative_permittivity"],
+                normal,
+                tangential,
+            )
+            surface_rows.append(
+                {
+                    **group,
+                    "normal_integral_v2": normal,
+                    "tangential_integral_v2": tangential,
+                    "masked_area_m2": _quantity(
+                        masked_areas[group_id], "masked group area", "m^2"
+                    ),
+                    "energy_j": energy,
+                    "participation": energy / normalization_j,
+                }
+            )
+    elif granularity is None:
+        expected_surface_keys = {
+            f"{binding['binding_id']}@{margin:.17g}"
+            for binding in prepared.surface_bindings
+            if binding["contribution"]["contribution_id"] in selected_surfaces
+            for margin in specs_by_id[
+                binding["contribution"]["contribution_id"]
+            ].margins_um
+            if specs_by_id[
+                binding["contribution"]["contribution_id"]
+            ].interface_kind
+            in {"MA", "MS", "SA"}
+        }
+        if set(surface) != expected_surface_keys:
+            raise ValueError("surface integrals do not match prepared contribution margins")
+        if set(masked_areas) != expected_surface_keys:
+            raise ValueError("masked areas do not match prepared contribution margins")
+    else:
+        raise ValueError(f"unsupported surface granularity {granularity!r}")
+    for spec in (() if granularity else prepared.contributions):
         if spec.interface_kind == "MM" or spec.contribution_id not in selected_surfaces:
             continue
         local_bindings = bindings.get(spec.contribution_id)
@@ -736,31 +906,14 @@ def combine_epr_mode(
                     values.get("tangential"), "tangential surface integral", "V^2"
                 )
                 binding_ids.append(binding_id)
-            if spec.interface_kind == "MA":
-                energy = (
-                    _EPSILON_0_F_PER_M
-                    * spec.film_thickness_m
-                    * normal
-                    / (2.0 * spec.film_relative_permittivity)
-                )
-            elif spec.interface_kind == "MS":
-                energy = (
-                    _EPSILON_0_F_PER_M
-                    * spec.film_thickness_m
-                    * epsilon_s**2
-                    * normal
-                    / (2.0 * spec.film_relative_permittivity)
-                )
-            else:
-                energy = (
-                    _EPSILON_0_F_PER_M
-                    * spec.film_thickness_m
-                    * (
-                        spec.film_relative_permittivity * tangential
-                        + normal / spec.film_relative_permittivity
-                    )
-                    / 2.0
-                )
+            energy = _surface_energy_j(
+                spec.interface_kind,
+                spec.film_thickness_m,
+                spec.film_relative_permittivity,
+                epsilon_s,
+                normal,
+                tangential,
+            )
             surface_rows.append(
                 {
                     "contribution_id": spec.contribution_id,
@@ -796,6 +949,7 @@ def combine_epr_mode(
 
     return {
         "schema_version": "scgsim.aedt.epr-mode-energy.v1",
+        "surface_granularity": granularity or "per_binding.v1",
         "frequency_hz": frequency_hz,
         "electric_energy_j": electric_energy_j,
         "magnetic_energy_j": magnetic_energy_j,

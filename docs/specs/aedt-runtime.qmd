@@ -505,7 +505,15 @@ denominator is reused for every contribution in a pass/mode. Junction voltage
 can remain available when frequency is absent, but inductive energy cannot be
 derived without that same pass/mode frequency. Film coefficients may be
 recombined offline only when their complete raw integrals and identities are
-present.
+present. New preparation caches native sums by physical owner, interface,
+compatible film/substrate coefficients, margin, and mode. Each sum retains its
+constituent binding/contribution IDs, side, domain, and source geometry
+provenance; it is one measured aggregate, not a set of inferred per-face
+values. Individual native patch expressions remain the source of the sums,
+including their field-side selection. Historical per-binding raw records remain
+readable, but new grouped records never expand an aggregate into fictitious
+patch integrals. The same grouping is used for saved-field analysis. This
+reduces cache items, not a demonstrated field-solve or calculator runtime.
 
 Physical patch support is derived from the full source contribution topology
 before requested-contribution filtering; selecting fewer output contributions

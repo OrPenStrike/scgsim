@@ -631,6 +631,7 @@ def prepare_planar_geometry_input(
             surfaces.append(
                 {
                     "surface_id": surface.surface_id,
+                    "owner_semantic_id": surface.owner_semantic_id,
                     "geometry_ref": _plain(surface.geometry_ref),
                     "normal_hint": _plain(surface.normal_hint),
                     "surface_role": surface.surface_role,
@@ -847,6 +848,10 @@ def prepare_planar_geometry_input(
                         f"{canonical_sha256({'surface_id': match['surface_id'], 'geometry_ref': match['geometry_ref']})[:16]}"
                     ),
                     "effective_domain_id": domain["semantic_id"],
+                    "substrate_domain_id": (
+                        substrate_domain["semantic_id"]
+                        if substrate_domain is not None else None
+                    ),
                     "effective_material_id": domain["material_id"],
                     "effective_material": _plain(material),
                     "substrate_material": (
