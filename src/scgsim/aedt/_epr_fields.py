@@ -192,12 +192,34 @@ def mask_variables(
     return values
 
 
+def _same_postprocessing_value(requested: str, actual: str) -> bool:
+    from ansys.aedt.core.generic.numbers_utils import decompose_variable_value
+
+    requested_number, requested_unit = decompose_variable_value(requested)
+    if requested == actual:
+        return not (
+            isinstance(requested_number, (int, float))
+            and not math.isfinite(requested_number)
+        ) and not re.fullmatch(
+            r"[+-]?(?:nan|inf(?:inity)?)[A-Za-z]*", requested.strip(), re.I
+        )
+    actual_number, actual_unit = decompose_variable_value(actual)
+    return (
+        isinstance(requested_number, (int, float))
+        and not isinstance(requested_number, bool)
+        and isinstance(actual_number, (int, float))
+        and not isinstance(actual_number, bool)
+        and math.isfinite(requested_number)
+        and math.isfinite(actual_number)
+        and requested_unit == actual_unit
+        and requested_number == actual_number
+    )
+
+
 def _validated_postprocessing_readback(
     values: Mapping[str, str], postprocessing: Mapping[str, Any]
 ) -> dict[str, str]:
     """Preserve exact expressions; accept rewritten finite literals only at exact parity."""
-
-    from ansys.aedt.core.generic.numbers_utils import decompose_variable_value
 
     observed: dict[str, str] = {}
     for name, requested in values.items():
@@ -206,30 +228,7 @@ def _validated_postprocessing_readback(
                 f"HFSS postprocessing variable {name!r} is missing from readback"
             )
         actual = str(postprocessing[name])
-        requested_number, requested_unit = decompose_variable_value(requested)
-        if requested == actual:
-            if (
-                isinstance(requested_number, (int, float))
-                and not math.isfinite(requested_number)
-            ) or re.fullmatch(
-                r"[+-]?(?:nan|inf(?:inity)?)[A-Za-z]*", requested.strip(), re.I
-            ):
-                raise RuntimeError(
-                    f"HFSS postprocessing variable {name!r} is nonfinite"
-                )
-            observed[name] = actual
-            continue
-        actual_number, actual_unit = decompose_variable_value(actual)
-        if not (
-            isinstance(requested_number, (int, float))
-            and not isinstance(requested_number, bool)
-            and isinstance(actual_number, (int, float))
-            and not isinstance(actual_number, bool)
-            and math.isfinite(requested_number)
-            and math.isfinite(actual_number)
-            and requested_unit == actual_unit
-            and requested_number == actual_number
-        ):
+        if not _same_postprocessing_value(requested, actual):
             raise RuntimeError(
                 f"HFSS postprocessing variable {name!r} differs from requested value"
             )
@@ -239,15 +238,53 @@ def _validated_postprocessing_readback(
 
 def install_variables(app: Any, values: Mapping[str, str]) -> dict[str, str]:
     manager = app.variable_manager
+    existing_names = set(manager.design_variable_names)
+    existing_postprocessing = manager.post_processing_variables
+    new_props: list[Any] = ["NAME:NewProps"]
     for name, value in values.items():
-        if not manager.set_variable(
-            name,
-            expression=value,
-            sweep=False,
-            overwrite=True,
-            is_post_processing=True,
+        if not _same_postprocessing_value(value, value):
+            raise RuntimeError(f"HFSS postprocessing variable {name!r} is nonfinite")
+        if (
+            name in existing_postprocessing
+            and existing_postprocessing[name].sweep is False
+            and _same_postprocessing_value(value, str(existing_postprocessing[name]))
         ):
-            raise RuntimeError(f"HFSS postprocessing variable failed: {name!r}")
+            continue
+        if name in existing_names or name.startswith("$"):
+            if not manager.set_variable(
+                name,
+                expression=value,
+                sweep=False,
+                overwrite=True,
+                is_post_processing=True,
+            ):
+                raise RuntimeError(f"HFSS postprocessing variable failed: {name!r}")
+            continue
+        new_props.append(
+            [
+                "NAME:" + name,
+                "PropType:=", "PostProcessingVariableProp",
+                "UserDef:=", True,
+                "Value:=", value,
+                "Description:=", "",
+                "ReadOnly:=", False,
+                "Hidden:=", False,
+                "Sweep:=", False,
+            ]
+        )
+    if len(new_props) > 1:
+        changed = app.odesign.ChangeProperty(
+            [
+                "NAME:AllTabs",
+                [
+                    "NAME:LocalVariableTab",
+                    ["NAME:PropServers", "LocalVariables"],
+                    new_props,
+                ],
+            ]
+        )
+        if changed is False:
+            raise RuntimeError("HFSS postprocessing variable batch creation failed")
     return _validated_postprocessing_readback(values, manager.post_processing_variables)
 
 
