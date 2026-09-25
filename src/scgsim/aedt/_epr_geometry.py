@@ -18,6 +18,8 @@ from scgsim.sgb import (
     validate_selected_route,
 )
 from scgsim.sgb.planning import (
+    _clean_loop,
+    _polygon_area,
     plan_surface_contribution_patches,
     verified_route_a_substrate_support,
 )
@@ -1251,6 +1253,121 @@ def _point_on_segment(
     )
 
 
+def _sidewall_field_normal(
+    binding: Mapping[str, Any], source: Mapping[str, Any]
+) -> tuple[float, float, float]:
+    """Orient a canonical SGB sidewall toward its selected field material.
+
+    A conductor exposes the exterior of its occupied region; an SA vacuum
+    domain exposes its interior. Ring winding changes the edge's left side,
+    not that physical material-side identity.
+    """
+
+    binding_id = str(binding["binding_id"])
+    hint = binding.get("normal_hint")
+    if hint is not None:
+        if (
+            not isinstance(hint, Sequence)
+            or isinstance(hint, (str, bytes))
+            or len(hint) != 3
+        ):
+            raise RuntimeError(f"sidewall {binding_id!r} normal hint is invalid")
+        components = tuple(float(value) for value in hint)
+        length = math.sqrt(sum(value * value for value in components))
+        if not math.isfinite(length) or length == 0.0:
+            raise RuntimeError(f"sidewall {binding_id!r} normal hint is invalid")
+        return tuple(value / length for value in components)
+
+    ref = binding.get("geometry_ref")
+    if not isinstance(ref, Mapping):
+        raise RuntimeError(f"sidewall {binding_id!r} lacks canonical geometry")
+    quad = ref.get("quad_points")
+    if (
+        not isinstance(quad, Sequence)
+        or isinstance(quad, (str, bytes))
+        or len(quad) != 4
+    ):
+        raise RuntimeError(f"sidewall {binding_id!r} lacks a canonical quad")
+    try:
+        points = tuple(tuple(float(value) for value in point) for point in quad)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"sidewall {binding_id!r} has an invalid quad") from exc
+    if (
+        any(
+            len(point) != 3 or not all(math.isfinite(value) for value in point)
+            for point in points
+        )
+        or points[0][:2] != points[3][:2]
+        or points[1][:2] != points[2][:2]
+        or points[0][2] != points[1][2]
+        or points[2][2] != points[3][2]
+        or points[2][2] <= points[0][2]
+        or points[0][:2] == points[1][:2]
+    ):
+        raise RuntimeError(f"sidewall {binding_id!r} has a noncanonical quad")
+
+    classification = binding["contribution"]["classification"]
+    from_id = ref.get("from_semantic_id")
+    if classification in {"MA", "MS"} and isinstance(from_id, str):
+        if binding["owner_semantic_id"] != from_id:
+            raise RuntimeError(f"sidewall {binding_id!r} conductor owner disagrees")
+        candidates = [
+            item for item in source["conductors"] if item["semantic_id"] == from_id
+        ]
+        field_inside_body = False
+    elif classification == "SA" and from_id is None:
+        domain_id = binding["effective_domain_id"]
+        candidates = [
+            item
+            for item in source["solution_regions"]
+            if item["semantic_id"] == domain_id and item["material_kind"] == "vacuum"
+        ]
+        field_inside_body = True
+    else:
+        raise RuntimeError(
+            f"sidewall {binding_id!r} lacks canonical material-side identity"
+        )
+    if len(candidates) != 1:
+        raise RuntimeError(f"sidewall {binding_id!r} source body is missing or ambiguous")
+
+    geometry = candidates[0]["geometry"]
+    role = ref.get("sidewall_ring_role")
+    if role == "outer":
+        ring = geometry["outer_loop"]
+    elif (
+        isinstance(role, str)
+        and role.startswith("hole_")
+        and role[5:].isdigit()
+    ):
+        index = int(role[5:])
+        holes = geometry.get("hole_loops", ())
+        if index >= len(holes):
+            raise RuntimeError(f"sidewall {binding_id!r} source hole is missing")
+        ring = holes[index]
+    else:
+        raise RuntimeError(f"sidewall {binding_id!r} ring role is invalid")
+    ring = _clean_loop(ring)
+    edge_index = ref.get("sidewall_edge_index")
+    if isinstance(edge_index, bool) or not isinstance(edge_index, int):
+        raise RuntimeError(f"sidewall {binding_id!r} edge index is invalid")
+    edges = tuple(zip(ring, (*ring[1:], ring[0])))
+    matched = [
+        index
+        for index, (start, end) in enumerate(edges)
+        if _point_on_segment(points[0][:2], start, end)
+        and _point_on_segment(points[1][:2], start, end)
+    ]
+    if matched != [edge_index]:
+        raise RuntimeError(f"sidewall {binding_id!r} source edge is missing or ambiguous")
+    start, end = edges[edge_index]
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    length = math.hypot(dx, dy)
+    field_inside_ring = field_inside_body == (role == "outer")
+    enclosed_side = 1.0 if _polygon_area(ring) > 0.0 else -1.0
+    side = enclosed_side if field_inside_ring else -enclosed_side
+    return (-dy / length * side, dx / length * side, 0.0)
+
+
 def _assign_closed_enclosure(
     app: Any, source: Mapping[str, Any], bindings: Sequence[Mapping[str, Any]]
 ) -> dict[str, Any]:
@@ -1531,21 +1648,7 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
         elif field_side == "bottom":
             desired_normal = (0.0, 0.0, -1.0)
         elif field_side == "sidewall":
-            hint = binding.get("normal_hint")
-            if (
-                not isinstance(hint, Sequence)
-                or isinstance(hint, (str, bytes))
-                or len(hint) != 3
-            ):
-                raise RuntimeError(
-                    f"analysis surface {name!r} lacks an explicit sidewall normal"
-                )
-            length = math.sqrt(sum(float(value) ** 2 for value in hint))
-            if length == 0.0 or not math.isfinite(length):
-                raise RuntimeError(
-                    f"analysis surface {name!r} has an invalid sidewall normal"
-                )
-            desired_normal = tuple(float(value) / length for value in hint)
+            desired_normal = _sidewall_field_normal(binding, source)
         else:
             raise RuntimeError(f"analysis surface {name!r} has unknown field side")
         orientation = sum(
@@ -1648,17 +1751,7 @@ def bind_saved_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -> di
         elif side == "bottom":
             desired = (0.0, 0.0, -1.0)
         elif side == "sidewall":
-            hint = binding.get("normal_hint")
-            if (
-                not isinstance(hint, Sequence)
-                or isinstance(hint, (str, bytes))
-                or len(hint) != 3
-            ):
-                raise RuntimeError(f"saved sidewall {name!r} lacks a normal hint")
-            length = math.sqrt(sum(float(value) ** 2 for value in hint))
-            if not math.isfinite(length) or length == 0.0:
-                raise RuntimeError(f"saved sidewall {name!r} normal hint is invalid")
-            desired = tuple(float(value) / length for value in hint)
+            desired = _sidewall_field_normal(binding, source)
         else:
             raise RuntimeError(f"saved analysis surface {name!r} has unknown side")
         orientation = sum(a * b for a, b in zip(native_normal, desired))
