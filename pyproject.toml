@@ -20,6 +20,12 @@ aedt = [
     "gdstk",
     "pyaedt==1.3.0",
 ]
+aedt-epr = [
+    "gdstk",
+    "pyaedt==1.3.0",
+    "gdsfactory>=9,<10",
+    "klayout>=0.30,<0.31",
+]
 palace = [
     "gdsfactory>=9,<10",
     "gdstk",

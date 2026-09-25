@@ -18,6 +18,7 @@ from ._epr_eigenmode import (
     prepared_epr_result,
     solve_and_export_epr,
 )
+from ._epr_geometry import precompute_inset_surfaces, validate_geometry_workers
 from ._hfss_runtime import run_hfss
 from ._epr_results import seal_saved_solution
 from ._native_common import owned_application_constructor, pyaedt_version
@@ -66,6 +67,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Analyze the sealed saved-copy EPR request without solving",
     )
+    parser.add_argument(
+        "--geometry-workers",
+        type=int,
+        help="Override pure EPR inset geometry workers before AEDT launch",
+    )
     args = parser.parse_args(argv)
     metadata_path = Path(args.handoff).resolve()
     if not metadata_path.is_file():
@@ -78,6 +84,7 @@ def main(argv: list[str] | None = None) -> int:
         metadata_path,
         prepare_only=args.prepare_only,
         analyze_epr=args.analyze_epr,
+        geometry_workers=args.geometry_workers,
     )
 
 
@@ -86,6 +93,7 @@ def _execute(
     *,
     prepare_only: bool = False,
     analyze_epr: bool = False,
+    geometry_workers: int | None = None,
 ) -> int:
     run_dir = metadata_path.parent.parent
     os.chdir(run_dir)
@@ -154,6 +162,20 @@ def _execute(
         receipt["runtime_source"] = _runtime_source_identity()
         if _pyaedt_version() != LOCKED_PYAEDT:
             raise RuntimeError("PyAEDT lock mismatch")
+        setting = metadata.get("execution", {}).get("geometry_workers")
+        workers = geometry_workers if geometry_workers is not None else setting
+        validate_geometry_workers(workers)
+        inset_plan = None
+        if isinstance(spec, (HfssEprSpec, HfssEprAnalysisSpec)) and spec.epr_request is not None:
+            geometry_started = time.perf_counter()
+            inset_plan = precompute_inset_surfaces(
+                spec.geometry, spec.epr_request, workers
+            )
+            receipt["geometry_precompute"] = {
+                "seconds": round(time.perf_counter() - geometry_started, 6),
+                "members": len(inset_plan),
+                "requested_workers": workers,
+            }
         from ansys.aedt.core import Desktop, Hfss, Q2d, Q3d
 
         desktop = Desktop(
@@ -168,12 +190,12 @@ def _execute(
             from ._epr_eigenmode import analyze_saved_epr
 
             result = analyze_saved_epr(
-                owned_application_constructor(Hfss, desktop), run_dir, spec
+                owned_application_constructor(Hfss, desktop), run_dir, spec, inset_plan
             )
             status = "epr_analysis_completed"
         elif isinstance(spec, HfssEprSpec):
             prepared = prepare_epr_hfss(
-                owned_application_constructor(Hfss, desktop), run_dir, spec
+                owned_application_constructor(Hfss, desktop), run_dir, spec, inset_plan
             )
             if prepare_only:
                 result = prepared_epr_result(prepared)

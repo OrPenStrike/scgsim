@@ -2551,6 +2551,12 @@ aedt = [
     { name = "gdstk" },
     { name = "pyaedt" },
 ]
+aedt-epr = [
+    { name = "gdsfactory" },
+    { name = "gdstk" },
+    { name = "klayout" },
+    { name = "pyaedt" },
+]
 dev = [
     { name = "jupytext" },
     { name = "nbformat" },
@@ -2568,20 +2574,24 @@ visualization = [
 
 [package.metadata]
 requires-dist = [
+    { name = "gdsfactory", marker = "extra == 'aedt-epr'", specifier = ">=9,<10" },
     { name = "gdsfactory", marker = "extra == 'palace'", specifier = ">=9,<10" },
     { name = "gdstk", marker = "extra == 'aedt'" },
+    { name = "gdstk", marker = "extra == 'aedt-epr'" },
     { name = "gdstk", marker = "extra == 'palace'" },
     { name = "gmsh", marker = "extra == 'palace'" },
     { name = "jupytext", marker = "extra == 'dev'" },
+    { name = "klayout", marker = "extra == 'aedt-epr'", specifier = ">=0.30,<0.31" },
     { name = "meshio", marker = "extra == 'visualization'", specifier = ">=5.3,<6" },
     { name = "nbformat", marker = "extra == 'dev'" },
     { name = "numpy", specifier = ">=2.0.0" },
     { name = "pillow", marker = "extra == 'visualization'", specifier = ">=11,<13" },
     { name = "plotly", specifier = ">=6.0.0" },
     { name = "pyaedt", marker = "extra == 'aedt'", specifier = "==1.3.0" },
+    { name = "pyaedt", marker = "extra == 'aedt-epr'", specifier = "==1.3.0" },
     { name = "pyvista", extras = ["jupyter"], marker = "extra == 'visualization'", specifier = ">=0.48,<0.49" },
 ]
-provides-extras = ["aedt", "palace", "visualization", "dev"]
+provides-extras = ["aedt", "aedt-epr", "palace", "visualization", "dev"]
 
 [[package]]
 name = "scikit-image"

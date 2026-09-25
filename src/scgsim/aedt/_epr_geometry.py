@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import math
+import os
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from importlib.metadata import version
+from multiprocessing import get_context
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
@@ -63,6 +67,7 @@ def _source_payload(
     prepared_stack: Mapping[str, Any],
     *,
     route: str,
+    source_dbu_um: float,
 ) -> dict[str, Any]:
     materials = prepared_stack.get("materials")
     solution_regions = prepared_stack.get("solution_regions")
@@ -170,6 +175,7 @@ def _source_payload(
         raise TypeError("prepared_stack route_a_thin_film provenance must be a mapping")
     return {
         "schema_version": "scgsim.aedt.epr-planar-source.v1",
+        "source_dbu_um": source_dbu_um,
         "prepared_stack_sha256": canonical_sha256(_plain(prepared_stack)),
         "materials": material_catalog,
         "solution_regions": normalized_regions,
@@ -436,86 +442,96 @@ def _project_plane_region(
     }
 
 
-def _gdstk_polygons(regions: Sequence[Mapping[str, Any]]) -> list[Any]:
-    import gdstk
+_KLAYOUT_COORD_MIN = -(2**31)
+_KLAYOUT_COORD_MAX = 2**31 - 1
+_INSET_CIRCLE_POINTS = 128
+_INSET_METHOD = "klayout_complement_minkowski.v1"
 
-    polygons: list[Any] = []
+
+def _klayout_point(point: Sequence[float], dbu_um: float, k: Any) -> Any:
+    if len(point) != 2:
+        raise ValueError("EPR mask point must have two local coordinates")
+    values = [float(value) for value in point]
+    if any(
+        not math.isfinite(value)
+        or not _KLAYOUT_COORD_MIN < value / dbu_um < _KLAYOUT_COORD_MAX
+        for value in values
+    ):
+        raise OverflowError("EPR mask coordinate exceeds KLayout integer range")
+    return k.DPoint(*values).to_itype(dbu_um)
+
+
+def _klayout_region(
+    regions: Sequence[Mapping[str, Any]], dbu_um: float, k: Any
+) -> Any:
+    result = k.Region()
     for region in regions:
-        current = [gdstk.Polygon(region["exterior"])]
-        holes = [gdstk.Polygon(ring) for ring in region.get("holes", ())]
-        if holes:
-            current = list(gdstk.boolean(current, holes, "not", precision=1e-9))
-        polygons.extend(current)
-    return polygons
-
-
-def _cycles_from_gdstk_polygon(
-    points: Sequence[Sequence[float]],
-) -> list[list[list[float]]]:
-    vertices = [tuple(round(float(value), 12) for value in point) for point in points]
-    edges: dict[tuple[tuple[float, float], tuple[float, float]], int] = {}
-    for index, first in enumerate(vertices):
-        second = vertices[(index + 1) % len(vertices)]
-        key = tuple(sorted((first, second)))
-        edges[key] = edges.get(key, 0) + 1
-    adjacency: dict[tuple[float, float], list[tuple[float, float]]] = {}
-    for (first, second), count in edges.items():
-        if count == 2:
-            continue
-        if count != 1:
-            raise RuntimeError("mask Boolean produced ambiguous boundary edges")
-        adjacency.setdefault(first, []).append(second)
-        adjacency.setdefault(second, []).append(first)
-    if any(len(neighbors) != 2 for neighbors in adjacency.values()):
-        raise RuntimeError("mask Boolean produced a non-manifold boundary")
-    remaining = {tuple(sorted(edge)) for edge, count in edges.items() if count == 1}
-    cycles: list[list[list[float]]] = []
-    while remaining:
-        start, current = next(iter(remaining))
-        previous = start
-        cycle = [start]
-        remaining.remove(tuple(sorted((start, current))))
-        while current != start:
-            cycle.append(current)
-            next_vertex = next(
-                candidate
-                for candidate in adjacency[current]
-                if candidate != previous
+        exterior = [_klayout_point(point, dbu_um, k) for point in region["exterior"]]
+        polygon = k.Polygon(exterior)
+        for hole in region.get("holes", ()):
+            polygon.insert_hole(
+                [_klayout_point(point, dbu_um, k) for point in hole]
             )
-            edge = tuple(sorted((current, next_vertex)))
-            if edge not in remaining and next_vertex != start:
-                raise RuntimeError("mask Boolean boundary walk is inconsistent")
-            remaining.discard(edge)
-            previous, current = current, next_vertex
-        cycles.append([[value[0], value[1]] for value in cycle])
-    return cycles
+        result.insert(polygon)
+    return result.merged()
 
 
-def _regions_from_gdstk(polygons: Sequence[Any]) -> list[dict[str, Any]]:
-    result: list[dict[str, Any]] = []
-    for polygon in polygons:
-        cycles = _cycles_from_gdstk_polygon(polygon.points)
-        cycles.sort(
-            key=lambda ring: abs(
-                sum(
-                    ring[index][0] * ring[(index + 1) % len(ring)][1]
-                    - ring[(index + 1) % len(ring)][0] * ring[index][1]
-                    for index in range(len(ring))
-                )
-            ),
-            reverse=True,
+def _regions_from_klayout(region: Any, dbu_um: float) -> list[dict[str, Any]]:
+    def points(iterator: Any) -> list[list[float]]:
+        return [[point.x * dbu_um, point.y * dbu_um] for point in iterator]
+
+    result = [
+        {
+            "exterior": points(polygon.each_point_hull()),
+            "holes": [
+                points(polygon.each_point_hole(index))
+                for index in range(polygon.holes())
+            ],
+        }
+        for polygon in region.each_merged()
+    ]
+    return sorted(result, key=canonical_sha256)
+
+
+def _klayout_inset(support: Any, radius: int, k: Any) -> Any:
+    if radius == 0:
+        return support
+    bounds = support.bbox()
+    padding = 2 * radius + 1
+    if any(
+        coordinate < _KLAYOUT_COORD_MIN + radius
+        or coordinate > _KLAYOUT_COORD_MAX - radius
+        for coordinate in (
+            bounds.left - padding,
+            bounds.bottom - padding,
+            bounds.right + padding,
+            bounds.top + padding,
         )
-        result.append({"exterior": cycles[0], "holes": cycles[1:]})
-    return result
+    ):
+        raise OverflowError("EPR inset complement exceeds KLayout integer range")
+    complement = k.Region(
+        k.Box(
+            bounds.left - padding,
+            bounds.bottom - padding,
+            bounds.right + padding,
+            bounds.top + padding,
+        )
+    ) - support
+    circle = k.Polygon.ellipse(
+        k.Box(-radius, -radius, radius, radius), _INSET_CIRCLE_POINTS
+    )
+    return (support - complement.minkowski_sum(circle).merged()).merged()
 
 
 def _bind_physical_support_masks(
     bindings: list[dict[str, Any]],
     support_bindings: list[dict[str, Any]],
+    *,
+    source_dbu_um: float,
 ) -> list[dict[str, Any]]:
     if not bindings:
         return []
-    import gdstk
+    import klayout.db as k
 
     groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
     for binding in support_bindings:
@@ -529,10 +545,12 @@ def _bind_physical_support_masks(
         projected = [
             _project_plane_region(item["mask_plane"], plane) for item in group
         ]
-        union = list(gdstk.boolean(_gdstk_polygons(projected), [], "or", precision=1e-9))
-        if not union:
+        union = _klayout_region(projected, source_dbu_um, k)
+        if union.is_empty():
             raise RuntimeError("physical EPR support union is empty")
-        support_by_group[key] = (plane, _regions_from_gdstk(union), group)
+        support_by_group[key] = (
+            plane, _regions_from_klayout(union, source_dbu_um), group
+        )
     result: list[dict[str, Any]] = []
     for binding in bindings:
         support = support_by_group.get(_plane_group_key(binding))
@@ -556,12 +574,232 @@ def _bind_physical_support_masks(
                     "attribution_regions": [
                         _project_plane_region(binding["mask_plane"], plane)
                     ],
-                    # The original union boundary is authoritative.  The
-                    # field compiler applies exact finite-segment distance
-                    # for each margin; polygon offset geometry would change
-                    # concave and hole-corner semantics.
+                    # Offset the complete union before intersecting owner
+                    # attribution; internal owner seams are not boundaries.
                     "support_regions": support_regions,
+                    "source_dbu_um": source_dbu_um,
+                    "inset_method": _INSET_METHOD,
+                    "circle_points": _INSET_CIRCLE_POINTS,
+                    "klayout_version": version("klayout"),
                 },
+            }
+        )
+    return result
+
+
+def inset_surface_regions(
+    binding: Mapping[str, Any],
+    margin_um: float,
+    support_insets: dict[tuple[str, int], Any],
+) -> list[dict[str, Any]]:
+    """Inset complete physical support, then attribute its surviving pieces."""
+
+    import klayout.db as k
+
+    if not math.isfinite(margin_um) or margin_um < 0.0:
+        raise ValueError("surface EPR margin must be finite and nonnegative")
+    support = binding["mask_support"]
+    if support["klayout_version"] != version("klayout"):
+        raise RuntimeError("prepared EPR KLayout version differs from runtime")
+    dbu_um = float(support["source_dbu_um"])
+    if margin_um / dbu_um >= _KLAYOUT_COORD_MAX:
+        raise OverflowError("EPR margin exceeds KLayout integer range")
+    radius = k.DPoint(margin_um, 0).to_itype(dbu_um).x
+    key = (str(support["group_identity_sha256"]), radius)
+    if key not in support_insets:
+        physical = _klayout_region(support["support_regions"], dbu_um, k)
+        support_insets[key] = _klayout_inset(physical, radius, k)
+    attribution = _klayout_region(support["attribution_regions"], dbu_um, k)
+    return _regions_from_klayout(support_insets[key] & attribution, dbu_um)
+
+
+def _inset_group_task(
+    task: tuple[dict[str, Any], list[dict[str, Any]]],
+) -> dict[tuple[str, float], dict[str, Any]]:
+    """Pure integer geometry for one physical support and all its owners/margins."""
+
+    import klayout.db as k
+
+    support, members = task
+    if support["klayout_version"] != version("klayout"):
+        raise RuntimeError("prepared EPR KLayout version differs from worker runtime")
+    dbu_um = float(support["source_dbu_um"])
+    physical = _klayout_region(support["support_regions"], dbu_um, k)
+    insets: dict[int, Any] = {0: physical}
+    result: dict[tuple[str, float], dict[str, Any]] = {}
+    for member in members:
+        attribution = _klayout_region(member["attribution_regions"], dbu_um, k)
+        for requested in member["margins_um"]:
+            margin_um = float(requested)
+            if not math.isfinite(margin_um) or margin_um < 0:
+                raise ValueError("surface EPR margin must be finite and nonnegative")
+            if margin_um / dbu_um >= _KLAYOUT_COORD_MAX:
+                raise OverflowError("EPR margin exceeds KLayout integer range")
+            radius = k.DPoint(margin_um, 0).to_itype(dbu_um).x
+            if radius not in insets:
+                insets[radius] = _klayout_inset(physical, radius, k)
+            regions = _regions_from_klayout(insets[radius] & attribution, dbu_um)
+            result[(member["binding_id"], margin_um)] = {
+                "regions": regions,
+                "requested_margin_um": margin_um,
+                "integer_margin_dbu": radius,
+                "effective_margin_um": radius * dbu_um,
+                "reuse_source_sheet": radius == 0 and len(regions) == 1
+                and (insets[radius] & attribution ^ attribution).is_empty(),
+            }
+    return result
+
+
+def validate_geometry_workers(geometry_workers: int | None) -> None:
+    if geometry_workers is not None and (
+        isinstance(geometry_workers, bool)
+        or not isinstance(geometry_workers, int)
+        or geometry_workers <= 0
+    ):
+        raise ValueError("geometry_workers must be a positive integer or None")
+
+
+def precompute_inset_surfaces(
+    geometry: PreparedPlanarGeometry,
+    request: Any,
+    geometry_workers: int | None,
+) -> dict[tuple[str, float], dict[str, Any]]:
+    """Finish spawned pure mask geometry before an owned Desktop is constructed."""
+
+    validate_geometry_workers(geometry_workers)
+    selected = (
+        None
+        if request.surface_contribution_ids is None
+        else set(request.surface_contribution_ids)
+    )
+    grouped: dict[str, tuple[dict[str, Any], list[dict[str, Any]]]] = {}
+    for binding in geometry.surface_bindings:
+        if binding["contribution"]["classification"] == "MM" or (
+            selected is not None
+            and binding["contribution"]["contribution_id"] not in selected
+        ):
+            continue
+        support = _plain(binding["mask_support"])
+        key = support["group_identity_sha256"]
+        if key not in grouped:
+            grouped[key] = (support, [])
+        grouped[key][1].append(
+            {
+                "binding_id": binding["binding_id"],
+                "attribution_regions": support["attribution_regions"],
+                "margins_um": list(binding["margins_um"]),
+            }
+        )
+    tasks = [grouped[key] for key in sorted(grouped)]
+    if not tasks:
+        return {}
+    available = (
+        len(os.sched_getaffinity(0))
+        if hasattr(os, "sched_getaffinity")
+        else os.cpu_count() or 1
+    )
+    workers = min(geometry_workers or available, len(tasks))
+    if workers == 1:
+        parts = [_inset_group_task(task) for task in tasks]
+    else:
+        parts = []
+        task_iter = iter(tasks)
+        with ProcessPoolExecutor(
+            max_workers=workers, mp_context=get_context("spawn")
+        ) as pool:
+            pending = {
+                pool.submit(_inset_group_task, task)
+                for _, task in zip(range(2 * workers), task_iter)
+            }
+            while pending:
+                done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    parts.append(future.result())
+                    try:
+                        pending.add(pool.submit(_inset_group_task, next(task_iter)))
+                    except StopIteration:
+                        pass
+    result: dict[tuple[str, float], dict[str, Any]] = {}
+    for part in parts:
+        if result.keys() & part.keys():
+            raise RuntimeError("EPR inset plan has duplicate binding/margin identity")
+        result.update(part)
+    return result
+
+
+def bind_inset_surface_selections(
+    app: Any,
+    binding: Mapping[str, Any],
+    base_selection: Mapping[str, Any],
+    margin_um: float,
+    inset_plan: Mapping[tuple[str, float], Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Create or rebind non-model inset sheets without changing solver CAD."""
+
+    plane = binding["mask_plane"]
+    desired = tuple(float(value) for value in base_selection["desired_field_side_normal"])
+    planned = inset_plan[(str(binding["binding_id"]), margin_um)]
+    regions = planned["regions"]
+    dbu_um = float(binding["mask_support"]["source_dbu_um"])
+    # An oblique source quad need not lie on the quantized local DBU grid.
+    # Always author the planned contour, including an effective-zero margin.
+    reuse_original = False
+    result: list[dict[str, Any]] = []
+    for index, region in enumerate(regions):
+        contour_sha256 = canonical_sha256(
+            {
+                "plane": plane,
+                "region": region,
+                "method": _INSET_METHOD,
+                "source_dbu_um": dbu_um,
+                "klayout_version": version("klayout"),
+            }
+        )
+        name = (
+            str(base_selection["selection_name"])
+            if reuse_original
+            else _native_name("epr_inset", contour_sha256)
+        )
+        sheet = app.modeler.get_object_from_name(name)
+        if sheet is None:
+            sheet, _ = _analysis_surface_sheet(
+                app,
+                {"plane_basis": plane, "local_region": region},
+                name=name,
+            )
+        native = _native_object_evidence(app, name)
+        if native["native_object_type"] != "Sheet" or len(sheet.faces) != 1:
+            raise RuntimeError(f"inset EPR selection {name!r} is not one sheet")
+        if _native_object_boolean_property(sheet, "Model"):
+            raise RuntimeError(f"inset EPR selection {name!r} became model geometry")
+        normal = sheet.faces[0].normal
+        if normal is None or len(normal) != 3 or not all(
+            math.isfinite(float(value)) for value in normal
+        ):
+            raise RuntimeError(f"inset EPR selection {name!r} has no native normal")
+        native_normal = [float(value) for value in normal]
+        orientation = sum(a * b for a, b in zip(native_normal, desired))
+        if abs(orientation) <= 1e-12:
+            raise RuntimeError(f"inset EPR selection {name!r} has ambiguous field side")
+        result.append(
+            {
+                "selection_name": name,
+                "component_index": index,
+                "contour_sha256": contour_sha256,
+                "contour": region,
+                "adjacent_side": orientation < 0.0,
+                "native_normal": native_normal,
+                "polygon_approximation": {
+                    "method": _INSET_METHOD,
+                    "source_dbu_um": dbu_um,
+                    "points_per_circle": _INSET_CIRCLE_POINTS,
+                    "requested_margin_um": margin_um,
+                    "integer_margin_dbu": planned["integer_margin_dbu"],
+                    "effective_margin_um": planned["effective_margin_um"],
+                    "klayout_version": version("klayout"),
+                },
+                "reused_source_sheet": reuse_original,
+                **native,
             }
         )
     return result
@@ -575,6 +813,7 @@ def prepare_planar_geometry_input(
     route_a_profile: str | None = None,
     junctions: Sequence[PlanarJunction] = (),
     contributions: Sequence[SurfaceEprSpec] = (),
+    source_dbu_um: float | None = None,
 ) -> PreparedPlanarGeometry:
     """Validate and detach the shared Route A/B source facts used by HFSS EPR."""
 
@@ -584,6 +823,19 @@ def prepare_planar_geometry_input(
         raise ValueError("HFSS planar EPR supports only Route A or Route B")
     if not isinstance(prepared_stack, Mapping):
         raise TypeError("prepared_stack must be a mapping")
+    recorded_dbu = build_input.metadata.get("source_dbu_um")
+    if source_dbu_um is None:
+        source_dbu_um = recorded_dbu
+    elif recorded_dbu is not None and source_dbu_um != recorded_dbu:
+        raise ValueError("explicit source_dbu_um differs from geometry source DBU")
+    if (
+        isinstance(source_dbu_um, bool)
+        or not isinstance(source_dbu_um, (int, float))
+        or not math.isfinite(float(source_dbu_um))
+        or source_dbu_um <= 0
+    ):
+        raise ValueError("planar EPR requires a finite positive source_dbu_um")
+    source_dbu_um = float(source_dbu_um)
     validate_geometry_input(build_input)
     build_input, prepared_stack = _prepare_stack_and_geometry(
         build_input,
@@ -687,7 +939,9 @@ def prepare_planar_geometry_input(
     contribution_catalog = tuple(
         catalog_by_id[key] for key in sorted(catalog_by_id)
     )
-    source = _source_payload(build_input, prepared_stack, route=route)
+    source = _source_payload(
+        build_input, prepared_stack, route=route, source_dbu_um=source_dbu_um
+    )
     regions_by_id = {
         item["semantic_id"]: item for item in source["solution_regions"]
     }
@@ -868,7 +1122,7 @@ def prepare_planar_geometry_input(
             )
 
     resolved_surfaces = _bind_physical_support_masks(
-        resolved_surfaces, support_bindings
+        resolved_surfaces, support_bindings, source_dbu_um=source_dbu_um
     )
 
     if route == "A":
@@ -961,17 +1215,43 @@ def _swept_z_solid(
     return body
 
 
+def _lift_inset_ring(
+    plane: Mapping[str, Any], ring: Sequence[Sequence[float]]
+) -> list[list[float]]:
+    origin = tuple(float(value) for value in plane["origin_um"])
+    u = tuple(float(value) for value in plane["u"])
+    v = tuple(float(value) for value in plane["v"])
+    return [
+        [
+            origin[axis] + float(point[0]) * u[axis] + float(point[1]) * v[axis]
+            for axis in range(3)
+        ]
+        for point in ring
+    ]
+
+
 def _analysis_surface_sheet(
     app: Any, geometry_ref: Mapping[str, Any], *, name: str
 ) -> tuple[Any, list[list[float]]]:
+    local_region = geometry_ref.get("local_region")
+    plane_basis = geometry_ref.get("plane_basis")
     outer = geometry_ref.get("outer_loop")
     plane = geometry_ref.get("plane")
-    if isinstance(outer, Sequence) and not isinstance(outer, (str, bytes)):
+    if isinstance(local_region, Mapping) and isinstance(plane_basis, Mapping):
+        points = _lift_inset_ring(plane_basis, local_region["exterior"])
+        holes = [
+            _lift_inset_ring(plane_basis, ring)
+            for ring in local_region.get("holes", ())
+        ]
+    elif isinstance(outer, Sequence) and not isinstance(outer, (str, bytes)):
         if not isinstance(plane, Mapping) or plane.get("axis") != "z":
             raise ValueError("analysis surface loop requires an explicit Z plane")
         z_um = float(plane["value_um"])
         points = [[float(x), float(y), z_um] for x, y in outer]
-        holes = geometry_ref.get("hole_loops", ())
+        holes = [
+            [[float(x), float(y), z_um] for x, y in ring]
+            for ring in geometry_ref.get("hole_loops", ())
+        ]
     else:
         quad = geometry_ref.get("quad_points")
         if not isinstance(quad, Sequence) or isinstance(quad, (str, bytes)):
@@ -995,7 +1275,7 @@ def _analysis_surface_sheet(
     for index, ring in enumerate(holes):
         hole_name = f"{name}__hole_{index}"
         hole = app.modeler.create_polyline(
-            [[float(x), float(y), points[0][2]] for x, y in ring],
+            ring,
             cover_surface=True,
             close_surface=True,
             name=hole_name,

@@ -15,14 +15,16 @@ from typing import Any
 
 from ._epr_fields import (
     author_named_expression,
-    compile_mask_region_union_operations,
     field_integral_operations,
     install_variables,
     junction_voltage_operations,
-    mask_region_union_variables,
     parse_native_scalar,
 )
-from ._epr_geometry import bind_saved_planar_geometry, prepare_native_planar_geometry
+from ._epr_geometry import (
+    bind_inset_surface_selections,
+    bind_saved_planar_geometry,
+    prepare_native_planar_geometry,
+)
 from ._epr_models import EprResult, detached
 from ._epr_results import combine_epr_mode, surface_integral_groups
 from ._hfss_convergence import read_hfss_convergence
@@ -63,7 +65,10 @@ class PreparedEprHfss:
 
 
 def prepare_epr_hfss(
-    Hfss: Any, run_dir: Path, spec: HfssEprSpec
+    Hfss: Any,
+    run_dir: Path,
+    spec: HfssEprSpec,
+    inset_plan: dict[tuple[str, float], dict[str, Any]] | None = None,
 ) -> PreparedEprHfss:
     """Create, save, and read back one body-first no-solve Eigenmode model."""
 
@@ -101,7 +106,7 @@ def prepare_epr_hfss(
         }
     else:
         expressions, cache = _prepare_expressions_and_cache(
-            app, request.workspace, bound, geometry
+            app, request.workspace, bound, geometry, inset_plan
         )
     timings["epr_authoring_seconds"] = round(time.perf_counter() - started, 6)
     started = time.perf_counter()
@@ -454,7 +459,12 @@ def _evaluate_mode_integrals(
     return raw, evidence
 
 
-def analyze_saved_epr(Hfss: Any, run_dir: Path, spec: HfssEprAnalysisSpec) -> dict[str, Any]:
+def analyze_saved_epr(
+    Hfss: Any,
+    run_dir: Path,
+    spec: HfssEprAnalysisSpec,
+    inset_plan: dict[tuple[str, float], dict[str, Any]],
+) -> dict[str, Any]:
     """Analyze an immutable saved-field cohort through a disposable project copy."""
 
     if not isinstance(spec, HfssEprAnalysisSpec):
@@ -522,6 +532,7 @@ def analyze_saved_epr(Hfss: Any, run_dir: Path, spec: HfssEprAnalysisSpec) -> di
         work_root,
         spec,
         geometry,
+        inset_plan,
         namespace=f"analysis_{spec.saved_solution.content_sha256[:16]}",
     )
     timings["expression_authoring_seconds"] = round(
@@ -1161,6 +1172,7 @@ def _author_epr_expressions(
     run_dir: Path,
     spec: HfssEprSpec,
     native_geometry: dict[str, Any],
+    inset_plan: dict[tuple[str, float], dict[str, Any]],
     *,
     namespace: str = "prepared",
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -1225,6 +1237,7 @@ def _author_epr_expressions(
         for member in group["members"]
     }
     grouped_constituents: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    member_components: dict[tuple[str, float], list[dict[str, Any]]] = {}
     selected_contributions = (
         {item.contribution_id for item in spec.geometry.contributions}
         if request.surface_contribution_ids is None
@@ -1237,98 +1250,65 @@ def _author_epr_expressions(
             or binding["contribution"]["classification"] == "MM"
         ):
             continue
-        plane = binding["mask_plane"]
         for margin in binding["margins_um"]:
-            support = binding["mask_support"]
-            support_regions = support["support_regions"]
-            attribution_regions = support["attribution_regions"]
-            mask_id = (
-                f"{selection['binding_id']}_m_"
-                f"{_identity_sha256({'margin_um': float(margin)})[:12]}"
+            margin_um = float(margin)
+            member_key = (selection["binding_id"], margin_um)
+            group = group_by_member[member_key]
+            components = bind_inset_surface_selections(
+                app, binding, selection, margin_um, inset_plan
             )
-            variables = mask_region_union_variables(
-                mask_id,
-                support_regions,
-                attribution_regions,
-                margin_um=float(margin),
-                plane_origin_um=plane["origin_um"],
-                plane_u=plane["u"],
-                plane_v=plane["v"],
-            )
-            observed = install_variables(app, variables)
-            dependencies = {**pp_observed, **observed}
-            mask = compile_mask_region_union_operations(
-                patch_id=mask_id,
-                support_regions=support_regions,
-                attribution_regions=attribution_regions,
-                margin_um=float(margin),
-                plane_origin_um=plane["origin_um"],
-                plane_u=plane["u"],
-                plane_v=plane["v"],
-            )
-            for quantity in ("electric_normal", "electric_tangential"):
-                operations = field_integral_operations(
-                    quantity=quantity,
-                    selection_name=selection["selection_name"],
-                    mask_operations=mask,
-                    adjacent_side=selection["adjacent_side"],
-                    normal_vector=selection["native_normal"],
-                )
-                authored = author_named_expression(
-                    app,
-                    purpose=(
-                        f"{quantity}_{selection['binding_id']}_"
-                        f"{float(margin):.17g}um"
-                    ),
-                    operations=operations,
-                    solution=solution,
-                    phase_degrees=0.0,
-                    dependencies=dependencies,
-                    selection={**selection, "margin_um": float(margin)},
-                    evidence_dir=evidence_dir,
-                    namespace=namespace,
-                    adjacent_selection_name=(
-                        selection["selection_name"]
-                        if selection["adjacent_side"] else None
-                    ),
-                )
-                group = group_by_member[(selection["binding_id"], float(margin))]
-                grouped_constituents.setdefault(
-                    (group["group_id"], quantity), []
-                ).append(authored)
-            area_operations = field_integral_operations(
-                quantity="masked_area",
-                selection_name=selection["selection_name"],
-                mask_operations=mask,
-                adjacent_side=selection["adjacent_side"],
-            )
-            authored = author_named_expression(
-                app,
-                purpose=(
-                    f"masked_area_{selection['binding_id']}_"
-                    f"{float(margin):.17g}um"
-                ),
-                operations=area_operations,
-                solution=solution,
-                phase_degrees=0.0,
-                dependencies=dependencies,
-                selection={**selection, "margin_um": float(margin)},
-                evidence_dir=evidence_dir,
-                namespace=namespace,
-            )
-            group = group_by_member[(selection["binding_id"], float(margin))]
-            grouped_constituents.setdefault(
-                (group["group_id"], "masked_area"), []
-            ).append(authored)
+            member_components[member_key] = components
+            for component in components:
+                component_selection = {
+                    **selection,
+                    **component,
+                    "margin_um": margin_um,
+                    "integration_geometry": "klayout_complement_minkowski.v1",
+                }
+                for quantity in (
+                    "electric_normal",
+                    "electric_tangential",
+                    "masked_area",
+                ):
+                    operations = field_integral_operations(
+                        quantity=quantity,
+                        selection_name=component["selection_name"],
+                        adjacent_side=component["adjacent_side"],
+                        normal_vector=component["native_normal"],
+                    )
+                    authored = author_named_expression(
+                        app,
+                        purpose=(
+                            f"{quantity}_{selection['binding_id']}_"
+                            f"{margin_um:.17g}um_component_{component['component_index']}"
+                        ),
+                        operations=operations,
+                        solution=solution,
+                        phase_degrees=0.0,
+                        dependencies=pp_observed,
+                        selection=component_selection,
+                        evidence_dir=evidence_dir,
+                        namespace=namespace,
+                        adjacent_selection_name=(
+                            component["selection_name"]
+                            if component["adjacent_side"] and quantity != "masked_area"
+                            else None
+                        ),
+                    )
+                    grouped_constituents.setdefault(
+                        (group["group_id"], quantity), []
+                    ).append(authored)
     for group in groups:
         native_members = [
             {
                 "binding_id": member["binding_id"],
-                "selection_name": native_by_binding[member["binding_id"]][
+                "source_selection_name": native_by_binding[member["binding_id"]][
                     "selection_name"
                 ],
-                "adjacent_side": native_by_binding[member["binding_id"]]["adjacent_side"],
-                "native_normal": native_by_binding[member["binding_id"]]["native_normal"],
+                "components": member_components[(member["binding_id"], group["margin_um"])],
+                "geometry_empty": not member_components[
+                    (member["binding_id"], group["margin_um"])
+                ],
                 "effective_domain_id": native_by_binding[member["binding_id"]][
                     "effective_domain_id"
                 ],
@@ -1337,19 +1317,20 @@ def _author_epr_expressions(
         ]
         for quantity in ("electric_normal", "electric_tangential", "masked_area"):
             members = grouped_constituents.get((group["group_id"], quantity), [])
-            if len(members) != len(group["members"]):
-                raise RuntimeError("grouped EPR expression lacks a physical member")
+            if len(members) != sum(len(item["components"]) for item in native_members):
+                raise RuntimeError("grouped EPR expression lacks an inset component")
             members.sort(key=lambda item: item["identity"]["selection"]["binding_id"])
             operations: list[str] = []
             for member in members:
                 operations.append(f"NameOfExpression('{member['name']}')")
                 if len(operations) > 1:
                     operations.append("Operation('+')")
-            dependencies = {
-                key: value
-                for member in members
-                for key, value in member["identity"]["dependencies"].items()
-            }
+            if not operations:
+                # Every source member was geometrically empty at this margin.
+                operations = ["Scalar_Constant(0)"]
+            dependencies = dict(pp_observed)
+            for member in members:
+                dependencies.update(member["identity"]["dependencies"])
             expressions.append(
                 author_named_expression(
                     app,
@@ -1361,7 +1342,15 @@ def _author_epr_expressions(
                     selection={
                         "kind": "surface_group",
                         **group,
+                        "integration_geometry": "klayout_complement_minkowski.v1",
+                        "polygon_approximation": {
+                            "method": "klayout_complement_minkowski.v1",
+                            "points_per_circle": 128,
+                            "source_dbu_um": spec.geometry.source["source_dbu_um"],
+                            "klayout_version": bindings[group["members"][0]["binding_id"]]["mask_support"]["klayout_version"],
+                        },
                         "native_member_selections": native_members,
+                        "geometry_empty": not members,
                     },
                     evidence_dir=evidence_dir,
                     namespace=namespace,
@@ -1461,12 +1450,16 @@ def _prepare_expressions_and_cache(
     run_dir: Path,
     spec: HfssEprSpec,
     native_geometry: dict[str, Any],
+    inset_plan: dict[tuple[str, float], dict[str, Any]] | None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if inset_plan is None:
+        raise RuntimeError("EPR inset geometry must be precomputed before Desktop")
     expressions, authoring = _author_epr_expressions(
         app,
         run_dir,
         spec,
         native_geometry,
+        inset_plan,
     )
     return expressions, _submit_epr_cache(app, spec, expressions, authoring)
 

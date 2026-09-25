@@ -21,6 +21,7 @@ from ._epr_models import (
     SavedSolution,
     detached,
 )
+from ._epr_geometry import validate_geometry_workers
 from .spec import (
     LOCKED_PYAEDT,
     OFFICIAL_PYAEDT_SOURCE_URL,
@@ -195,6 +196,7 @@ def prepare_hfss_eigenmode_from_geometry(
     run_control: EigenmodeRunControl,
     output_dir: str | Path,
     epr_request: EprAnalysisRequest | None = None,
+    geometry_workers: int | None = None,
 ) -> HandoffPlan:
     """Prepare one portable body-first Eigenmode handoff without GDS."""
 
@@ -205,6 +207,7 @@ def prepare_hfss_eigenmode_from_geometry(
         run_control=run_control,
         epr_request=epr_request,
     )
+    validate_geometry_workers(geometry_workers)
     run_dir = Path(output_dir).expanduser().resolve()
     if run_dir.exists():
         raise FileExistsError(
@@ -248,6 +251,7 @@ def prepare_hfss_eigenmode_from_geometry(
         "materials": materials,
         "vacuum_material_id": vacuum_ids[0],
         "run_control": payload["run_control"],
+        "execution": {"geometry_workers": geometry_workers},
         "pyaedt": payload["pyaedt"],
         "aedt": payload["aedt"],
         "files": files,
@@ -324,11 +328,13 @@ def _prepare_epr_analysis_handoff(
     run_control: EigenmodeRunControl,
     epr_request: EprAnalysisRequest,
     output_dir: str | Path,
+    geometry_workers: int | None,
 ) -> HandoffPlan:
     """Prepare one private workcopy-only saved-field analysis transaction."""
 
     if not isinstance(saved_solution, SavedSolution):
         raise TypeError("saved_solution must be SavedSolution")
+    validate_geometry_workers(geometry_workers)
     run_dir = Path(output_dir).expanduser().resolve()
     if run_dir.exists():
         raise FileExistsError(
@@ -412,6 +418,7 @@ def _prepare_epr_analysis_handoff(
         "materials": materials,
         "vacuum_material_id": vacuum_ids[0],
         "run_control": payload["run_control"],
+        "execution": {"geometry_workers": geometry_workers},
         "pyaedt": payload["pyaedt"],
         "aedt": payload["aedt"],
         "files": files,
@@ -490,6 +497,7 @@ def analyze_epr(
     run_control: EigenmodeRunControl,
     epr_request: EprAnalysisRequest,
     output_dir: str | Path,
+    geometry_workers: int | None = None,
 ) -> Any:
     """Analyze one sealed saved-field cohort in an owned disposable workcopy."""
 
@@ -501,6 +509,7 @@ def analyze_epr(
         run_control=run_control,
         epr_request=epr_request,
         output_dir=output_dir,
+        geometry_workers=geometry_workers,
     )
     from ._epr_results import resolve_epr_result
     from .run import _execute

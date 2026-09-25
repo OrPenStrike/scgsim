@@ -458,10 +458,10 @@ offline APIs substitutes a historical cache row for a final saved-field row.
 
 The earlier A-r5 no-solve attempt loaded same-side surface expressions but
 failed to load an opposite-side sheet expression written with an unverified
-CLC command. The current candidate loads the spatial integrand, then uses
+CLC command. The current candidate authors a sheet integrand, then uses
 the PyAEDT 1.3.0 native reporter's `EnterAdjacentSurf` operation to create
 and save the complete named expression; the same authoring function serves
-cache setup and saved-field analysis. Those current expression bytes have not
+cache setup and saved-field analysis. The new inset-sheet expression bytes have not
 been natively verified. Authoring does not prove field-side selection or
 numerical EPR correctness, and a native expression failure remains fatal.
 
@@ -509,7 +509,7 @@ present. New preparation caches native sums by physical owner, interface,
 compatible film/substrate coefficients, margin, and mode. Each sum retains its
 constituent binding/contribution IDs, side, domain, and source geometry
 provenance; it is one measured aggregate, not a set of inferred per-face
-values. Individual native patch expressions remain the source of the sums,
+values. Individual native inset-sheet expressions remain the source of the sums,
 including their field-side selection. Historical per-binding raw records remain
 readable, but new grouped records never expand an aggregate into fictitious
 patch integrals. The same grouping is used for saved-field analysis. This
@@ -519,13 +519,16 @@ Physical patch support is derived from the full source contribution topology
 before requested-contribution filtering; selecting fewer output contributions
 does not change another patch's physical boundary. The saved SA field-side
 domain ID is the selected vacuum domain, but remains provenance metadata rather
-than a native solver-domain restriction. Patch energies use native calculator
-restrictions to the exact source polygon with holes and to a finite distance
-from its original boundary. Margin zero is
-the full patch. A positive margin changes the field-integration domain, not the
-CAD. Polygon characteristic and finite-segment distance operations must be
-proved against AEDT 2024.2 before execution; a bounding box, smoothing, or
-Python-side sampled mask is not an accepted fallback.
+than a native solver-domain restriction. In each source plane, preparation
+unites the complete physical support, applies a constant-distance inward
+offset for a positive margin, and only then intersects the result with the
+owner attribution. Margin zero uses the unoffset support intersection. The
+resulting contours become non-model integration sheets at the original field
+plane; model CAD, boundaries, and mesh are unchanged. Split components are
+integrated separately and summed; an empty intersection is an explicit zero.
+The original field-side normal and adjacent-side selection remain bound to each
+sheet. The same geometry construction serves preparation and saved-field
+analysis; the former point-to-edge calculator mask is not a fallback.
 
 For a continuous physical planar patch, the mask is
 
@@ -534,11 +537,33 @@ For a continuous physical planar patch, the mask is
 \mathbf{1}[d_{finite\ original\ boundary}\geq margin].
 \]
 
-Hole interiors are excluded, coplanar artificial seams are removed, and each
-true top/sidewall crease remains a boundary of its own eroded physical face.
-Small surviving pieces remain; an empty mask is a legitimate zero. Margins are
-alternative evaluations rather than additive contributions, and MA/MS on one
-sheet remain distinct contributions.
+The displayed mask is the continuous target, not a claim of exact circular CAD
+arcs. Its current implementation uses KLayout integer geometry at the source
+layout's database unit (DBU), not a global PDK grid. Detached geometry must
+carry an explicit source DBU. Input lengths remain in micrometres; source
+coordinates and requested margins are quantized by KLayout's native DPoint
+conversion, with requested, integer-grid, and effective margins retained.
+For positive margins, the complement of the complete physical support is
+dilated by a 128-vertex circular polygon and subtracted from that support
+before owner attribution. The finite complement box extends beyond the
+support by more than the dilation radius. Margin zero skips dilation but
+still intersects owner attribution. KLayout retains exterior and hole contours
+directly; split components are separate non-model sheets and empty members
+give a geometric zero. Circular corners are polygonal approximations; the
+method, DBU, KLayout version, and actual contours are retained as evidence.
+Coplanar owner seams are removed, while true top/sidewall creases remain
+boundaries of their respective physical faces. Margins are alternative
+evaluations rather than additive contributions, and MA/MS on one sheet remain
+distinct. Neither this discretization nor unsolved expression setup proves
+quadrature or EPR numerical accuracy.
+
+Pure inset contours may be precomputed in separate spawned processes before
+Desktop construction. The optional geometry-worker count controls only that
+preparation stage: one worker uses the same serial algorithm, while an omitted
+count uses available logical CPUs, capped by independent support tasks. Native
+AEDT authoring remains in the single owned Desktop session. Saved-field
+analysis uses the same inset definition and does not reuse historical
+point-to-edge expression names as the new geometry definition.
 
 With peak phasors, film thickness \(t\), film relative permittivity
 \(\epsilon_f\), and substrate relative permittivity \(\epsilon_s\), the fixed
