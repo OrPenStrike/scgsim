@@ -178,6 +178,7 @@ def _execute(
             }
         from ansys.aedt.core import Desktop, Hfss, Q2d, Q3d
 
+        desktop_started = time.perf_counter()
         desktop = Desktop(
             version=REQUIRED_AEDT_VERSION,
             non_graphical=True,
@@ -186,6 +187,10 @@ def _execute(
         )
         if desktop.aedt_version_id != REQUIRED_AEDT_VERSION:
             raise RuntimeError(f"AEDT version mismatch: {desktop.aedt_version_id!r}")
+        if isinstance(spec, (HfssEprSpec, HfssEprAnalysisSpec)):
+            receipt.setdefault("timings", {})["desktop_startup_seconds"] = round(
+                time.perf_counter() - desktop_started, 6
+            )
         if isinstance(spec, HfssEprAnalysisSpec):
             from ._epr_eigenmode import analyze_saved_epr
 
@@ -229,7 +234,9 @@ def _execute(
             receipt["setup"] = result["setup"]
             receipt["expressions"] = result.get("expressions", [])
             receipt["cache"] = result.get("cache", {"status": "not_applicable"})
-            receipt["timings"] = result.get("timings", {})
+            receipt["timings"] = {
+                **receipt.get("timings", {}), **result.get("timings", {})
+            }
             receipt["solver_invoked"] = result["solver_invoked"]
             receipt["workflow_status"] = result["workflow_status"]
             if "convergence" in result:

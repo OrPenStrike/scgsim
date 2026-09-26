@@ -20,6 +20,19 @@ InterfaceKind = Literal["MA", "MS", "SA", "MM"]
 FieldSide = Literal["top", "bottom", "sidewall"]
 
 
+def surface_evaluations(
+    margins_um: Sequence[float], *, policy: str | None
+) -> tuple[tuple[str, float], ...]:
+    """Keep the automatic baseline distinct from each requested mask."""
+
+    requested = tuple(("requested_margin", float(value)) for value in margins_um)
+    if policy is None:
+        return requested  # Historical records had no automatic baseline.
+    if policy != "unmasked_plus_requested.v1":
+        raise ValueError("unsupported surface evaluation policy")
+    return (("unmasked_baseline", 0.0), *requested)
+
+
 def _text(value: Any, name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be non-empty text")

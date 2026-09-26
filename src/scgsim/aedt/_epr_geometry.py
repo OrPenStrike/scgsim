@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import time
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from importlib.metadata import version
 from multiprocessing import get_context
@@ -32,6 +33,7 @@ from ._epr_models import (
     SurfaceEprSpec,
     canonical_sha256,
     detached,
+    surface_evaluations,
 )
 from ._native_common import (
     _native_boundary_type,
@@ -58,6 +60,117 @@ def _native_name(kind: str, *identity: Any) -> str:
         raise ValueError("native name kind must be an identifier")
     digest = canonical_sha256({"kind": kind, "identity": list(identity)})[:24]
     return f"scgsim_{kind}_{digest}"
+
+
+def _sheet_member(binding: Mapping[str, Any], margin_label: str) -> tuple[str, ...]:
+    contribution = binding["contribution"]
+    return (
+        str(binding["owner_semantic_id"]),
+        str(binding["surface_role"]),
+        str(contribution["classification"]),
+        str(contribution["side"]),
+        margin_label,
+        str(contribution["contribution_id"]),
+        str(binding["binding_id"]),
+    )
+
+
+def _sheet_name(
+    members: set[tuple[str, ...]], geometry_sha256: str, *, parts: set[int]
+) -> str:
+    ordered = sorted(members)
+    if not ordered:
+        raise ValueError("analysis sheet has no physical membership")
+
+    def label(values: set[str]) -> str:
+        raw = "_".join(sorted(values))
+        safe = "".join(
+            character if character.isascii() and character.isalnum() else "_"
+            for character in raw
+        ).strip("_")
+        return safe[:36] or "Unknown"
+
+    fields = [
+        label({member[index] for member in ordered}) for index in range(5)
+    ]
+    digest = canonical_sha256(
+        {"geometry_sha256": geometry_sha256, "members": ordered, "parts": sorted(parts)}
+    )[:12]
+    stem = (
+        f"EPR_{'Shared_' if len(ordered) > 1 else ''}"
+        f"Owner_{fields[0]}_Support_{fields[1]}_"
+        f"Class_{fields[2]}_Side_{fields[3]}_{fields[4]}_{digest}"
+    )
+    if parts:
+        stem += "_" + "_".join(f"Part{index:02d}" for index in sorted(parts))
+    return stem
+
+
+def _base_sheet_plan(
+    bindings: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    by_geometry: dict[str, set[tuple[str, ...]]] = {}
+    keys: dict[str, str] = {}
+    for binding in bindings:
+        binding_id = str(binding["binding_id"])
+        key = canonical_sha256(binding["geometry_ref"])
+        keys[binding_id] = key
+        by_geometry.setdefault(key, set()).add(_sheet_member(binding, "Unmasked"))
+    return {
+        binding_id: {
+            "name": _sheet_name(by_geometry[key], key, parts=set()),
+            "members": sorted(by_geometry[key]),
+            "geometry_sha256": key,
+        }
+        for binding_id, key in keys.items()
+    }
+
+
+def plan_inset_sheet_names(
+    bindings: Sequence[Mapping[str, Any]],
+    inset_plan: Mapping[tuple[str, float], Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Name each actual inset contour from all of its physical memberships."""
+
+    grouped: dict[str, dict[str, Any]] = {}
+    for binding in bindings:
+        binding_id = str(binding["binding_id"])
+        dbu_um = float(binding["mask_support"]["source_dbu_um"])
+        for _, margin in surface_evaluations(
+            binding["margins_um"], policy="unmasked_plus_requested.v1"
+        ):
+            key = (binding_id, float(margin))
+            if key not in inset_plan:
+                continue
+            planned = inset_plan[key]
+            effective_nm = float(planned["effective_margin_um"]) * 1000.0
+            margin_label = (
+                "Unmasked" if effective_nm == 0.0
+                else f"Margin_{effective_nm:.12g}nm"
+            )
+            regions = planned["regions"]
+            for index, region in enumerate(regions):
+                key = canonical_sha256(
+                    {
+                        "plane": binding["mask_plane"],
+                        "region": region,
+                        "method": _INSET_METHOD,
+                        "source_dbu_um": dbu_um,
+                        "klayout_version": version("klayout"),
+                    }
+                )
+                record = grouped.setdefault(key, {"members": set(), "parts": set()})
+                record["members"].add(_sheet_member(binding, margin_label))
+                if len(regions) > 1:
+                    record["parts"].add(index + 1)
+    return {
+        key: {
+            "name": _sheet_name(record["members"], key, parts=record["parts"]),
+            "members": sorted(record["members"]),
+            "geometry_sha256": key,
+        }
+        for key, record in grouped.items()
+    }
 
 
 def _source_payload(
@@ -168,6 +281,69 @@ def _source_payload(
         raise ValueError(
             f"prepared-stack solution regions lack normalized geometry: {sorted(missing_regions)!r}"
         )
+    if any(item["semantic_id"] == "Region" for item in normalized_regions):
+        raise ValueError("source solution-domain id 'Region' is reserved for native EPR CAD")
+    vacuum_regions = [
+        item for item in normalized_regions if item["material_kind"] == "vacuum"
+    ]
+    if not vacuum_regions or any(
+        not item["metadata"].get("is_auto_vacuum_region")
+        for item in vacuum_regions
+    ):
+        raise ValueError("EPR Region requires only planner-owned auto vacuum components")
+    vacuum_material_ids = {item["material_id"] for item in vacuum_regions}
+    vacuum_groups = {
+        item["metadata"].get("auto_vacuum_group_id") for item in vacuum_regions
+    }
+    padding_records = {
+        canonical_sha256(item["metadata"].get("vacuum_region_padding_um"))
+        for item in vacuum_regions
+    }
+    if (
+        len(vacuum_material_ids) != 1
+        or len(vacuum_groups) != 1
+        or None in vacuum_groups
+        or len(padding_records) != 1
+    ):
+        raise ValueError("EPR auto vacuum components disagree on Region identity")
+    padding = vacuum_regions[0]["metadata"].get("vacuum_region_padding_um")
+    if not isinstance(padding, Mapping) or set(padding) != {
+        "x_plus_um", "x_minus_um", "y_plus_um", "y_minus_um",
+        "z_plus_um", "z_minus_um",
+    }:
+        raise ValueError("EPR Region requires exact six-face source padding")
+    padding_um = [
+        float(padding[key]) for key in (
+            "x_plus_um", "x_minus_um", "y_plus_um", "y_minus_um",
+            "z_plus_um", "z_minus_um",
+        )
+    ]
+    if any(not math.isfinite(value) or value < 0.0 for value in padding_um):
+        raise ValueError("EPR Region padding must be finite and nonnegative")
+    loops = {
+        canonical_sha256(item["metadata"].get("auto_vacuum_envelope_outer_loop"))
+        for item in vacuum_regions
+    }
+    if len(loops) != 1:
+        raise ValueError("EPR auto vacuum components disagree on envelope")
+    envelope_loop = vacuum_regions[0]["metadata"].get(
+        "auto_vacuum_envelope_outer_loop"
+    )
+    if not isinstance(envelope_loop, Sequence) or len(envelope_loop) < 3:
+        raise ValueError("EPR Region requires an auto vacuum envelope loop")
+    z_ranges = [
+        geometry_z_range(item["geometry"], item["semantic_id"])
+        for item in vacuum_regions
+    ]
+    native_region = {
+        "method": "single_region_absolute_offset.v1",
+        "name": "Region",
+        "material_id": next(iter(vacuum_material_ids)),
+        "logical_vacuum_ids": sorted(item["semantic_id"] for item in vacuum_regions),
+        "padding_um": padding_um,
+        "envelope_outer_loop_um": _plain(envelope_loop),
+        "z_range_um": [min(item[0] for item in z_ranges), max(item[1] for item in z_ranges)],
+    }
     profile = metadata.get("route_a_thin_film")
     if profile is not None and not isinstance(profile, Mapping):
         raise TypeError("prepared_stack route_a_thin_film provenance must be a mapping")
@@ -177,6 +353,8 @@ def _source_payload(
         "prepared_stack_sha256": canonical_sha256(_plain(prepared_stack)),
         "materials": material_catalog,
         "solution_regions": normalized_regions,
+        "native_region": native_region,
+        "surface_evaluation_policy": "unmasked_plus_requested.v1",
         "conductors": conductors,
         "route_a_thin_film": _plain(profile) if profile is not None else None,
         "junction_regions": [
@@ -621,7 +799,12 @@ def precompute_inset_surfaces(
             {
                 "binding_id": binding["binding_id"],
                 "attribution_regions": support["attribution_regions"],
-                "margins_um": list(binding["margins_um"]),
+                "margins_um": list(dict.fromkeys(
+                    margin for _, margin in surface_evaluations(
+                        binding["margins_um"],
+                        policy=geometry.source.get("surface_evaluation_policy"),
+                    )
+                )),
             }
         )
     tasks = [grouped[key] for key in sorted(grouped)]
@@ -668,6 +851,7 @@ def bind_inset_surface_selections(
     margin_um: float,
     inset_plan: Mapping[tuple[str, float], Mapping[str, Any]],
     sheet_facts: dict[str, dict[str, Any]],
+    sheet_names: Mapping[str, Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
     """Create or rebind non-model inset sheets without changing solver CAD."""
 
@@ -687,7 +871,8 @@ def bind_inset_surface_selections(
                 "klayout_version": version("klayout"),
             }
         )
-        name = _native_name("epr_inset", contour_sha256)
+        planned_name = sheet_names[contour_sha256]
+        name = str(planned_name["name"])
         facts = sheet_facts.get(name)
         if facts is None:
             sheet = app.modeler.get_object_from_name(name)
@@ -710,6 +895,7 @@ def bind_inset_surface_selections(
                 raise RuntimeError(f"inset EPR selection {name!r} has no native normal")
             facts = {
                 "contour_sha256": contour_sha256,
+                "shared_sheet_members": planned_name["members"],
                 "native": native,
                 "native_normal": [float(value) for value in normal],
             }
@@ -1456,82 +1642,101 @@ def _junction_terminal_line(
     return line, along_max - along_min
 
 
-def _point_on_segment(
-    point: tuple[float, float], start: tuple[float, float], end: tuple[float, float]
-) -> bool:
-    scale = max(1.0, *(abs(value) for value in (*point, *start, *end)))
-    tolerance = 1e-9 * scale
-    cross = (point[0] - start[0]) * (end[1] - start[1]) - (
-        point[1] - start[1]
-    ) * (end[0] - start[0])
-    if abs(cross) > tolerance:
-        return False
-    return (
-        min(start[0], end[0]) - tolerance
-        <= point[0]
-        <= max(start[0], end[0]) + tolerance
-        and min(start[1], end[1]) - tolerance
-        <= point[1]
-        <= max(start[1], end[1]) + tolerance
+def _region_bounds(region: Any) -> tuple[float, ...]:
+    bounds = tuple(float(value) for value in region.bounding_box)
+    if (
+        len(bounds) != 6
+        or not all(math.isfinite(value) for value in bounds)
+        or any(bounds[index] >= bounds[index + 3] for index in range(3))
+    ):
+        raise RuntimeError("native EPR Region bounds are invalid")
+    return bounds
+
+
+def _verified_region_bounds(region: Any, plan: Mapping[str, Any]) -> tuple[float, ...]:
+    bounds = _region_bounds(region)
+    loop = tuple(
+        tuple(float(value) for value in point)
+        for point in plan["envelope_outer_loop_um"]
     )
-
-
-def _assign_closed_enclosure(
-    app: Any, source: Mapping[str, Any], bindings: Sequence[Mapping[str, Any]]
-) -> dict[str, Any]:
-    auto_regions = [
-        item
-        for item in source["solution_regions"]
-        if item["material_kind"] == "vacuum"
-        and bool(item.get("metadata", {}).get("is_auto_vacuum_region"))
-    ]
-    loops = {
-        tuple(tuple(float(value) for value in point) for point in item["metadata"].get(
-            "auto_vacuum_envelope_outer_loop", ()
-        ))
-        for item in auto_regions
-    }
-    if len(loops) != 1 or len(next(iter(loops), ())) < 3:
-        raise ValueError(
-            "closed EPR model requires one explicit auto-vacuum enclosure loop"
+    z_min, z_max = plan["z_range_um"]
+    expected = (
+        min(point[0] for point in loop), min(point[1] for point in loop),
+        float(z_min), max(point[0] for point in loop),
+        max(point[1] for point in loop), float(z_max),
+    )
+    if any(
+        not math.isclose(
+            actual, wanted, rel_tol=0.0,
+            abs_tol=max(1e-6, 1e-9 * max(abs(actual), abs(wanted))),
         )
-    loop = next(iter(loops))
-    segments = tuple(zip(loop, (*loop[1:], loop[0])))
-    z_ranges = [
-        geometry_z_range(item["geometry"], item["semantic_id"])
-        for item in source["solution_regions"]
-    ]
-    z_min = min(item[0] for item in z_ranges)
-    z_max = max(item[1] for item in z_ranges)
+        for actual, wanted in zip(bounds, expected)
+    ):
+        raise RuntimeError("native EPR Region bounds differ from source envelope")
+    return bounds
+
+
+def _create_epr_region(app: Any, source: Mapping[str, Any]) -> dict[str, Any]:
+    plan = source["native_region"]
+    if app.modeler.get_object_from_name("Region") is not None:
+        raise RuntimeError("new EPR model already has Region")
+    region = app.modeler.create_region(
+        pad_value=list(plan["padding_um"]),
+        pad_type="Absolute Offset",
+        name="Region",
+    )
+    if region is False or region is None or region.name != "Region":
+        raise RuntimeError("native EPR Region creation failed")
+    region.material_name = str(plan["material_id"])
+    observed_material = native_object_property(region, "Material").strip('"')
+    if observed_material.casefold() != str(plan["material_id"]).casefold():
+        raise RuntimeError("native EPR Region vacuum material differs")
+    if not _native_object_boolean_property(region, "Solve Inside"):
+        raise RuntimeError("native EPR Region must solve inside vacuum")
+    evidence = _native_object_evidence(app, "Region")
+    if evidence["native_object_type"] != "Solid":
+        raise RuntimeError("native EPR Region is not solid")
+    return {
+        "kind": "solution_domain",
+        "semantic_id": "Region",
+        "material_id": plan["material_id"],
+        "logical_vacuum_ids": list(plan["logical_vacuum_ids"]),
+        "object_name": "Region",
+        "padding_um": list(plan["padding_um"]),
+        "native_solve_inside": True,
+        "native_bounding_box_um": list(_verified_region_bounds(region, plan)),
+        **evidence,
+    }
+
+
+def _assign_closed_enclosure(app: Any, source: Mapping[str, Any]) -> dict[str, Any]:
+    region = app.modeler.get_object_from_name("Region")
+    if region is None:
+        raise RuntimeError("native EPR Region is unavailable")
+    bounds = _verified_region_bounds(region, source["native_region"])
+    z_min, z_max = source["native_region"]["z_range_um"]
     face_records: list[dict[str, Any]] = []
-    for binding in bindings:
-        if binding["kind"] != "solution_domain":
-            continue
-        obj = app.modeler.get_object_from_name(binding["object_name"])
-        if obj is None:
-            raise RuntimeError("native enclosure solution object is unavailable")
-        for face in obj.faces:
-            center = tuple(float(value) for value in face.center)
-            scale = max(1.0, *(abs(value) for value in center), abs(z_min), abs(z_max))
-            tolerance = 1e-9 * scale
-            plane = None
-            if math.isclose(center[2], z_min, rel_tol=0.0, abs_tol=tolerance):
-                plane = "bottom"
-            elif math.isclose(center[2], z_max, rel_tol=0.0, abs_tol=tolerance):
-                plane = "top"
-            elif any(_point_on_segment(center[:2], start, end) for start, end in segments):
-                plane = "side"
-            if plane is not None:
-                face_records.append(
-                    {
-                        "face_id": int(face.id),
-                        "object_name": binding["object_name"],
-                        "center_um": list(center),
-                        "enclosure_plane": plane,
-                    }
-                )
-    planes = {item["enclosure_plane"] for item in face_records}
-    if not face_records or planes != {"bottom", "top", "side"}:
+    plane_labels = ("x_minus", "y_minus", "bottom", "x_plus", "y_plus", "top")
+    for face in region.faces:
+        center = tuple(float(value) for value in face.center)
+        matches = [
+            plane_labels[index]
+            for index in range(6)
+            if math.isclose(
+                center[index % 3], bounds[index], rel_tol=0.0, abs_tol=1e-6
+            )
+        ]
+        if len(matches) == 1:
+            face_records.append(
+                {
+                    "face_id": int(face.id),
+                    "object_name": "Region",
+                    "center_um": list(center),
+                    "enclosure_plane": matches[0],
+                }
+            )
+    planes = [item["enclosure_plane"] for item in face_records]
+    if sorted(planes) != sorted(plane_labels):
         raise RuntimeError("native closed-enclosure face selection is incomplete")
     face_ids = [item["face_id"] for item in face_records]
     if len(face_ids) != len(set(face_ids)):
@@ -1546,8 +1751,11 @@ def _assign_closed_enclosure(
         "boundary_name": boundary_name,
         "native_boundary_type": "Perfect E",
         "face_records": face_records,
-        "envelope_outer_loop_um": [list(point) for point in loop],
+        "envelope_outer_loop_um": _plain(
+            source["native_region"]["envelope_outer_loop_um"]
+        ),
         "z_range_um": [z_min, z_max],
+        "native_bounding_box_um": list(bounds),
     }
 
 
@@ -1557,6 +1765,8 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
     if not isinstance(prepared, PreparedPlanarGeometry):
         raise TypeError("prepared must be PreparedPlanarGeometry")
     source = detached(prepared.source)
+    if source.get("native_region", {}).get("method") != "single_region_absolute_offset.v1":
+        raise ValueError("EPR geometry predates single Region; reprepare the handoff")
     polygons = {item["polygon_id"]: item for item in source["polygons"]}
     junction_regions = {
         item["source_polygon_id"]: item for item in source["junction_regions"]
@@ -1577,10 +1787,16 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
     )
     entities = source["conductors"]
     bindings: list[dict[str, Any]] = []
+    phase_seconds: dict[str, float] = {}
 
+    started = time.perf_counter()
     material_readback = _install_material_catalog(app, source["materials"])
+    phase_seconds["materials_seconds"] = time.perf_counter() - started
 
+    started = time.perf_counter()
     for entity in source["solution_regions"]:
+        if entity["material_kind"] == "vacuum":
+            continue
         obj = _solution_body(app, entity)
         evidence = _native_object_evidence(app, obj.name)
         if evidence["native_object_type"] != "Solid":
@@ -1594,10 +1810,10 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
                 **evidence,
             }
         )
-
-    enclosure = _assign_closed_enclosure(app, source, bindings)
+    phase_seconds["dielectric_bodies_seconds"] = time.perf_counter() - started
 
     junction_polygons = {item.source_polygon_id for item in prepared.junctions}
+    started = time.perf_counter()
     for entity in entities:
         z_min_um, z_max_um = _entity_z_range(entity)
         is_route_a_sheet = entity["representation"] == "surface_sheet"
@@ -1665,8 +1881,10 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
                     **evidence,
                 }
             )
+    phase_seconds["conductors_seconds"] = time.perf_counter() - started
 
     junction_bindings: list[dict[str, Any]] = []
+    started = time.perf_counter()
     for junction in prepared.junctions:
         polygon = polygons[junction.source_polygon_id]
         region = junction_regions.get(junction.source_polygon_id)
@@ -1728,14 +1946,31 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
                 **evidence,
             }
         )
+    phase_seconds["junctions_seconds"] = time.perf_counter() - started
+
+    started = time.perf_counter()
+    bindings.insert(0, _create_epr_region(app, source))
+    enclosure = _assign_closed_enclosure(app, source)
+    phase_seconds["region_boundary_seconds"] = time.perf_counter() - started
 
     surface_selections: list[dict[str, Any]] = []
+    started = time.perf_counter()
+    base_names = _base_sheet_plan(prepared.surface_bindings)
+    base_points: dict[str, list[list[float]]] = {}
     for binding in prepared.surface_bindings:
         binding_id = str(binding["binding_id"])
-        name = _native_name("epr_surface", binding_id)
-        sheet, points = _analysis_surface_sheet(
-            app, binding["geometry_ref"], name=name
-        )
+        planned_name = base_names[binding_id]
+        name = planned_name["name"]
+        if name not in base_points:
+            sheet, points = _analysis_surface_sheet(
+                app, binding["geometry_ref"], name=name
+            )
+            base_points[name] = points
+        else:
+            sheet = app.modeler.get_object_from_name(name)
+            if sheet is None:
+                raise RuntimeError(f"shared analysis surface {name!r} vanished")
+            points = base_points[name]
         native = _native_object_evidence(app, sheet.name)
         if native["native_object_type"] != "Sheet" or len(sheet.faces) != 1:
             raise RuntimeError(f"analysis surface {name!r} is not one native sheet")
@@ -1769,6 +2004,7 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
                 "binding_id": binding_id,
                 "contribution_id": binding["contribution"]["contribution_id"],
                 "selection_name": sheet.name,
+                "shared_sheet_members": planned_name["members"],
                 "effective_domain_id": binding["effective_domain_id"],
                 "adjacent_side": orientation < 0.0,
                 "field_side": field_side,
@@ -1778,6 +2014,7 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
                 **native,
             }
         )
+    phase_seconds["base_analysis_sheets_seconds"] = time.perf_counter() - started
 
     object_names = [item["object_name"] for item in bindings] + [
         item["object_name"] for item in junction_bindings
@@ -1793,6 +2030,9 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
         "surface_selections": surface_selections,
         "material_readback": material_readback,
         "closed_enclosure": enclosure,
+        "geometry_phases": {
+            key: round(value, 6) for key, value in phase_seconds.items()
+        },
     }
 
 
@@ -1802,8 +2042,12 @@ def bind_saved_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -> di
     if not isinstance(prepared, PreparedPlanarGeometry):
         raise TypeError("prepared must be PreparedPlanarGeometry")
     source = detached(prepared.source)
+    if source.get("native_region", {}).get("method") != "single_region_absolute_offset.v1":
+        raise ValueError("saved EPR geometry predates single Region; reprepare")
     objects: list[dict[str, Any]] = []
     for domain in source["solution_regions"]:
+        if domain["material_kind"] == "vacuum":
+            continue
         name = _native_name("domain", domain["semantic_id"])
         evidence = _native_object_evidence(app, name)
         if evidence["native_object_type"] != "Solid":
@@ -1817,6 +2061,36 @@ def bind_saved_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -> di
                 **evidence,
             }
         )
+    region_plan = source["native_region"]
+    saved_region = app.modeler.get_object_from_name("Region")
+    if saved_region is None:
+        raise RuntimeError("saved EPR Region is unavailable")
+    region_evidence = _native_object_evidence(app, "Region")
+    if region_evidence["native_object_type"] != "Solid":
+        raise RuntimeError("saved EPR Region is not solid")
+    saved_material = native_object_property(saved_region, "Material").strip('"')
+    if saved_material.casefold() != str(region_plan["material_id"]).casefold():
+        raise RuntimeError("saved EPR Region vacuum material differs")
+    if not _native_object_boolean_property(saved_region, "Solve Inside"):
+        raise RuntimeError("saved EPR Region does not solve inside vacuum")
+    objects.insert(
+        0,
+        {
+            "kind": "solution_domain",
+            "semantic_id": "Region",
+            "material_id": region_plan["material_id"],
+            "logical_vacuum_ids": list(region_plan["logical_vacuum_ids"]),
+            "object_name": "Region",
+            "padding_um": list(region_plan["padding_um"]),
+            "native_solve_inside": True,
+            "native_bounding_box_um": list(
+                _verified_region_bounds(
+                    saved_region, region_plan
+                )
+            ),
+            **region_evidence,
+        },
+    )
 
     junctions: list[dict[str, Any]] = []
     for junction in prepared.junctions:
@@ -1834,9 +2108,11 @@ def bind_saved_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -> di
         )
 
     selections: list[dict[str, Any]] = []
+    base_names = _base_sheet_plan(prepared.surface_bindings)
     for binding in prepared.surface_bindings:
         binding_id = str(binding["binding_id"])
-        name = _native_name("epr_surface", binding_id)
+        planned_name = base_names[binding_id]
+        name = planned_name["name"]
         obj = app.modeler.get_object_from_name(name)
         if obj is None or len(obj.faces) != 1:
             raise RuntimeError(f"saved analysis surface {name!r} is unavailable")
@@ -1866,6 +2142,7 @@ def bind_saved_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -> di
                 "binding_id": binding_id,
                 "contribution_id": binding["contribution"]["contribution_id"],
                 "selection_name": name,
+                "shared_sheet_members": planned_name["members"],
                 "effective_domain_id": binding["effective_domain_id"],
                 "adjacent_side": orientation < 0.0,
                 "field_side": side,
@@ -1874,6 +2151,9 @@ def bind_saved_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -> di
                 **evidence,
             }
         )
+    closed_type = _native_boundary_type(app, "SCGSimClosedEnclosure")
+    if closed_type != "Perfect E":
+        raise RuntimeError("saved EPR closed enclosure boundary differs")
     return {
         "schema_version": "scgsim.aedt.epr-native-binding.v1",
         "route": prepared.route,
@@ -1884,9 +2164,7 @@ def bind_saved_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -> di
         "material_readback": _material_readback(app, source["materials"]),
         "closed_enclosure": {
             "boundary_name": "SCGSimClosedEnclosure",
-            "native_boundary_type": _native_boundary_type(
-                app, "SCGSimClosedEnclosure"
-            ),
+            "native_boundary_type": closed_type,
             "binding_stage": "saved_project_readback_without_cad_creation",
         },
         "binding_stage": "saved_project_readback_without_cad_creation",

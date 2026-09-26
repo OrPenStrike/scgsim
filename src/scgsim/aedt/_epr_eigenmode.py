@@ -24,9 +24,10 @@ from ._epr_fields import (
 from ._epr_geometry import (
     bind_inset_surface_selections,
     bind_saved_planar_geometry,
+    plan_inset_sheet_names,
     prepare_native_planar_geometry,
 )
-from ._epr_models import EprResult, detached
+from ._epr_models import EprResult, detached, surface_evaluations
 from ._epr_results import combine_epr_mode, surface_integral_groups
 from ._hfss_convergence import read_hfss_convergence
 from ._hfss_runtime import _export_eigenmode
@@ -87,6 +88,7 @@ def prepare_epr_hfss(
         raise TypeError("bound EPR request did not retain its schema")
     project_path = request.workspace / f"{bound.project_name}.aedt"
     timings: dict[str, Any] = {}
+    preparation_started = time.perf_counter()
     started = time.perf_counter()
     app = Hfss(
         project=str(project_path),
@@ -102,6 +104,7 @@ def prepare_epr_hfss(
     started = time.perf_counter()
     geometry = prepare_native_planar_geometry(app, bound.geometry)
     timings["geometry_seconds"] = round(time.perf_counter() - started, 6)
+    timings["geometry_phases"] = geometry.pop("geometry_phases")
     started = time.perf_counter()
     _create_setup(app, bound)
     timings["setup_seconds"] = round(time.perf_counter() - started, 6)
@@ -128,6 +131,22 @@ def prepare_epr_hfss(
     if bound.epr_request is not None:
         cache["serialized_readback"] = _read_cache(app, bound, cache["items"])
     timings["readback_seconds"] = round(time.perf_counter() - started, 6)
+    preparation_wall = time.perf_counter() - preparation_started
+    timings["preparation_wall_seconds"] = round(preparation_wall, 6)
+    timings["preparation_residual_seconds"] = round(
+        max(
+            0.0,
+            preparation_wall
+            - sum(
+                timings[key]
+                for key in (
+                    "native_open_seconds", "geometry_seconds", "setup_seconds",
+                    "epr_authoring_seconds", "save_seconds", "readback_seconds",
+                )
+            ),
+        ),
+        6,
+    )
     return PreparedEprHfss(
         app,
         request,
@@ -1283,14 +1302,15 @@ def _author_epr_expressions(
     if len(native_by_binding) != len(native_geometry["surface_selections"]):
         raise RuntimeError("native EPR surface binding IDs are not unique")
     group_by_member = {
-        (member["binding_id"], group["margin_um"]): group
+        (member["binding_id"], group["evaluation_kind"], group["margin_um"]): group
         for group in groups
         for member in group["members"]
     }
     grouped_constituents: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    member_components: dict[tuple[str, float], list[dict[str, Any]]] = {}
+    member_components: dict[tuple[str, str, float], list[dict[str, Any]]] = {}
     # Reuse native sheet facts only within this authoring session; side stays per binding.
     sheet_facts: dict[str, dict[str, Any]] = {}
+    sheet_names = plan_inset_sheet_names(spec.geometry.surface_bindings, inset_plan)
     selected_contributions = (
         {item.contribution_id for item in spec.geometry.contributions}
         if request.surface_contribution_ids is None
@@ -1303,13 +1323,17 @@ def _author_epr_expressions(
             or binding["contribution"]["classification"] == "MM"
         ):
             continue
-        for margin in binding["margins_um"]:
+        for evaluation_kind, margin in surface_evaluations(
+            binding["margins_um"],
+            policy=spec.geometry.source.get("surface_evaluation_policy"),
+        ):
             margin_um = float(margin)
-            member_key = (selection["binding_id"], margin_um)
+            member_key = (selection["binding_id"], evaluation_kind, margin_um)
             group = group_by_member[member_key]
             started = time.perf_counter()
             components = bind_inset_surface_selections(
-                app, binding, selection, margin_um, inset_plan, sheet_facts
+                app, binding, selection, margin_um, inset_plan, sheet_facts,
+                sheet_names,
             )
             phase_seconds["sheet_binding_seconds"] += time.perf_counter() - started
             member_components[member_key] = components
@@ -1318,6 +1342,7 @@ def _author_epr_expressions(
                     **selection,
                     **component,
                     "margin_um": margin_um,
+                    "evaluation_kind": evaluation_kind,
                     "integration_geometry": "klayout_complement_minkowski.v1",
                 }
                 for quantity in (
@@ -1335,7 +1360,8 @@ def _author_epr_expressions(
                         "constituent",
                         purpose=(
                             f"{quantity}_{selection['binding_id']}_"
-                            f"{margin_um:.17g}um_component_{component['component_index']}"
+                            f"{evaluation_kind}_{margin_um:.17g}um_"
+                            f"component_{component['component_index']}"
                         ),
                         operations=operations,
                         solution=solution,
@@ -1359,9 +1385,11 @@ def _author_epr_expressions(
                 "source_selection_name": native_by_binding[member["binding_id"]][
                     "selection_name"
                 ],
-                "components": member_components[(member["binding_id"], group["margin_um"])],
+                "components": member_components[(
+                    member["binding_id"], group["evaluation_kind"], group["margin_um"]
+                )],
                 "geometry_empty": not member_components[
-                    (member["binding_id"], group["margin_um"])
+                    (member["binding_id"], group["evaluation_kind"], group["margin_um"])
                 ],
                 "effective_domain_id": native_by_binding[member["binding_id"]][
                     "effective_domain_id"

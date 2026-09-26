@@ -16,6 +16,7 @@ from ._epr_models import (
     PreparedPlanarGeometry,
     SavedSolution,
     detached,
+    surface_evaluations,
 )
 from .util import file_sha256, read_json, write_json
 
@@ -65,6 +66,7 @@ def surface_integral_groups(
         item["semantic_id"] for item in prepared.source["conductors"]
     }
     groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    evaluation_policy = prepared.source.get("surface_evaluation_policy")
     for binding in prepared.surface_bindings:
         record = _exact_mapping(binding["contribution"], "surface provenance")
         contribution_id = record["contribution_id"]
@@ -113,18 +115,22 @@ def surface_integral_groups(
             "substrate_domain_id": binding["substrate_domain_id"],
             "geometry_ref": detached(binding["geometry_ref"]),
         }
-        for margin in spec.margins_um:
-            groups.setdefault((*signature, float(margin)), []).append(member)
+        for evaluation_kind, margin in surface_evaluations(
+            spec.margins_um, policy=evaluation_policy
+        ):
+            evaluation_key = (
+                (evaluation_kind, float(margin))
+                if evaluation_policy is not None else (float(margin),)
+            )
+            groups.setdefault((*signature, *evaluation_key), []).append(member)
     result: list[dict[str, Any]] = []
     for signature, members in sorted(groups.items(), key=lambda item: repr(item[0])):
-        (
-            owner_id,
-            interface_kind,
-            thickness,
-            film_epsilon,
-            substrate_epsilon,
-            margin,
-        ) = signature
+        owner_id, interface_kind, thickness, film_epsilon, substrate_epsilon = signature[:5]
+        if evaluation_policy is None:
+            evaluation_kind = None
+            margin = signature[5]
+        else:
+            evaluation_kind, margin = signature[5:]
         members.sort(key=lambda item: (item["binding_id"], item["contribution_id"]))
         if len({item["binding_id"] for item in members}) != len(members):
             raise ValueError("surface group repeats a physical binding")
@@ -136,6 +142,8 @@ def surface_integral_groups(
             "substrate_relative_permittivity": substrate_epsilon,
             "margin_um": margin,
         }
+        if evaluation_kind is not None:
+            group_identity["evaluation_kind"] = evaluation_kind
         group_id = "surface_group_" + hashlib.sha256(
             json.dumps(group_identity, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()[:24]
@@ -651,6 +659,31 @@ def combine_epr_mode(
     domains = {
         item["semantic_id"]: item for item in source["solution_regions"]
     }
+    native_region = source.get("native_region")
+    if native_region is not None:
+        native_region = _exact_mapping(native_region, "native Region mapping")
+        vacuum_ids = {
+            domain_id for domain_id, domain in domains.items()
+            if domain["material_kind"] == "vacuum"
+        }
+        if (
+            native_region.get("method") != "single_region_absolute_offset.v1"
+            or native_region.get("name") != "Region"
+            or set(native_region.get("logical_vacuum_ids", ())) != vacuum_ids
+            or materials.get(native_region.get("material_id"), {}).get("kind")
+            != "vacuum"
+            or "Region" in domains
+        ):
+            raise ValueError("native Region mapping does not cover logical vacuum")
+        domains = {
+            domain_id: domain for domain_id, domain in domains.items()
+            if domain_id not in vacuum_ids
+        }
+        domains["Region"] = {
+            "semantic_id": "Region",
+            "material_id": native_region["material_id"],
+            "material_kind": "vacuum",
+        }
     if (
         set(electric) != set(domains)
         or set(magnetic) != set(domains)

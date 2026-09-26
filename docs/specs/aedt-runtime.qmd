@@ -310,6 +310,22 @@ and surface-analysis requests. `prepare_hfss_eigenmode_from_geometry()` binds
 that source request to an HFSS Eigenmode spec and emits one portable handoff;
 the old GDS authoring API remains available and unchanged.
 
+For new EPR preparations, source vacuum components remain logical topology
+and field-side provenance, not separate native solids. Native model CAD has
+one vacuum `Region` with six editable Absolute Offset padding values from the
+source vacuum record. The Region exterior has an explicit Perfect E boundary.
+Substrate domains stay separate, and electric/magnetic domain integrals count
+the physical Region once alongside each substrate domain; logical vacuum
+components cannot multiply the energy denominator. Historical per-component
+result records remain readable under their original source contract.
+New surface analysis also emits one unmasked baseline per selected physical
+owner/interface group in addition to the explicitly requested margins. The
+baseline has its own `unmasked_baseline` evaluation identity at zero shrink;
+`margins_um` remains exactly the caller's requested mask list. A caller's
+explicit zero-margin request is a separate labelled evaluation, even when it
+uses the same geometry. Historical records without this evaluation policy do
+not acquire invented baseline rows.
+
 `analyze_epr()` is the only public entry that may perform native saved-field
 analysis. It enters the same `run.py` transaction owner and delegates to the
 private Eigenmode analysis path; the offline resolver never imports PyAEDT or
@@ -504,6 +520,16 @@ partial result. Partial cache or saved records produced by an otherwise
 successful run remain reportable evidence, but cannot be relabelled as complete
 or fall back to another pass, mode, setup, or final-field result.
 
+The EPR preparation receipt times pure geometry precompute, Desktop startup,
+application attachment, native model/material/Region/boundary construction,
+setup, base and inset analysis sheets, PP source installation, expression
+compilation and library checks/import, cache setup, save, readback, and release.
+Nested geometry and expression phases are subdivisions, not additive to their
+parent durations; `execution_seconds` is the complete transaction wall time.
+Fresh-project reopen timing is separate external evidence, not part of the
+preparation total. These are client-observed durations, not an AEDT-internal
+profiler or a prediction of field-solve time.
+
 Each pass/mode records raw native integrals before Python derives SI energy,
 participation, or junction values. Cache and saved-field integrals share one
 narrow, recipe-specific unit normalization: native values and reported units
@@ -540,6 +566,12 @@ owner attribution. Margin zero uses the unoffset support intersection. The
 resulting contours become non-model integration sheets at the original field
 plane; model CAD, boundaries, and mesh are unchanged. Split components are
 integrated separately and summed; an empty intersection is an explicit zero.
+Native analysis-sheet names identify their physical owner/support,
+classification and field side, then `Unmasked` or the effective margin in
+nanometres. A `PartNN` suffix appears only for multiple disconnected pieces.
+When one geometry serves multiple contributions, its single sheet name
+identifies the complete shared membership rather than an arbitrary first
+contribution; full internal identities remain in preparation evidence.
 The original field-side normal and adjacent-side selection remain bound to each
 sheet. The same geometry construction serves preparation and saved-field
 analysis; the former point-to-edge calculator mask is not a fallback.
