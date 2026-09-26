@@ -468,11 +468,13 @@ offline APIs substitutes a historical cache row for a final saved-field row.
 
 The earlier A-r5 no-solve attempt loaded same-side surface expressions but
 failed to load an opposite-side sheet expression written with an unverified
-CLC command. The current candidate authors a sheet integrand, then uses
-the PyAEDT 1.3.0 native reporter's `EnterAdjacentSurf` operation to create
-and save the complete named expression; the same authoring function serves
-cache setup and saved-field analysis. The new inset-sheet expression bytes have not
-been natively verified. Authoring does not prove field-side selection or
+CLC command. The current candidate compiles dependency-ordered CLC definitions
+locally, including an adjacent-side integrand and the native-serialized
+`EnterAdjacentSurface` command, then submits the complete definition library
+through one native `LoadNamedExpressions` call. Preparation and saved-field
+analysis use the same authoring path. A small unsolved native probe loaded and
+reopened four locally authored dependent definitions; the full inset-sheet
+library has not been verified. Authoring does not prove field-side selection or
 numerical EPR correctness, and a native expression failure remains fatal.
 
 History export starts from the native available solutions and selects the

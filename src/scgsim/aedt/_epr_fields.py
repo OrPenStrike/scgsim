@@ -10,6 +10,7 @@ import hashlib
 import json
 import math
 import re
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -365,7 +366,43 @@ def author_named_expression(
     namespace: str = "prepared",
     adjacent_selection_name: str | None = None,
 ) -> dict[str, Any]:
-    """Author one immutable expression without requiring solved fields."""
+    """Author one immutable expression through the same local batch compiler."""
+
+    compiled = compile_named_expression(
+        purpose=purpose,
+        operations=operations,
+        solution=solution,
+        phase_degrees=phase_degrees,
+        dependencies=dependencies,
+        selection=selection,
+        namespace=namespace,
+        adjacent_selection_name=adjacent_selection_name,
+    )
+    load_compiled_expressions(app, [compiled], evidence_dir)
+    return compiled[0]
+
+
+def _clc_block(name: str, operations: Sequence[str], expression: str | None = None) -> str:
+    lines = ["$begin 'Named_Expression'", f"\tName('{name}')"]
+    if expression is not None:
+        lines.append(f"\tExpression('{expression}')")
+    lines.extend(f"\t{operation}" for operation in operations)
+    lines.append("$end 'Named_Expression'")
+    return "\n".join(lines) + "\n"
+
+
+def compile_named_expression(
+    *,
+    purpose: str,
+    operations: Sequence[str],
+    solution: str,
+    phase_degrees: float,
+    dependencies: Mapping[str, str],
+    selection: Mapping[str, Any],
+    namespace: str = "prepared",
+    adjacent_selection_name: str | None = None,
+) -> tuple[dict[str, Any], list[tuple[str, str]], dict[str, bytes]]:
+    """Compile one immutable field definition without an AEDT call."""
 
     if solution != str(solution).strip() or not solution:
         raise ValueError("solution must be non-empty canonical text")
@@ -397,19 +434,12 @@ def author_named_expression(
     }
     identity["sha256"] = _digest(identity)
     name = f"scgsim_epr_{identity['sha256'][:24]}"
-    calculator = app.post.fields_calculator
-    if calculator.is_expression_defined(name):
-        raise RuntimeError(f"HFSS expression already exists: {name!r}")
-    evidence_dir.mkdir(parents=True, exist_ok=True)
-    retained = evidence_dir / f"{name}.clc"
+    definitions: list[tuple[str, str]] = []
+    evidence: dict[str, bytes] = {}
     if adjacent_selection_name is None:
-        authored = calculator.create_expression_file(name, list(operations))
-        if authored is False or not isinstance(authored, str):
-            raise RuntimeError(f"HFSS expression authoring failed: {name!r}")
-        source = Path(authored)
-        definition_bytes = source.read_bytes()
-        retained.write_bytes(definition_bytes)
-        calculator.ofieldsreporter.LoadNamedExpressions(str(source), "Fields", [name])
+        block = _clc_block(name, operations)
+        definitions.append((name, block))
+        evidence[f"{name}.clc"] = block.encode("utf-8")
     else:
         if (
             selection.get("selection_name") != adjacent_selection_name
@@ -422,37 +452,94 @@ def author_named_expression(
         ):
             raise ValueError("adjacent surface expression selection is inconsistent")
         integrand_name = f"{name}_integrand"
-        authored = calculator.create_expression_file(
-            integrand_name, list(operations[:-3])
+        integrand_block = _clc_block(integrand_name, operations[:-3])
+        final_block = _clc_block(
+            name,
+            [
+                f"NameOfExpression('{integrand_name}')",
+                f"EnterAdjacentSurface('{adjacent_selection_name}')",
+                "Operation('SurfaceValue')",
+                "Operation('Integrate')",
+            ],
+            expression=(
+                f"Integrate(AdjacentSurface({adjacent_selection_name}), "
+                f"{integrand_name})"
+            ),
         )
-        if authored is False or not isinstance(authored, str):
-            raise RuntimeError(f"HFSS adjacent integrand authoring failed: {name!r}")
-        integrand_bytes = Path(authored).read_bytes()
-        (evidence_dir / f"{integrand_name}.clc").write_bytes(integrand_bytes)
-        reporter = calculator.ofieldsreporter
-        reporter.LoadNamedExpressions(str(authored), "Fields", [integrand_name])
-        if not calculator.is_expression_defined(integrand_name):
-            raise RuntimeError(f"HFSS adjacent integrand was not defined: {name!r}")
-        reporter.CalcStack("clear")
-        reporter.CopyNamedExprToStack(integrand_name)
-        reporter.EnterAdjacentSurf(adjacent_selection_name)
-        reporter.CalcOp("SurfaceValue")
-        reporter.CalcOp("Integrate")
-        reporter.AddNamedExpression(name, "Fields")
-        reporter.SaveNamedExpressions(str(retained), [name], True)
-        reporter.CalcStack("clear")
-        if not retained.is_file() or retained.stat().st_size == 0:
-            raise RuntimeError(f"HFSS adjacent expression was not saved: {name!r}")
-        definition_bytes = retained.read_bytes()
-    if not calculator.is_expression_defined(name):
-        raise RuntimeError(f"HFSS expression was not defined: {name!r}")
-    return {
+        definitions.extend(((integrand_name, integrand_block), (name, final_block)))
+        evidence[f"{integrand_name}.clc"] = integrand_block.encode("utf-8")
+        evidence[f"{name}.clc"] = (integrand_block + final_block).encode("utf-8")
+    record = {
         "name": name,
         "identity": identity,
-        "definition_sha256": hashlib.sha256(definition_bytes).hexdigest(),
+        "definition_sha256": hashlib.sha256(evidence[f"{name}.clc"]).hexdigest(),
         "definition_status": "authored_and_loaded",
         "solution": solution,
         "phase_degrees": float(phase_degrees),
+    }
+    return record, definitions, evidence
+
+
+def load_compiled_expressions(
+    app: Any,
+    compiled: Sequence[tuple[dict[str, Any], list[tuple[str, str]], dict[str, bytes]]],
+    evidence_dir: Path,
+) -> dict[str, Any]:
+    """Load dependency-ordered local definitions once, then verify every name."""
+
+    definitions = [definition for _, blocks, _ in compiled for definition in blocks]
+    names = [name for name, _ in definitions]
+    if not names or len(names) != len(set(names)):
+        raise RuntimeError("EPR batch definitions are empty or repeat a native name")
+    calculator = app.post.fields_calculator
+    started = time.perf_counter()
+    existing = [name for name in names if calculator.is_expression_defined(name)]
+    if existing:
+        raise RuntimeError(f"HFSS expressions already exist: {existing!r}")
+    collision_check_seconds = time.perf_counter() - started
+    started = time.perf_counter()
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    files = {filename: data for _, _, evidence in compiled for filename, data in evidence.items()}
+    if len(files) != sum(len(evidence) for _, _, evidence in compiled):
+        raise RuntimeError("EPR evidence filenames repeat")
+    for filename, data in files.items():
+        (evidence_dir / filename).write_bytes(data)
+    library = evidence_dir / "scgsim_epr_batch.clc"
+    library_bytes = "".join(block for _, block in definitions).encode("utf-8")
+    library.write_bytes(library_bytes)
+    evidence_write_seconds = time.perf_counter() - started
+    started = time.perf_counter()
+    try:
+        result = calculator.ofieldsreporter.LoadNamedExpressions(
+            str(library), "Fields", names
+        )
+    except Exception as exc:
+        try:
+            present = [name for name in names if calculator.is_expression_defined(name)]
+            progress = f"{len(present)}/{len(names)} definitions became present"
+        except Exception as readback_exc:
+            progress = f"{len(names)} requested definitions; partial readback unavailable: {readback_exc!r}"
+        raise RuntimeError(
+            f"HFSS batch named-expression load raised after {progress}"
+        ) from exc
+    batch_import_seconds = time.perf_counter() - started
+    started = time.perf_counter()
+    present = [name for name in names if calculator.is_expression_defined(name)]
+    if result is False or len(present) != len(names):
+        present_set = set(present)
+        missing = [name for name in names if name not in present_set]
+        raise RuntimeError(
+            f"HFSS batch named-expression load was partial or failed: "
+            f"{len(present)}/{len(names)} present; missing={missing!r}; returned={result!r}"
+        )
+    return {
+        "library_sha256": hashlib.sha256(library_bytes).hexdigest(),
+        "native_definition_count": len(names),
+        "main_expression_count": len(compiled),
+        "collision_check_seconds": round(collision_check_seconds, 6),
+        "evidence_write_seconds": round(evidence_write_seconds, 6),
+        "batch_import_seconds": round(batch_import_seconds, 6),
+        "postload_readback_seconds": round(time.perf_counter() - started, 6),
     }
 
 

@@ -14,10 +14,11 @@ from pathlib import Path
 from typing import Any
 
 from ._epr_fields import (
-    author_named_expression,
+    compile_named_expression,
     field_integral_operations,
     install_variables,
     junction_voltage_operations,
+    load_compiled_expressions,
     parse_native_scalar,
 )
 from ._epr_geometry import (
@@ -1206,8 +1207,8 @@ def _author_epr_expressions(
     phase_seconds = {
         "pp_sources_seconds": 0.0,
         "sheet_binding_seconds": 0.0,
-        "ordinary_expression_seconds": 0.0,
-        "adjacent_expression_seconds": 0.0,
+        "ordinary_compile_seconds": 0.0,
+        "adjacent_compile_seconds": 0.0,
     }
     expression_counts = {"ordinary": 0, "adjacent": 0}
     expression_stage_seconds = {
@@ -1216,17 +1217,19 @@ def _author_epr_expressions(
         "grouped": 0.0,
         "junction": 0.0,
     }
+    compiled: list[tuple[dict[str, Any], list[tuple[str, str]], dict[str, bytes]]] = []
 
     def _timed_author(stage: str, **kwargs: Any) -> dict[str, Any]:
         adjacent = kwargs.get("adjacent_selection_name") is not None
         started = time.perf_counter()
-        result = author_named_expression(app, **kwargs)
+        result = compile_named_expression(**kwargs)
         elapsed = time.perf_counter() - started
         kind = "adjacent" if adjacent else "ordinary"
-        phase_seconds[f"{kind}_expression_seconds"] += elapsed
+        phase_seconds[f"{kind}_compile_seconds"] += elapsed
         expression_stage_seconds[stage] += elapsed
         expression_counts[kind] += 1
-        return result
+        compiled.append(result)
+        return result[0]
 
     started = time.perf_counter()
     # Keep a nonzero modal source selected when saving the project.
@@ -1267,7 +1270,6 @@ def _author_epr_expressions(
                             item["material_id"]
                         ]["relative_permeability"],
                     },
-                    evidence_dir=evidence_dir,
                     namespace=namespace,
                 )
             )
@@ -1340,7 +1342,6 @@ def _author_epr_expressions(
                         phase_degrees=0.0,
                         dependencies=pp_observed,
                         selection=component_selection,
-                        evidence_dir=evidence_dir,
                         namespace=namespace,
                         adjacent_selection_name=(
                             component["selection_name"]
@@ -1405,7 +1406,6 @@ def _author_epr_expressions(
                         "native_member_selections": native_members,
                         "geometry_empty": not members,
                     },
-                    evidence_dir=evidence_dir,
                     namespace=namespace,
                 )
             )
@@ -1444,10 +1444,17 @@ def _author_epr_expressions(
                             "direction_xy": list(junction.direction_xy),
                             "report_selected": report_selected,
                     },
-                    evidence_dir=evidence_dir,
                     namespace=namespace,
                 )
             )
+    batch = load_compiled_expressions(app, compiled, evidence_dir)
+    for key in (
+        "collision_check_seconds",
+        "evidence_write_seconds",
+        "batch_import_seconds",
+        "postload_readback_seconds",
+    ):
+        phase_seconds[key] = batch[key]
     authoring_seconds = time.perf_counter() - authoring_started
     other_seconds = max(0.0, authoring_seconds - sum(phase_seconds.values()))
     return (
@@ -1461,9 +1468,11 @@ def _author_epr_expressions(
             "other_seconds": round(other_seconds, 6),
             "ordinary_expression_count": expression_counts["ordinary"],
             "adjacent_expression_count": expression_counts["adjacent"],
-            "expression_stage_seconds": {
+            "expression_stage_compile_seconds": {
                 key: round(value, 6) for key, value in expression_stage_seconds.items()
             },
+            "batch_library_sha256": batch["library_sha256"],
+            "native_definition_count": batch["native_definition_count"],
             "unique_inset_sheet_count": len(sheet_facts),
         },
     )
