@@ -251,9 +251,8 @@ def field_integral_operations(
                 "+",
             )
             value = _binary(full_square, normal_square, "-")
-        # This records side intent in the expression identity.  The adjacent
-        # expression is authored through the native reporter, not this CLC
-        # spelling, whose saved-file form is not established by PyAEDT.
+        # This reporter-operation spelling records side intent in the identity;
+        # the compiled CLC uses the native-saved EnterAdjacentSurface token.
         terminal = [
             f"{enter_surface}('{selection_name}')",
             "Operation('SurfaceValue')",
@@ -433,7 +432,9 @@ def compile_named_expression(
         "selection": dict(selection),
     }
     identity["sha256"] = _digest(identity)
-    name = f"scgsim_epr_{identity['sha256'][:24]}"
+    # AEDT resolves one-file CLC dependencies by native-name order, not file order.
+    rank = "20" if selection.get("kind") == "surface_group" else "10"
+    name = f"scgsim_epr_{rank}_{identity['sha256'][:24]}"
     definitions: list[tuple[str, str]] = []
     evidence: dict[str, bytes] = {}
     if adjacent_selection_name is None:
@@ -451,7 +452,7 @@ def compile_named_expression(
             ]
         ):
             raise ValueError("adjacent surface expression selection is inconsistent")
-        integrand_name = f"{name}_integrand"
+        integrand_name = f"scgsim_epr_00_{identity['sha256'][:24]}_integrand"
         integrand_block = _clc_block(integrand_name, operations[:-3])
         final_block = _clc_block(
             name,
