@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scgsim"
-version = "1.0.0.dev27"
+version = "1.0.0.dev28"
 description = "Research-first electromagnetic simulation workflows for superconducting circuits."
 readme = "README.md"
-requires-python = "~=3.12.0"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "numpy>=2.0.0",
     "plotly>=6.0.0",
@@ -19,6 +19,12 @@ license-files = ["LICENSE", "NOTICE"]
 aedt = [
     "gdstk",
     "pyaedt==1.3.0",
+]
+aedt-epr = [
+    "gdstk",
+    "pyaedt==1.3.0",
+    "gdsfactory>=9,<10",
+    "klayout>=0.30,<0.31",
 ]
 palace = [
     "gdsfactory>=9,<10",

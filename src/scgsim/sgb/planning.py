@@ -1084,6 +1084,50 @@ def build_route_construction_plan(
     return plan_type(**plan_kwargs)
 
 
+def plan_surface_contribution_patches(
+    build_input: GeometryBuildInput, *, route: RouteLiteral
+) -> tuple[GeometryBuildInput, tuple[SurfacePlanRecord, ...]]:
+    """Derive local physical-side evidence without a backend construction plan.
+
+    This non-Gmsh seam reuses the polygon Boolean and Semantic Core
+    classifiers, but does not plan cutter bodies, canonical mesh topology,
+    port lowering, volumes, tags, or backend identifiers.
+    """
+
+    build_input = _prepare_auto_vacuum_solution_regions(build_input, route=route)
+    validate_selected_route(build_input, route)
+    semantic_facts = build_semantic_evidence_facade(build_input, route=route)
+    interfaces = recognize_route_interfaces(build_input, route=route)
+    interfaces = plan_conductor_contact_patches(
+        build_input, route=route, interfaces=interfaces
+    )
+    if route in {"A", "B"}:
+        interfaces, mm_contacts = plan_mm_contact_records(
+            build_input, route=route, interfaces=interfaces
+        )
+    else:
+        mm_contacts = ()
+    surfaces = plan_route_surfaces(
+        build_input,
+        route=route,
+        interfaces=interfaces,
+        surface_partitions=plan_surface_partitions(
+            build_input, route=route, interfaces=interfaces
+        ),
+        construction_bodies=(),
+        mm_contacts=mm_contacts,
+        semantic_facts=semantic_facts,
+    )
+    surfaces = _reconcile_solution_domain_boundaries(
+        build_input, surfaces=surfaces
+    )
+    return build_input, _merge_solution_sidewall_interfaces(
+        build_input,
+        surfaces=surfaces,
+        semantic_facts=semantic_facts,
+    )
+
+
 def _timed(
     timings: list[dict[str, Any]],
     stage: str,
@@ -3102,7 +3146,7 @@ def plan_route_surfaces(
                         patch_id=f"planned:{contribution_id}",
                         lower_id=entity.semantic_id,
                         upper_id=sidewall_adjacent_owner_id,
-                        side=shell_part,
+                        side="sidewall",
                     )
                 else:
                     sidewall_evidence = conductor_solution_evidence(
@@ -3111,7 +3155,7 @@ def plan_route_surfaces(
                         patch_id=f"planned:{contribution_id}",
                         conductor_id=entity.semantic_id,
                         solution_id=sidewall_adjacent_owner_id,
-                        side=shell_part,
+                        side="sidewall",
                     )
                 sidewall_interface_kind = sidewall_evidence.classification
                 sidewall_interface_id = (
@@ -5767,6 +5811,13 @@ def _plan_substrate_air_surfaces(
         )
         if not interface_region:
             continue
+        material_pair = (lower.material_kind, upper.material_kind)
+        if material_pair == ("dielectric", "vacuum"):
+            physical_side = "top"
+        elif material_pair == ("vacuum", "dielectric"):
+            physical_side = "bottom"
+        else:
+            physical_side = "shared_plane"
         interface_evidence = solution_solution_evidence(
             semantic_facts,
             contribution_id=(
@@ -5777,7 +5828,7 @@ def _plan_substrate_air_surfaces(
             ),
             lower_id=lower.semantic_id,
             upper_id=upper.semantic_id,
-            side="shared_plane",
+            side=physical_side,
         )
         kind = interface_evidence.classification
         owner_ids = interface_evidence.source_owner_ids

@@ -885,7 +885,8 @@ def _bind_modal_evidence(
                 f"AEDT native modal integration line is unavailable: {port.name!r}"
             ) from exc
         observed = [
-            [float(item[f"{axis}Position"]) for axis in "XYZ"] for item in positions
+            [_native_position_um(item[f"{axis}Position"]) for axis in "XYZ"]
+            for item in positions
         ]
         expected = [list(point) for point in port.integration_line_um]
         if (
@@ -922,6 +923,36 @@ def _bind_modal_evidence(
             "characteristic_impedance": mode["CharImp"],
         }
     return ports
+
+
+def _native_position_um(value: Any) -> float:
+    """Read one saved AEDT modal coordinate as a finite micrometer value."""
+    if isinstance(value, bool):
+        raise ValueError("AEDT modal coordinate must be a finite length")
+    if isinstance(value, str):
+        match = re.fullmatch(
+            r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*([A-Za-z]+)",
+            value.strip(),
+        )
+        if match:
+            from ansys.aedt.core.generic.constants import AEDT_UNITS, unit_converter
+
+            units = match.group(2)
+            if units not in AEDT_UNITS["Length"]:
+                raise ValueError("AEDT modal coordinate units must be a length")
+            value = unit_converter(
+                float(match.group(1)),
+                unit_system="Length",
+                input_units=units,
+                output_units="um",
+            )
+    try:
+        result = float(value)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError("AEDT modal coordinate must be a finite length") from exc
+    if not math.isfinite(result):
+        raise ValueError("AEDT modal coordinate must be a finite length")
+    return result
 
 
 def _bind_terminal_reference_evidence(

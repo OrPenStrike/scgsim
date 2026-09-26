@@ -13,8 +13,15 @@ import time
 from pathlib import Path
 from typing import Any
 
+from ._epr_eigenmode import (
+    prepare_epr_hfss,
+    prepared_epr_result,
+    solve_and_export_epr,
+)
+from ._epr_geometry import precompute_inset_surfaces, validate_geometry_workers
 from ._hfss_runtime import run_hfss
-from ._native_common import pyaedt_version
+from ._epr_results import seal_saved_solution
+from ._native_common import owned_application_constructor, pyaedt_version
 from ._q2d_runtime import _export_q2d, run_q2d
 from ._q3d_runtime import run_q3d
 from ._runtime_provenance import (
@@ -28,6 +35,8 @@ from .spec import (
     LOCKED_PYAEDT,
     REQUIRED_AEDT_VERSION,
     AedtSpec,
+    HfssEprSpec,
+    HfssEprAnalysisSpec,
     Q2dSpec,
     Q3dSpec,
     parse_aedt_spec,
@@ -48,6 +57,21 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Open local AEDT and solve the prepared handoff",
     )
+    parser.add_argument(
+        "--prepare-only",
+        action="store_true",
+        help="Create and verify an EPR native model without solving it",
+    )
+    parser.add_argument(
+        "--analyze-epr",
+        action="store_true",
+        help="Analyze the sealed saved-copy EPR request without solving",
+    )
+    parser.add_argument(
+        "--geometry-workers",
+        type=int,
+        help="Override pure EPR inset geometry workers before AEDT launch",
+    )
     args = parser.parse_args(argv)
     metadata_path = Path(args.handoff).resolve()
     if not metadata_path.is_file():
@@ -56,10 +80,21 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError(
             "prepared handoff is not executed; use run_aedt.sh or pass --execute explicitly"
         )
-    return _execute(metadata_path)
+    return _execute(
+        metadata_path,
+        prepare_only=args.prepare_only,
+        analyze_epr=args.analyze_epr,
+        geometry_workers=args.geometry_workers,
+    )
 
 
-def _execute(metadata_path: Path) -> int:
+def _execute(
+    metadata_path: Path,
+    *,
+    prepare_only: bool = False,
+    analyze_epr: bool = False,
+    geometry_workers: int | None = None,
+) -> int:
     run_dir = metadata_path.parent.parent
     os.chdir(run_dir)
     metadata = _object(read_json(metadata_path), "handoff metadata")
@@ -73,10 +108,27 @@ def _execute(metadata_path: Path) -> int:
     spec_path = run_dir / files["spec"]
     spec = parse_aedt_spec(_object(read_json(spec_path), "spec"), base_dir=run_dir)
     if (
-        not isinstance(spec, Q2dSpec)
+        not isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec, Q2dSpec))
         and spec.gds_path.resolve() != (run_dir / "geometry/design.gds").resolve()
     ):
         raise RuntimeError("prepared spec must use geometry/design.gds")
+    valid_flags = (
+        (isinstance(spec, HfssEprSpec) and not analyze_epr)
+        or (
+            isinstance(spec, HfssEprAnalysisSpec)
+            and analyze_epr
+            and not prepare_only
+        )
+        or (
+            not isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec))
+            and not prepare_only
+            and not analyze_epr
+        )
+    )
+    if not valid_flags:
+        raise RuntimeError(
+            "EPR execution flags do not match the prepared handoff workflow"
+        )
     _require_pristine_run(run_dir, spec)
     cohort = _verify_prepared_cohort(run_dir, metadata, receipt, spec)
     started = _utc_now()
@@ -103,16 +155,30 @@ def _execute(metadata_path: Path) -> int:
     status = "failed"
     failure: str | None = None
     result: dict[str, Any] | None = None
+    epr_solver_attempted = False
     try:
         receipt["mode"] = spec.mode
-        _verify_prepared_hashes(
-            metadata, spec_path, None if isinstance(spec, Q2dSpec) else spec.gds_path
-        )
+        _verify_prepared_hashes(metadata, spec_path, spec)
         receipt["runtime_source"] = _runtime_source_identity()
         if _pyaedt_version() != LOCKED_PYAEDT:
             raise RuntimeError("PyAEDT lock mismatch")
+        setting = metadata.get("execution", {}).get("geometry_workers")
+        workers = geometry_workers if geometry_workers is not None else setting
+        validate_geometry_workers(workers)
+        inset_plan = None
+        if isinstance(spec, (HfssEprSpec, HfssEprAnalysisSpec)) and spec.epr_request is not None:
+            geometry_started = time.perf_counter()
+            inset_plan = precompute_inset_surfaces(
+                spec.geometry, spec.epr_request, workers
+            )
+            receipt["geometry_precompute"] = {
+                "seconds": round(time.perf_counter() - geometry_started, 6),
+                "members": len(inset_plan),
+                "requested_workers": workers,
+            }
         from ansys.aedt.core import Desktop, Hfss, Q2d, Q3d
 
+        desktop_started = time.perf_counter()
         desktop = Desktop(
             version=REQUIRED_AEDT_VERSION,
             non_graphical=True,
@@ -121,19 +187,70 @@ def _execute(metadata_path: Path) -> int:
         )
         if desktop.aedt_version_id != REQUIRED_AEDT_VERSION:
             raise RuntimeError(f"AEDT version mismatch: {desktop.aedt_version_id!r}")
-        if isinstance(spec, Q3dSpec):
-            result = _solve_q3d(Q3d, run_dir, spec)
+        if isinstance(spec, (HfssEprSpec, HfssEprAnalysisSpec)):
+            receipt.setdefault("timings", {})["desktop_startup_seconds"] = round(
+                time.perf_counter() - desktop_started, 6
+            )
+        if isinstance(spec, HfssEprAnalysisSpec):
+            from ._epr_eigenmode import analyze_saved_epr
+
+            result = analyze_saved_epr(
+                owned_application_constructor(Hfss, desktop), run_dir, spec, inset_plan
+            )
+            status = "epr_analysis_completed"
+        elif isinstance(spec, HfssEprSpec):
+            prepared = prepare_epr_hfss(
+                owned_application_constructor(Hfss, desktop), run_dir, spec, inset_plan
+            )
+            if prepare_only:
+                result = prepared_epr_result(prepared)
+                status = "native_preparation_only"
+            else:
+                epr_solver_attempted = True
+                result = solve_and_export_epr(prepared)
+                status = "completed"
+        elif isinstance(spec, Q3dSpec):
+            result = _solve_q3d(
+                owned_application_constructor(Q3d, desktop), run_dir, spec
+            )
         elif isinstance(spec, Q2dSpec):
-            result = _solve_q2d(Q2d, run_dir, spec)
+            result = _solve_q2d(
+                owned_application_constructor(Q2d, desktop), run_dir, spec
+            )
         else:
-            result = _solve(Hfss, run_dir, spec)
-        status = "completed"
+            result = _solve(
+                owned_application_constructor(Hfss, desktop), run_dir, spec
+            )
+        if not isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec)):
+            status = "completed"
     except Exception as exc:  # noqa: BLE001 -- receipt must record any solver failure.
         failure = f"{type(exc).__name__}: {exc}"
     finally:
-        if result is not None:
+        if result is not None and isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec)):
+            receipt["outputs"] = result["outputs"]
+            receipt["connected"] = result["connected"]
+            receipt["project"] = result["project"]
+            receipt["geometry"] = result["geometry"]
+            receipt["setup"] = result["setup"]
+            receipt["expressions"] = result.get("expressions", [])
+            receipt["cache"] = result.get("cache", {"status": "not_applicable"})
+            receipt["timings"] = {
+                **receipt.get("timings", {}), **result.get("timings", {})
+            }
+            receipt["solver_invoked"] = result["solver_invoked"]
+            receipt["workflow_status"] = result["workflow_status"]
+            if "convergence" in result:
+                receipt["convergence"] = result["convergence"]
+            if "result_readback" in result:
+                receipt["result_readback"] = result["result_readback"]
+            if "result" in result:
+                receipt["epr_result"] = result["result"]
+            if "saved_field_evidence" in result:
+                receipt["saved_field_evidence"] = result["saved_field_evidence"]
+        elif result is not None:
             receipt["save"] = result["save"]
         if desktop is not None:
+            release_started = time.perf_counter()
             try:
                 released = bool(
                     desktop.release_desktop(close_projects=True, close_on_exit=True)
@@ -148,10 +265,71 @@ def _execute(metadata_path: Path) -> int:
                 }
                 if failure is None:
                     failure = receipt["release"]["error"]
+            receipt.setdefault("timings", {})["release_seconds"] = round(
+                time.perf_counter() - release_started, 6
+            )
         if failure is not None:
             status = "failed"
             receipt["error"] = failure
-        if result is not None:
+        if isinstance(spec, HfssEprSpec):
+            receipt["solver_invoked"] = epr_solver_attempted
+        if result is not None and isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec)):
+            project_relative = result["project"]
+            project_path = _contained(run_dir, project_relative)
+            if not project_path.is_file():
+                status = "failed"
+                if failure is None:
+                    failure = "EPR project is missing after owned Desktop release"
+                    receipt["error"] = failure
+            else:
+                project_sha256 = file_sha256(project_path)
+                result["outputs"] = {project_relative: project_sha256, **{
+                    key: value
+                    for key, value in result["outputs"].items()
+                    if key != project_relative
+                }}
+                result["save"] = {
+                    "ok": True,
+                    "project_sha256": project_sha256,
+                    "identity_stage": "after_owned_desktop_release",
+                }
+                receipt["outputs"] = result["outputs"]
+                receipt["save"] = result["save"]
+                if (
+                    isinstance(spec, HfssEprSpec)
+                    and spec.epr_request is not None
+                    and status == "completed"
+                    and failure is None
+                    and receipt.get("release") == {"ok": True}
+                ):
+                    try:
+                        sealed = seal_saved_solution(
+                            run_dir,
+                            project_name=spec.project_name,
+                            design_name=spec.design_name,
+                            setup_name=spec.run_control.setup_name,
+                            model_source_sha256=spec.geometry.model_sha256,
+                            evidence=result["saved_field_evidence"],
+                        )
+                        result["outputs"].update(
+                            {
+                                sealed["manifest"]: sealed["manifest_sha256"],
+                                sealed["receipt"]: sealed["receipt_sha256"],
+                            }
+                        )
+                        receipt["outputs"] = result["outputs"]
+                        receipt["saved_solution"] = sealed
+                    except Exception as exc:  # noqa: BLE001 -- sealing is required.
+                        seal_error = f"{type(exc).__name__}: {exc}"
+                        receipt["saved_solution"] = {
+                            "status": "unavailable",
+                            "error": seal_error,
+                        }
+                        status = "failed"
+                        if failure is None:
+                            failure = seal_error
+                            receipt["error"] = failure
+        elif result is not None:
             receipt["outputs"] = result["outputs"]
             receipt["connected"] = result["connected"]
             receipt["project"] = result["project"]
@@ -170,7 +348,11 @@ def _execute(metadata_path: Path) -> int:
         receipt["finished_at_utc"] = _utc_now()
         receipt["execution_seconds"] = round(time.perf_counter() - execution_started, 6)
         write_json(receipt_path, receipt)
-    return 0 if status == "completed" else 1
+    return 0 if status in {
+        "completed",
+        "epr_analysis_completed",
+        "native_preparation_only",
+    } else 1
 
 
 def _canonical_metadata_files(
@@ -179,22 +361,37 @@ def _canonical_metadata_files(
     expected_path = run_dir / "metadata/aedt_handoff_metadata.json"
     if metadata_path != expected_path:
         raise RuntimeError("handoff metadata path is not canonical")
-    if (
-        metadata.get("schema_version") != "scgsim.aedt.handoff.v1"
-        or metadata.get("status") != "prepared"
-    ):
+    schema = metadata.get("schema_version")
+    if schema not in {"scgsim.aedt.handoff.v1", "scgsim.aedt.handoff.v2"} or metadata.get(
+        "status"
+    ) != "prepared":
         raise RuntimeError("handoff metadata schema or status is invalid")
     files = _object(metadata.get("files"), "files")
     expected = {"spec": "aedt_spec.json", "receipt": "metadata/aedt_run_receipt.json"}
-    if metadata.get("mode") != "q2d":
+    workflow = metadata.get("workflow")
+    if schema == "scgsim.aedt.handoff.v1" and metadata.get("mode") != "q2d":
         expected["gds"] = "geometry/design.gds"
+    elif schema == "scgsim.aedt.handoff.v2" and workflow == "epr_analysis":
+        for key in ("saved_project", "saved_results"):
+            value = files.get(key)
+            if (
+                not isinstance(value, str)
+                or not value.startswith("saved/")
+                or _contained(run_dir, value) != run_dir / value
+            ):
+                raise RuntimeError("analysis handoff saved paths are not canonical")
+            expected[key] = value
+    if (schema == "scgsim.aedt.handoff.v2") != (
+        workflow in {"body_first_eigenmode", "epr", "epr_analysis"}
+    ):
+        raise RuntimeError("handoff metadata workflow is inconsistent")
     if files != expected:
         raise RuntimeError("handoff metadata file map is not canonical")
     return expected
 
 
 def _verify_prepared_hashes(
-    metadata: dict[str, Any], spec_path: Path, gds_path: Path | None
+    metadata: dict[str, Any], spec_path: Path, spec: AedtSpec
 ) -> None:
     receipt = _object(
         read_json(spec_path.parent / "metadata/aedt_run_receipt.json"), "receipt"
@@ -204,10 +401,33 @@ def _verify_prepared_hashes(
         raise RuntimeError("receipt source paths are not canonical")
     if file_sha256(spec_path) != _text(source.get("spec_sha256"), "source.spec_sha256"):
         raise RuntimeError("prepared spec hash mismatch")
-    if gds_path is None:
+    if isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec)):
+        expected_source_keys = {
+            "spec",
+            "spec_sha256",
+            "planar_source_sha256",
+            "planar_model_sha256",
+        }
+        if isinstance(spec, HfssEprAnalysisSpec):
+            expected_source_keys.add("saved_solution_sha256")
+        if set(source) != expected_source_keys:
+            raise RuntimeError("EPR handoff source members are not canonical")
+        if source.get("planar_source_sha256") != spec.geometry.source_sha256:
+            raise RuntimeError("prepared planar source hash mismatch")
+        if source.get("planar_model_sha256") != spec.geometry.model_sha256:
+            raise RuntimeError("prepared planar model hash mismatch")
+        if "gds_sha256" in metadata:
+            raise RuntimeError("EPR handoff must not contain a GDS source")
+        if isinstance(spec, HfssEprAnalysisSpec) and source.get(
+            "saved_solution_sha256"
+        ) != spec.saved_solution.content_sha256:
+            raise RuntimeError("prepared saved solution hash mismatch")
+        return
+    if isinstance(spec, Q2dSpec):
         if set(source) != {"spec", "spec_sha256"} or "gds_sha256" in metadata:
             raise RuntimeError("Q2D handoff must not contain a GDS source")
         return
+    gds_path = spec.gds_path
     if source.get("gds") != "geometry/design.gds":
         raise RuntimeError("receipt GDS path is not canonical")
     if file_sha256(gds_path) != _text(metadata.get("gds_sha256"), "gds_sha256"):
@@ -223,7 +443,12 @@ def _verify_prepared_cohort(
     if not manifest_path.is_file():
         raise FileNotFoundError(f"handoff manifest is missing: {manifest_path}")
     manifest = _object(read_json(manifest_path), "handoff manifest")
-    if manifest.get("schema_version") != "scgsim.aedt.handoff-manifest.v1":
+    expected_manifest_schema = (
+        "scgsim.aedt.handoff-manifest.v2"
+        if isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec))
+        else "scgsim.aedt.handoff-manifest.v1"
+    )
+    if manifest.get("schema_version") != expected_manifest_schema:
         raise RuntimeError("handoff manifest schema is invalid")
     metadata_has = "expected_receipt_schema" in metadata
     manifest_has = "expected_receipt_schema" in manifest
@@ -273,7 +498,11 @@ def _verify_prepared_cohort(
         raise RuntimeError("prepared receipt members are not canonical")
 
     expected_paths = ["run_aedt.sh", "aedt_spec.json"]
-    if not isinstance(spec, Q2dSpec):
+    if isinstance(spec, HfssEprAnalysisSpec):
+        expected_paths.extend(
+            f"saved/{item['path']}" for item in spec.saved_solution.members
+        )
+    elif not isinstance(spec, (HfssEprSpec, Q2dSpec)):
         expected_paths.append("geometry/design.gds")
     expected_paths += [
         "metadata/aedt_handoff_metadata.json",
@@ -326,6 +555,10 @@ def _contained(root: Path, relative: str) -> Path:
 
 
 def _require_pristine_run(run_dir: Path, spec: AedtSpec) -> None:
+    if isinstance(spec, HfssEprAnalysisSpec):
+        if (run_dir / "analysis-work").exists():
+            raise RuntimeError("saved-field analysis workcopy already exists")
+        return
     if (run_dir / f"{spec.project_name}.aedt").exists() or (
         run_dir / "results"
     ).exists():

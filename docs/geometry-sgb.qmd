@@ -97,3 +97,21 @@ A handoff preserves:
 External SGB revisions remain derivation history only. The in-tree
 `scgsim.sgb` package is the current authority; no direct external consumer or
 fallback path is implied.
+
+## Shared source facts for AEDT
+
+`GeometryBuildInput` is also the smallest existing source frontend for the
+converging AEDT planar Surface-EPR path. AEDT consumes the normalized polygons
+(including hole loops), entities, solution regions, source provenance, and
+route profile. Source-linked junction declarations alongside the DTO supply
+terminal nets, direction, length, width, inductance, and capacitance; the
+current `GeometryBuildInput` does not contain those fields. AEDT does not consume
+`ConstructionPlanRecord`, Gmsh surfaces, physical groups, or native tags.
+
+An AEDT-owned binding sidecar must separately record each created body, sheet,
+face, material side, selection, and saved-field expression against those
+source identities. A native face overlap or adjacency query is observed
+geometry evidence; it cannot manufacture source contact intent. Route-A
+profile normalization still happens once at the shared frontend boundary, and
+Route-B finite-body facts stay distinct from PEC approximation and the AEDT
+implementation that realizes them.

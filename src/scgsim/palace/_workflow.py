@@ -13,13 +13,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from scgsim.sgb import VacuumRegionSpec
+from scgsim.sgb import VacuumRegionSpec, apply_vacuum_region_to_stack
 from scgsim.sgb.ground_bumps import _prepare_indium_ground_bump_fill
 
 from ._staged import (
     RouteAThinFilm,
     apply_route_a_thin_film_to_stack,
-    apply_vacuum_region_to_stack,
 )
 
 

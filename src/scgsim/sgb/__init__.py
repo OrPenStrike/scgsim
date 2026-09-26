@@ -72,6 +72,7 @@ from scgsim.sgb.pipeline import (
     validate_volume_surface_closure,
 )
 from scgsim.sgb.stack import build_component_stack
+from scgsim.sgb.vacuum import apply_vacuum_region_to_stack
 
 __all__ = [
     "RUN_METADATA_DIR",
@@ -115,6 +116,7 @@ __all__ = [
     "Vector3D",
     "VolumePlanRecord",
     "build_component_stack",
+    "apply_vacuum_region_to_stack",
     "build_gds_stack_geometry_input",
     "build_gdsfactory_geometry_input",
     "build_route_construction_plan",

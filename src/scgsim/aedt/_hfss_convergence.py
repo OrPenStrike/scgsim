@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .spec import HfssEigenmodeSpec, HfssSpec
+from .spec import HfssEigenmodeSpec, HfssEprSpec, HfssSpec
 from .util import file_sha256
 
 
@@ -44,7 +44,7 @@ def read_hfss_convergence(run_dir: Path, spec: HfssSpec) -> dict[str, Any]:
             "percent",
             spec.run_control.maximum_delta_frequency_percent,
         )
-        if isinstance(spec, HfssEigenmodeSpec)
+        if isinstance(spec, (HfssEigenmodeSpec, HfssEprSpec))
         else ("maximum_magnitude_delta_s", "ratio", spec.run_control.maximum_delta_s)
     )
     label = "Max Delta Freq. %" if unit == "percent" else "Max Mag. Delta S"

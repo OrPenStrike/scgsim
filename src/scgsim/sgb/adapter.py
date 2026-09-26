@@ -149,6 +149,7 @@ def build_gds_stack_geometry_input(
         "stack_file": str(stack_path),
         "selected_cell_name": cell.name,
         "cell_bounds_um": cell_bounds,
+        "source_dbu_um": float(library.precision) * 1e6,
     }
     combined_metadata["interface_intents_2d"] = _route_a_sheet_interfaces(
         entities,
