@@ -88,22 +88,26 @@ def _sheet_name(
             character if character.isascii() and character.isalnum() else "_"
             for character in raw
         ).strip("_")
-        return safe[:36] or "Unknown"
+        return safe or "Unknown"
 
-    fields = [
-        label({member[index] for member in ordered}) for index in range(5)
-    ]
+    owners = {member[0] for member in ordered}
+    owner = label(owners) if len(ordered) == 1 else (
+        f"Shared_{label(owners)}" if len(owners) == 1 else "Shared"
+    )
+    classification, side, margin = (
+        label({member[index] for member in ordered}) for index in (2, 3, 4)
+    )
     digest = canonical_sha256(
         {"geometry_sha256": geometry_sha256, "members": ordered, "parts": sorted(parts)}
     )[:12]
-    stem = (
-        f"EPR_{'Shared_' if len(ordered) > 1 else ''}"
-        f"Owner_{fields[0]}_Support_{fields[1]}_"
-        f"Class_{fields[2]}_Side_{fields[3]}_{fields[4]}_{digest}"
+    part_label = "" if not parts else "_" + "_".join(
+        f"Part{index:02d}" for index in sorted(parts)
     )
-    if parts:
-        stem += "_" + "_".join(f"Part{index:02d}" for index in sorted(parts))
-    return stem
+    tail = f"_{classification}_{side}_{margin}{part_label}_{digest}"
+    owner_budget = 60 - len("EPR_") - len(tail)
+    if owner_budget < 1:
+        raise ValueError("EPR analysis sheet semantic labels exceed AEDT's 60-character limit")
+    return f"EPR_{owner[:owner_budget].rstrip('_')}{tail}"
 
 
 def _base_sheet_plan(
@@ -116,9 +120,12 @@ def _base_sheet_plan(
         key = canonical_sha256(binding["geometry_ref"])
         keys[binding_id] = key
         by_geometry.setdefault(key, set()).add(_sheet_member(binding, "Unmasked"))
+    names = {key: _sheet_name(members, key, parts=set()) for key, members in by_geometry.items()}
+    if len(set(names.values())) != len(names):
+        raise RuntimeError("distinct EPR base sheet geometries share a native name")
     return {
         binding_id: {
-            "name": _sheet_name(by_geometry[key], key, parts=set()),
+            "name": names[key],
             "members": sorted(by_geometry[key]),
             "geometry_sha256": key,
         }
@@ -163,9 +170,15 @@ def plan_inset_sheet_names(
                 record["members"].add(_sheet_member(binding, margin_label))
                 if len(regions) > 1:
                     record["parts"].add(index + 1)
+    names = {
+        key: _sheet_name(record["members"], key, parts=record["parts"])
+        for key, record in grouped.items()
+    }
+    if len(set(names.values())) != len(names):
+        raise RuntimeError("distinct EPR inset sheet geometries share a native name")
     return {
         key: {
-            "name": _sheet_name(record["members"], key, parts=record["parts"]),
+            "name": names[key],
             "members": sorted(record["members"]),
             "geometry_sha256": key,
         }
