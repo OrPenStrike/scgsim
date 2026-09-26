@@ -1317,7 +1317,7 @@ def _polygon_sheet(app: Any, polygon: Mapping[str, Any], *, name: str, z_um: flo
     if value is False or value is None:
         raise RuntimeError(f"failed to create planar source polygon {name!r}")
     for index, ring in enumerate(polygon["holes"]):
-        hole_name = f"{name}__hole_{index}"
+        hole_name = _native_name("hole", name, index)
         hole = app.modeler.create_polyline(
             [[float(x), float(y), z_um] for x, y in ring],
             cover_surface=True,
@@ -1415,7 +1415,7 @@ def _analysis_surface_sheet(
     if sheet is False or sheet is None:
         raise RuntimeError(f"failed to create analysis surface {name!r}")
     for index, ring in enumerate(holes):
-        hole_name = f"{name}__hole_{index}"
+        hole_name = _native_name("hole", name, index)
         hole = app.modeler.create_polyline(
             ring,
             cover_surface=True,
