@@ -39,6 +39,14 @@ from .spec import REQUIRED_AEDT_VERSION, HfssEprAnalysisSpec, HfssEprSpec
 from .util import file_sha256, write_json
 
 
+_SURFACE_ANALYSIS_SCOPE = {
+    "included_field_sides": ["top", "bottom"],
+    "excluded_field_sides": ["sidewall"],
+    "excluded_sidewall_energy": "not_evaluated_not_zero",
+    "q2d_sidewall_correction": "not_applied",
+}
+
+
 @dataclass(frozen=True)
 class PreparedEprHfss:
     """Carrier for one mutable native application and detached preparation evidence."""
@@ -140,7 +148,7 @@ def prepared_epr_result(prepared: PreparedEprHfss) -> dict[str, Any]:
         raise RuntimeError("HFSS EPR project final preparation save failed")
     relative = prepared.project_path.relative_to(prepared.request.workspace).as_posix()
     digest = file_sha256(prepared.project_path)
-    return {
+    result = {
         "workflow_status": "native_preparation_only",
         "solver_invoked": False,
         "outputs": {relative: digest},
@@ -156,6 +164,9 @@ def prepared_epr_result(prepared: PreparedEprHfss) -> dict[str, Any]:
         "timings": detached_data(prepared.timings),
         "save": {"ok": True, "project_sha256": digest},
     }
+    if spec.epr_request is not None:
+        result["surface_analysis_scope"] = _SURFACE_ANALYSIS_SCOPE
+    return result
 
 
 def solve_and_export_epr(prepared: PreparedEprHfss) -> dict[str, Any]:
@@ -248,6 +259,11 @@ def solve_and_export_epr(prepared: PreparedEprHfss) -> dict[str, Any]:
         "setup": detached_data(prepared.setup),
         "expressions": detached_data(prepared.expressions),
         "cache": detached_data(prepared.cache),
+        **(
+            {"surface_analysis_scope": _SURFACE_ANALYSIS_SCOPE}
+            if spec.epr_request is not None
+            else {}
+        ),
         "timings": timings,
         "convergence": convergence,
         "result_readback": {
@@ -590,6 +606,7 @@ def analyze_saved_epr(
         provenance={
             "model_source_sha256": spec.geometry.model_sha256,
             "analysis_source_sha256": spec.geometry.source_sha256,
+            "surface_analysis_scope": _SURFACE_ANALYSIS_SCOPE,
             "saved_solution_content_sha256": spec.saved_solution.content_sha256,
             "saved_solution_identity": detached(spec.saved_solution.identity),
             "requested_modes": list(selected_modes),
@@ -897,6 +914,7 @@ def _adaptive_epr_result(
         provenance={
             "model_source_sha256": spec.geometry.model_sha256,
             "analysis_source_sha256": spec.geometry.source_sha256,
+            "surface_analysis_scope": _SURFACE_ANALYSIS_SCOPE,
             "solver_last_completed_pass": convergence["final_pass"],
             "requested_modes": list(selected_modes),
             "cache_status": cache["status"],

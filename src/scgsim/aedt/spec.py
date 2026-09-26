@@ -1009,6 +1009,14 @@ def _validate_epr_selection(spec: HfssEprSpec | HfssEprAnalysisSpec) -> None:
     request = spec.epr_request
     if request is None:
         return
+    if any(item.field_side == "sidewall" for item in spec.geometry.contributions) or any(
+        item["contribution"]["side"] == "sidewall"
+        for item in spec.geometry.surface_bindings
+    ):
+        raise ValueError(
+            "sidewall Surface-EPR is excluded; reprepare a horizontal-only "
+            "handoff before EPR execution"
+        )
     modes = (
         tuple(range(1, spec.run_control.num_modes + 1))
         if request.mode_indices is None

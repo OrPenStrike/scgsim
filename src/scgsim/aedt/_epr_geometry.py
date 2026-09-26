@@ -22,8 +22,6 @@ from scgsim.sgb import (
     validate_selected_route,
 )
 from scgsim.sgb.planning import (
-    _clean_loop,
-    _polygon_area,
     plan_surface_contribution_patches,
     verified_route_a_substrate_support,
 )
@@ -316,71 +314,7 @@ def _surface_mask_plane(geometry_ref: Mapping[str, Any]) -> dict[str, Any]:
             "exterior": _plain(outer),
             "holes": _plain(geometry_ref.get("hole_loops", ())),
         }
-    quad = geometry_ref.get("quad_points")
-    if isinstance(quad, Sequence) and not isinstance(quad, (str, bytes)):
-        points = tuple(tuple(float(value) for value in point) for point in quad)
-        if len(points) < 3 or any(len(point) != 3 for point in points):
-            raise ValueError("sidewall EPR surface requires at least three 3D points")
-        origin = points[0]
-        first = next(
-            (
-                tuple(points[index][axis] - origin[axis] for axis in range(3))
-                for index in range(1, len(points))
-                if points[index] != origin
-            ),
-            None,
-        )
-        if first is None:
-            raise ValueError("sidewall EPR surface has no nonzero edge")
-        norm = math.sqrt(sum(value * value for value in first))
-        u = tuple(value / norm for value in first)
-        second = next(
-            (
-                tuple(point[axis] - origin[axis] for axis in range(3))
-                for point in points[1:]
-                if math.sqrt(
-                    sum(
-                        (
-                            (point[axis] - origin[axis])
-                            - sum(
-                                (point[k] - origin[k]) * u[k] for k in range(3)
-                            )
-                            * u[axis]
-                        )
-                        ** 2
-                        for axis in range(3)
-                    )
-                )
-                > 1e-12
-            ),
-            None,
-        )
-        if second is None:
-            raise ValueError("sidewall EPR surface points are collinear")
-        projection = sum(second[index] * u[index] for index in range(3))
-        v_raw = tuple(second[index] - projection * u[index] for index in range(3))
-        v_norm = math.sqrt(sum(value * value for value in v_raw))
-        v = tuple(value / v_norm for value in v_raw)
-        local = []
-        for point in points:
-            delta = tuple(point[index] - origin[index] for index in range(3))
-            local_u = sum(delta[index] * u[index] for index in range(3))
-            local_v = sum(delta[index] * v[index] for index in range(3))
-            residual = tuple(
-                delta[index] - local_u * u[index] - local_v * v[index]
-                for index in range(3)
-            )
-            if math.sqrt(sum(value * value for value in residual)) > 1e-9:
-                raise ValueError("sidewall EPR surface points are not coplanar")
-            local.append([local_u, local_v])
-        return {
-            "origin_um": list(origin),
-            "u": list(u),
-            "v": list(v),
-            "exterior": local,
-            "holes": [],
-        }
-    raise ValueError("EPR surface has no supported local planar geometry")
+    raise ValueError("horizontal EPR surface requires a planar loop")
 
 
 def _plane_group_key(binding: Mapping[str, Any]) -> tuple[Any, ...]:
@@ -741,9 +675,6 @@ def bind_inset_surface_selections(
     planned = inset_plan[(str(binding["binding_id"]), margin_um)]
     regions = planned["regions"]
     dbu_um = float(binding["mask_support"]["source_dbu_um"])
-    # An oblique source quad need not lie on the quantized local DBU grid.
-    # Always author the planned contour, including an effective-zero margin.
-    reuse_original = False
     result: list[dict[str, Any]] = []
     for index, region in enumerate(regions):
         contour_sha256 = canonical_sha256(
@@ -755,11 +686,7 @@ def bind_inset_surface_selections(
                 "klayout_version": version("klayout"),
             }
         )
-        name = (
-            str(base_selection["selection_name"])
-            if reuse_original
-            else _native_name("epr_inset", contour_sha256)
-        )
+        name = _native_name("epr_inset", contour_sha256)
         sheet = app.modeler.get_object_from_name(name)
         if sheet is None:
             sheet, _ = _analysis_surface_sheet(
@@ -798,7 +725,7 @@ def bind_inset_surface_selections(
                     "effective_margin_um": planned["effective_margin_um"],
                     "klayout_version": version("klayout"),
                 },
-                "reused_source_sheet": reuse_original,
+                "reused_source_sheet": False,
                 **native,
             }
         )
@@ -851,6 +778,11 @@ def prepare_planar_geometry_input(
         raise TypeError("junctions must contain PlanarJunction records")
     if any(not isinstance(item, SurfaceEprSpec) for item in contribution_tuple):
         raise TypeError("contributions must contain SurfaceEprSpec records")
+    if any(item.field_side == "sidewall" for item in contribution_tuple):
+        raise ValueError(
+            "sidewall Surface-EPR is excluded; reprepare with horizontal "
+            "top/bottom contributions"
+        )
 
     polygons = {item.polygon_id for item in build_input.polygons}
     junction_region_ids = {
@@ -882,6 +814,8 @@ def prepare_planar_geometry_input(
         for record in ledger:
             if not isinstance(record, Mapping):
                 raise TypeError("surface contribution ledger entries must be mappings")
+            if record.get("side") == "sidewall":
+                continue
             surfaces.append(
                 {
                     "surface_id": surface.surface_id,
@@ -902,7 +836,7 @@ def prepare_planar_geometry_input(
         if (
             not isinstance(contribution_id, str)
             or classification not in {"MA", "MS", "SA", "MM"}
-            or side not in {"top", "bottom", "sidewall"}
+            or side not in {"top", "bottom"}
         ):
             continue
         record = catalog_by_id.setdefault(
@@ -1253,11 +1187,7 @@ def _analysis_surface_sheet(
             for ring in geometry_ref.get("hole_loops", ())
         ]
     else:
-        quad = geometry_ref.get("quad_points")
-        if not isinstance(quad, Sequence) or isinstance(quad, (str, bytes)):
-            raise ValueError("analysis surface requires a loop or sidewall quad")
-        points = [[float(value) for value in point] for point in quad]
-        holes = ()
+        raise ValueError("horizontal analysis surface requires a planar loop")
     if len(points) < 3 or any(
         len(point) != 3 or not all(math.isfinite(value) for value in point)
         for point in points
@@ -1531,121 +1461,6 @@ def _point_on_segment(
         <= point[1]
         <= max(start[1], end[1]) + tolerance
     )
-
-
-def _sidewall_field_normal(
-    binding: Mapping[str, Any], source: Mapping[str, Any]
-) -> tuple[float, float, float]:
-    """Orient a canonical SGB sidewall toward its selected field material.
-
-    A conductor exposes the exterior of its occupied region; an SA vacuum
-    domain exposes its interior. Ring winding changes the edge's left side,
-    not that physical material-side identity.
-    """
-
-    binding_id = str(binding["binding_id"])
-    hint = binding.get("normal_hint")
-    if hint is not None:
-        if (
-            not isinstance(hint, Sequence)
-            or isinstance(hint, (str, bytes))
-            or len(hint) != 3
-        ):
-            raise RuntimeError(f"sidewall {binding_id!r} normal hint is invalid")
-        components = tuple(float(value) for value in hint)
-        length = math.sqrt(sum(value * value for value in components))
-        if not math.isfinite(length) or length == 0.0:
-            raise RuntimeError(f"sidewall {binding_id!r} normal hint is invalid")
-        return tuple(value / length for value in components)
-
-    ref = binding.get("geometry_ref")
-    if not isinstance(ref, Mapping):
-        raise RuntimeError(f"sidewall {binding_id!r} lacks canonical geometry")
-    quad = ref.get("quad_points")
-    if (
-        not isinstance(quad, Sequence)
-        or isinstance(quad, (str, bytes))
-        or len(quad) != 4
-    ):
-        raise RuntimeError(f"sidewall {binding_id!r} lacks a canonical quad")
-    try:
-        points = tuple(tuple(float(value) for value in point) for point in quad)
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError(f"sidewall {binding_id!r} has an invalid quad") from exc
-    if (
-        any(
-            len(point) != 3 or not all(math.isfinite(value) for value in point)
-            for point in points
-        )
-        or points[0][:2] != points[3][:2]
-        or points[1][:2] != points[2][:2]
-        or points[0][2] != points[1][2]
-        or points[2][2] != points[3][2]
-        or points[2][2] <= points[0][2]
-        or points[0][:2] == points[1][:2]
-    ):
-        raise RuntimeError(f"sidewall {binding_id!r} has a noncanonical quad")
-
-    classification = binding["contribution"]["classification"]
-    from_id = ref.get("from_semantic_id")
-    if classification in {"MA", "MS"} and isinstance(from_id, str):
-        if binding["owner_semantic_id"] != from_id:
-            raise RuntimeError(f"sidewall {binding_id!r} conductor owner disagrees")
-        candidates = [
-            item for item in source["conductors"] if item["semantic_id"] == from_id
-        ]
-        field_inside_body = False
-    elif classification == "SA" and from_id is None:
-        domain_id = binding["effective_domain_id"]
-        candidates = [
-            item
-            for item in source["solution_regions"]
-            if item["semantic_id"] == domain_id and item["material_kind"] == "vacuum"
-        ]
-        field_inside_body = True
-    else:
-        raise RuntimeError(
-            f"sidewall {binding_id!r} lacks canonical material-side identity"
-        )
-    if len(candidates) != 1:
-        raise RuntimeError(f"sidewall {binding_id!r} source body is missing or ambiguous")
-
-    geometry = candidates[0]["geometry"]
-    role = ref.get("sidewall_ring_role")
-    if role == "outer":
-        ring = geometry["outer_loop"]
-    elif (
-        isinstance(role, str)
-        and role.startswith("hole_")
-        and role[5:].isdigit()
-    ):
-        index = int(role[5:])
-        holes = geometry.get("hole_loops", ())
-        if index >= len(holes):
-            raise RuntimeError(f"sidewall {binding_id!r} source hole is missing")
-        ring = holes[index]
-    else:
-        raise RuntimeError(f"sidewall {binding_id!r} ring role is invalid")
-    ring = _clean_loop(ring)
-    edge_index = ref.get("sidewall_edge_index")
-    if isinstance(edge_index, bool) or not isinstance(edge_index, int):
-        raise RuntimeError(f"sidewall {binding_id!r} edge index is invalid")
-    edges = tuple(zip(ring, (*ring[1:], ring[0])))
-    matched = [
-        index
-        for index, (start, end) in enumerate(edges)
-        if _point_on_segment(points[0][:2], start, end)
-        and _point_on_segment(points[1][:2], start, end)
-    ]
-    if matched != [edge_index]:
-        raise RuntimeError(f"sidewall {binding_id!r} source edge is missing or ambiguous")
-    start, end = edges[edge_index]
-    dx, dy = end[0] - start[0], end[1] - start[1]
-    length = math.hypot(dx, dy)
-    field_inside_ring = field_inside_body == (role == "outer")
-    enclosed_side = 1.0 if _polygon_area(ring) > 0.0 else -1.0
-    side = enclosed_side if field_inside_ring else -enclosed_side
-    return (-dy / length * side, dx / length * side, 0.0)
 
 
 def _assign_closed_enclosure(
@@ -1927,8 +1742,6 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
             desired_normal = (0.0, 0.0, 1.0)
         elif field_side == "bottom":
             desired_normal = (0.0, 0.0, -1.0)
-        elif field_side == "sidewall":
-            desired_normal = _sidewall_field_normal(binding, source)
         else:
             raise RuntimeError(f"analysis surface {name!r} has unknown field side")
         orientation = sum(
@@ -2030,8 +1843,6 @@ def bind_saved_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -> di
             desired = (0.0, 0.0, 1.0)
         elif side == "bottom":
             desired = (0.0, 0.0, -1.0)
-        elif side == "sidewall":
-            desired = _sidewall_field_normal(binding, source)
         else:
             raise RuntimeError(f"saved analysis surface {name!r} has unknown side")
         orientation = sum(a * b for a, b in zip(native_normal, desired))

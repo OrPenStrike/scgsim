@@ -248,6 +248,16 @@ geometry unites or subtractions are not. Curved or tilted geometry,
 anisotropic or dispersive materials, open-radiation models, Driven EPR, and
 multi-sheet junctions remain excluded.
 
+The current Surface-EPR analysis scope is horizontal top/bottom MA, MS, and
+SA patches only. Source and native solver CAD still include conductor and
+substrate sidewalls; no sidewall analysis sheets, integrals, or cache items are
+created. Omitted sidewall film energy is not a measured zero and is not
+included in reported surface participation. A separate Q2D sidewall
+correction is outside this AEDT workflow. New handoffs reject explicit
+sidewall Surface-EPR requests; there is no sidewall-selection switch or
+legacy authoring path. Historical result artifacts retain their
+original scope and are read without rewriting their values.
+
 Each required field quantity is evaluated in an explicitly bound setup,
 `LastAdaptive` solution, mode, frequency, phase, and excitation context. That
 context is read back with the value: a saved expression name or expression
@@ -317,9 +327,9 @@ The inputs below are the real `GeometryBuildInput` and prepared-stack mapping
 from the existing in-tree SGB workflow, including the selected route and its
 material, vacuum-region, and (for Route A) thin-film provenance. See
 [Geometry and SGB Route A/B](../geometry-sgb.qmd#shared-source-facts-for-aedt).
-The first call requests no analysis contributions and exposes the public
-`contribution_catalog`; the selected contribution and source polygon are then
-checked against that catalogue before constructing `SurfaceEprSpec`. Supply
+The first call requests no analysis contributions and exposes the horizontal
+top/bottom `contribution_catalog`; the selected contribution and source polygon
+are then checked against that catalogue before constructing `SurfaceEprSpec`. Supply
 the existing Route A profile (`substrate_face` or `metal_gap_equivalent`)
 explicitly as `route_a_profile`; no profile is defaulted.
 
@@ -512,7 +522,9 @@ provenance; it is one measured aggregate, not a set of inferred per-face
 values. Individual native inset-sheet expressions remain the source of the sums,
 including their field-side selection. Historical per-binding raw records remain
 readable, but new grouped records never expand an aggregate into fictitious
-patch integrals. The same grouping is used for saved-field analysis. This
+patch integrals. New preparation and result provenance identify the
+horizontal-only analysis scope; absent sidewall rows do not encode zero
+energy. The same grouping is used for saved-field analysis. This
 reduces cache items, not a demonstrated field-solve or calculator runtime.
 
 Physical patch support is derived from the full source contribution topology
@@ -551,8 +563,9 @@ still intersects owner attribution. KLayout retains exterior and hole contours
 directly; split components are separate non-model sheets and empty members
 give a geometric zero. Circular corners are polygonal approximations; the
 method, DBU, KLayout version, and actual contours are retained as evidence.
-Coplanar owner seams are removed, while true top/sidewall creases remain
-boundaries of their respective physical faces. Margins are alternative
+Coplanar owner seams are removed, while physical top/bottom perimeter edges
+remain mask boundaries; the adjoining sidewall faces are not integrated.
+Margins are alternative
 evaluations rather than additive contributions, and MA/MS on one sheet remain
 distinct. Neither this discretization nor unsolved expression setup proves
 quadrature or EPR numerical accuracy.
