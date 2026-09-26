@@ -276,6 +276,14 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
                 raise RuntimeError(
                     "body-first Eigenmode output manifest is not canonical"
                 )
+            _verified(root, "results/epr/adaptive-convergence.prop", outputs)
+            if receipt.get("convergence") != read_hfss_convergence(
+                root,
+                spec,
+                historical_profile=_eigenmode_convergence_source(receipt)
+                == "profile",
+            ):
+                raise RuntimeError("body-first Eigenmode convergence evidence is invalid")
             return ResolvedRun(
                 "eigenmode",
                 project,
@@ -290,8 +298,12 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
             "results/eigenmode/eigenmodes.csv",
             "results/eigenmode/eigenmodes.eig",
         }
+        if _eigenmode_convergence_source(receipt) == "export_convergence":
+            expected.add("results/eigenmode/adaptive-convergence.prop")
         if set(outputs) != expected:
             raise RuntimeError("Eigenmode output manifest is not canonical")
+        if "results/eigenmode/adaptive-convergence.prop" in expected:
+            _verified(root, "results/eigenmode/adaptive-convergence.prop", outputs)
         return ResolvedRun(
             "eigenmode",
             project,
@@ -820,8 +832,27 @@ def _validate_hfss_setup_and_convergence(
         }
     if receipt.get("setup") != {"name": spec.run_control.setup_name, "native": native}:
         raise RuntimeError("HFSS native setup evidence is invalid")
-    if receipt.get("convergence") != read_hfss_convergence(root, spec):
+    historical_profile = (
+        _eigenmode_convergence_source(receipt) == "profile"
+        if isinstance(spec, HfssEigenmodeSpec)
+        else False
+    )
+    if receipt.get("convergence") != read_hfss_convergence(
+        root, spec, historical_profile=historical_profile
+    ):
         raise RuntimeError("HFSS native convergence evidence is invalid")
+
+
+def _eigenmode_convergence_source(receipt: dict[str, Any]) -> str:
+    convergence = receipt.get("convergence")
+    sources = convergence.get("sources") if isinstance(convergence, dict) else None
+    if not isinstance(sources, dict):
+        raise RuntimeError("Eigenmode convergence sources are invalid")
+    if set(sources) == {"export_convergence"}:
+        return "export_convergence"
+    if set(sources) == {"asol", "profile"}:
+        return "profile"
+    raise RuntimeError("Eigenmode convergence sources are not canonical")
 
 
 def _validate_q2d_readback(root: Path, receipt: dict[str, Any], spec: Q2dSpec) -> None:

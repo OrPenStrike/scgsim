@@ -518,6 +518,13 @@ last completed solver pass comes from independent solver/convergence evidence
 and is not inferred from the largest cached pass. Adaptive history and a
 separately reopened `LastAdaptive` saved-field evaluation are different
 evidence surfaces and never substitute for each other.
+For Eigenmode, the exact-setup native `ExportConvergence` property file supplies
+the pass, delta-frequency, status, and solved-element count. Its solved-element
+count is not relabeled as a tetrahedron count from a solver profile. A
+successful solve is saved before fallible result exports, so an export failure
+does not discard the native solved project.
+Historical profile-backed receipts remain bound to their recorded profile
+sources; they are not reinterpreted as new property-file exports.
 
 Native execution remains bound to one explicitly owned Desktop PID, endpoint,
 project, design, and setup. Preparation, solve, cache inspection, project

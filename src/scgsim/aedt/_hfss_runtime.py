@@ -127,10 +127,12 @@ def solve_hfss(
         raise RuntimeError(
             f"HFSS failed to analyze setup {spec.run_control.setup_name!r}"
         )
+    if not prepared.app.save_project() or not prepared.project_path.is_file():
+        raise RuntimeError("HFSS solved project save failed")
 
 
 def export_hfss(prepared: PreparedHfss) -> dict[str, Any]:
-    """Export, perform the final save, and bind convergence readback."""
+    """Export the saved solve and bind convergence readback."""
     run_dir = prepared.request.workspace
     spec = prepared.request.parse()
     if not isinstance(spec, HfssSpec):
@@ -140,6 +142,22 @@ def export_hfss(prepared: PreparedHfss) -> dict[str, Any]:
     )
     outputs = detached_data(outputs)
     result_readback = detached_data(result_readback)
+    if isinstance(spec, HfssEigenmodeSpec):
+        convergence_path = run_dir / "results/eigenmode/adaptive-convergence.prop"
+        returned = prepared.app.export_convergence(
+            spec.run_control.setup_name,
+            variations="",
+            output_file=str(convergence_path),
+        )
+        if (
+            not returned
+            or Path(returned).resolve() != convergence_path.resolve()
+            or not convergence_path.is_file()
+        ):
+            raise RuntimeError("HFSS Eigenmode adaptive convergence export is missing")
+        outputs[convergence_path.relative_to(run_dir).as_posix()] = file_sha256(
+            convergence_path
+        )
     saved = bool(prepared.app.save_project())
     if not saved or not prepared.project_path.is_file():
         raise RuntimeError("HFSS project was not saved")

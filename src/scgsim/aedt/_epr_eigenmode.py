@@ -212,6 +212,10 @@ def solve_and_export_epr(
         raise RuntimeError(
             f"HFSS failed to analyze setup {spec.run_control.setup_name!r}"
         )
+    started = time.perf_counter()
+    if not prepared.app.save_project() or not prepared.project_path.is_file():
+        raise RuntimeError("HFSS EPR solved project save failed")
+    timings["post_solve_save_seconds"] = round(time.perf_counter() - started, 6)
     run_dir = prepared.request.workspace
     output_dir = run_dir / "results/epr"
     output_dir.mkdir(parents=True, exist_ok=True)
