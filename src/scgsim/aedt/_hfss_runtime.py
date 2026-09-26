@@ -16,6 +16,7 @@ from typing import Any
 from ._hfss_convergence import read_hfss_convergence
 from ._native_common import (
     BoundAedtRequest,
+    analyze_with_resources,
     create_region as _create_region,
     detached_data,
     import_and_bind as _import_and_bind,
@@ -24,6 +25,7 @@ from ._native_common import (
     saved_setup_properties as _saved_setup_properties,
 )
 from .spec import (
+    AedtResources,
     POINT_COUNT,
     REQUIRED_AEDT_VERSION,
     SURFACE_APPROXIMATION_LEVEL,
@@ -55,10 +57,14 @@ class PreparedHfss:
             object.__setattr__(self, name, detached_data(getattr(self, name)))
 
 
-def run_hfss(Hfss: Any, run_dir: Path, spec: HfssSpec) -> dict[str, Any]:
+def run_hfss(
+    Hfss: Any, run_dir: Path, spec: HfssSpec,
+    resources: AedtResources | None = None,
+    resource_evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Use the same preparation stage as diagnostics, then solve and export."""
     prepared = prepare_hfss(Hfss, run_dir, spec)
-    solve_hfss(prepared)
+    solve_hfss(prepared, resources, resource_evidence)
     return export_hfss(prepared)
 
 
@@ -106,12 +112,18 @@ def prepare_hfss(Hfss: Any, run_dir: Path, spec: HfssSpec) -> PreparedHfss:
     )
 
 
-def solve_hfss(prepared: PreparedHfss) -> None:
+def solve_hfss(
+    prepared: PreparedHfss, resources: AedtResources | None = None,
+    resource_evidence: dict[str, Any] | None = None,
+) -> None:
     """Run the one explicit HFSS setup solve."""
     spec = prepared.request.parse()
     if not isinstance(spec, HfssSpec):
         raise TypeError("bound HFSS request did not retain an HFSS spec")
-    if not prepared.app.analyze_setup(name=spec.run_control.setup_name, blocking=True):
+    if not analyze_with_resources(
+        prepared.app, spec.run_control.setup_name, prepared.request.workspace,
+        resources, resource_evidence if resource_evidence is not None else {},
+    ):
         raise RuntimeError(
             f"HFSS failed to analyze setup {spec.run_control.setup_name!r}"
         )

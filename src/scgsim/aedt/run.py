@@ -32,6 +32,7 @@ from ._runtime_provenance import (
     validate_runtime_source,
 )
 from .spec import (
+    AedtResources,
     LOCKED_PYAEDT,
     REQUIRED_AEDT_VERSION,
     AedtSpec,
@@ -72,6 +73,12 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         help="Override pure EPR inset geometry workers before AEDT launch",
     )
+    parser.add_argument("--cores", type=int, help="Override local solve core count")
+    parser.add_argument(
+        "--ram-limit-percent",
+        type=int,
+        help="Override local solve RAM Limit Percentage",
+    )
     args = parser.parse_args(argv)
     metadata_path = Path(args.handoff).resolve()
     if not metadata_path.is_file():
@@ -85,6 +92,8 @@ def main(argv: list[str] | None = None) -> int:
         prepare_only=args.prepare_only,
         analyze_epr=args.analyze_epr,
         geometry_workers=args.geometry_workers,
+        cores=args.cores,
+        ram_limit_percent=args.ram_limit_percent,
     )
 
 
@@ -94,6 +103,8 @@ def _execute(
     prepare_only: bool = False,
     analyze_epr: bool = False,
     geometry_workers: int | None = None,
+    cores: int | None = None,
+    ram_limit_percent: int | None = None,
 ) -> int:
     run_dir = metadata_path.parent.parent
     os.chdir(run_dir)
@@ -107,6 +118,7 @@ def _execute(
         raise RuntimeError("one-shot handoff is not in not_run state")
     spec_path = run_dir / files["spec"]
     spec = parse_aedt_spec(_object(read_json(spec_path), "spec"), base_dir=run_dir)
+    resources = _execution_resources(metadata, spec, cores, ram_limit_percent)
     if (
         not isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec, Q2dSpec))
         and spec.gds_path.resolve() != (run_dir / "geometry/design.gds").resolve()
@@ -149,6 +161,19 @@ def _execute(
             "release": {"ok": False},
         }
     )
+    receipt["resources"] = {
+        "requested": resources.to_payload() if resources else None,
+        "request_source": (
+            "cli_override"
+            if cores is not None or ram_limit_percent is not None
+            else "handoff" if resources is not None else "omitted"
+        ),
+        "status": (
+            "not_used_prepare_only"
+            if prepare_only
+            else "not_applicable_saved_analysis" if analyze_epr else "not_started"
+        ),
+    }
     write_json(receipt_path, receipt)
 
     desktop: Any | None = None
@@ -207,19 +232,31 @@ def _execute(
                 status = "native_preparation_only"
             else:
                 epr_solver_attempted = True
-                result = solve_and_export_epr(prepared)
+                result = solve_and_export_epr(prepared, resources, receipt["resources"])
                 status = "completed"
         elif isinstance(spec, Q3dSpec):
             result = _solve_q3d(
-                owned_application_constructor(Q3d, desktop), run_dir, spec
+                owned_application_constructor(Q3d, desktop),
+                run_dir,
+                spec,
+                resources,
+                receipt["resources"],
             )
         elif isinstance(spec, Q2dSpec):
             result = _solve_q2d(
-                owned_application_constructor(Q2d, desktop), run_dir, spec
+                owned_application_constructor(Q2d, desktop),
+                run_dir,
+                spec,
+                resources,
+                receipt["resources"],
             )
         else:
             result = _solve(
-                owned_application_constructor(Hfss, desktop), run_dir, spec
+                owned_application_constructor(Hfss, desktop),
+                run_dir,
+                spec,
+                resources,
+                receipt["resources"],
             )
         if not isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec)):
             status = "completed"
@@ -353,6 +390,37 @@ def _execute(
         "epr_analysis_completed",
         "native_preparation_only",
     } else 1
+
+
+def _execution_resources(
+    metadata: dict[str, Any],
+    spec: AedtSpec,
+    cores: int | None,
+    ram_limit_percent: int | None,
+) -> AedtResources | None:
+    execution = _object(metadata.get("execution", {}), "handoff execution")
+    prepared = execution.get("resources")
+    if prepared is not None:
+        prepared = _object(prepared, "prepared resources")
+        if set(prepared) != {"cores", "ram_limit_percent"}:
+            raise ValueError("prepared resource fields are not canonical")
+    if cores is not None or ram_limit_percent is not None:
+        if isinstance(spec, HfssEprAnalysisSpec):
+            raise ValueError("saved-field analysis does not run a solve")
+        if prepared is None and (cores is None or ram_limit_percent is None):
+            raise ValueError(
+                "both resource overrides are required without prepared resources"
+            )
+        prepared = {
+            "cores": cores if cores is not None else prepared["cores"],
+            "ram_limit_percent": (
+                ram_limit_percent if ram_limit_percent is not None
+                else prepared["ram_limit_percent"]
+            ),
+        }
+    if isinstance(spec, HfssEprAnalysisSpec) and prepared is not None:
+        raise ValueError("saved-field analysis cannot request solve resources")
+    return AedtResources(**prepared) if prepared is not None else None
 
 
 def _canonical_metadata_files(

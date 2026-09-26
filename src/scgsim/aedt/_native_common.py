@@ -5,7 +5,11 @@ This module never imports a family or owns a Desktop transaction.
 
 from __future__ import annotations
 
+import hashlib
 import math
+import re
+import sys
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
@@ -13,7 +17,122 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-from .spec import AedtSpec, LOCKED_PYAEDT, HfssSpec, Q3dSpec, parse_aedt_spec
+from .spec import (
+    AedtResources,
+    AedtSpec,
+    HfssSpec,
+    LOCKED_PYAEDT,
+    Q3dSpec,
+    parse_aedt_spec,
+)
+from .util import file_sha256
+
+
+def analyze_with_resources(
+    app: Any,
+    setup_name: str,
+    run_dir: Path,
+    resources: AedtResources | None,
+    evidence: dict[str, Any],
+) -> bool:
+    """Select one run-local DSO configuration only for the owned blocking solve."""
+    evidence["requested"] = resources.to_payload() if resources else None
+    if resources is None:
+        evidence["status"] = "aedt_active_configuration_unchanged"
+        solve_started = time.perf_counter()
+        try:
+            return bool(app.analyze_setup(name=setup_name, blocking=True))
+        finally:
+            evidence["solve_seconds"] = round(time.perf_counter() - solve_started, 6)
+
+    desktop = app.desktop_class.odesktop
+    design_type = app.design_type
+    if design_type not in {"HFSS", "Q3D Extractor", "2D Extractor"}:
+        raise RuntimeError(f"unsupported local AEDT resource design type: {design_type!r}")
+    key = f"Desktop/ActiveDSOConfigurations/{design_type}"
+    previous = desktop.GetRegistryString(key)
+    if not isinstance(previous, str):
+        raise RuntimeError("previous AEDT active DSO configuration is unavailable")
+    acf_started = time.perf_counter()
+    digest = hashlib.sha256(str(run_dir.resolve()).encode()).hexdigest()[:16]
+    config_name = f"scgsim_{digest}"
+    template = Path(app.pyaedt_dir) / "misc/pyaedt_local_config.acf"
+    content = template.read_text(encoding="utf-8")
+    replacements = {
+        "ConfigName": f"'{config_name}'",
+        "DesignType": f"'{design_type}'",
+        "NumCores": str(resources.cores),
+        "NumEngines": "1",
+        "NumGPUs": "0",
+        "RAMPercent": str(resources.ram_limit_percent),
+        "UseAutoSettings": "false",
+    }
+    for name, value in replacements.items():
+        pattern = rf"(?m)^([ \t]*{name}=)[^\r\n]*$"
+        content, count = re.subn(pattern, lambda match: match.group(1) + value, content)
+        if count != 1:
+            raise RuntimeError(f"AEDT ACF template has {count} {name} entries")
+    acf_path = run_dir / "metadata" / f"{config_name}.acf"
+    acf_path.write_text(content, encoding="utf-8")
+    evidence.update(
+        {
+            "status": "acf_written",
+            "acf": acf_path.relative_to(run_dir).as_posix(),
+            "acf_sha256": file_sha256(acf_path),
+            "design_type": design_type,
+            "previous_active_configuration": previous,
+            "acf_generation_seconds": round(time.perf_counter() - acf_started, 6),
+        }
+    )
+    started = time.perf_counter()
+    load_attempted = False
+    try:
+        load_attempted = True
+        if app.set_hpc_from_file(acf_file=str(acf_path)) is not True:
+            raise RuntimeError("AEDT rejected the run-local ACF")
+        observed = desktop.GetRegistryString(key)
+        if observed != config_name:
+            raise RuntimeError(
+                f"AEDT active DSO configuration mismatch: {observed!r}"
+            )
+        evidence["status"] = "configuration_selected"
+        evidence["observed_active_configuration"] = observed
+        evidence["selected_settings"] = {
+            **resources.to_payload(),
+            "tasks": 1,
+            "gpus": 0,
+            "use_auto_settings": False,
+        }
+        evidence["settings_evidence"] = "generated_acf_and_active_configuration_name"
+        evidence["activation_seconds"] = round(time.perf_counter() - started, 6)
+        solve_started = time.perf_counter()
+        try:
+            solved = app.analyze_setup(name=setup_name, blocking=True)
+        finally:
+            evidence["solve_seconds"] = round(time.perf_counter() - solve_started, 6)
+        evidence["analyze_returned"] = solved is True
+        if solved is not True:
+            raise RuntimeError(f"AEDT setup {setup_name!r} analysis returned false")
+        return True
+    finally:
+        # Preserve a solve/activation error while still recording restoration failure.
+        original_failure = sys.exc_info()[0] is not None
+        restore_started = time.perf_counter()
+        if load_attempted:
+            try:
+                desktop.SetRegistryString(key, previous)
+                if desktop.GetRegistryString(key) != previous:
+                    raise RuntimeError("AEDT active DSO configuration was not restored")
+                evidence["restored_previous_configuration"] = True
+            except Exception as exc:
+                evidence["restored_previous_configuration"] = False
+                evidence["restoration_error"] = f"{type(exc).__name__}: {exc}"
+                evidence["restoration_seconds"] = round(
+                    time.perf_counter() - restore_started, 6
+                )
+                if not original_failure:
+                    raise RuntimeError("AEDT active DSO configuration restoration failed") from exc
+        evidence["restoration_seconds"] = round(time.perf_counter() - restore_started, 6)
 
 
 def _positive_identity(value: Any, label: str) -> int:

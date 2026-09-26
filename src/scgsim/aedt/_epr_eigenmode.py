@@ -33,11 +33,12 @@ from ._hfss_convergence import read_hfss_convergence
 from ._hfss_runtime import _export_eigenmode
 from ._native_common import (
     BoundAedtRequest,
+    analyze_with_resources,
     detached_data,
     pyaedt_version,
     saved_setup_properties,
 )
-from .spec import REQUIRED_AEDT_VERSION, HfssEprAnalysisSpec, HfssEprSpec
+from .spec import AedtResources, REQUIRED_AEDT_VERSION, HfssEprAnalysisSpec, HfssEprSpec
 from .util import file_sha256, write_json
 
 
@@ -190,7 +191,11 @@ def prepared_epr_result(prepared: PreparedEprHfss) -> dict[str, Any]:
     return result
 
 
-def solve_and_export_epr(prepared: PreparedEprHfss) -> dict[str, Any]:
+def solve_and_export_epr(
+    prepared: PreparedEprHfss,
+    resources: AedtResources | None = None,
+    resource_evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Run the explicit setup once and export native final/history evidence."""
 
     spec = prepared.request.parse()
@@ -198,13 +203,9 @@ def solve_and_export_epr(prepared: PreparedEprHfss) -> dict[str, Any]:
         raise TypeError("body-first solve/export requires HfssEprSpec")
     timings = detached_data(prepared.timings)
     started = time.perf_counter()
-    solved = prepared.app.analyze_setup(
-        name=spec.run_control.setup_name,
-        cores=2,
-        tasks=1,
-        gpus=0,
-        use_auto_settings=False,
-        blocking=True,
+    solved = analyze_with_resources(
+        prepared.app, spec.run_control.setup_name, prepared.request.workspace,
+        resources, resource_evidence if resource_evidence is not None else {},
     )
     timings["solve_seconds"] = round(time.perf_counter() - started, 6)
     if not solved:

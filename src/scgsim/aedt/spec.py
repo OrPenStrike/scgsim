@@ -26,6 +26,27 @@ POINT_COUNT = 20_000
 SURFACE_APPROXIMATION_LEVEL = 9
 
 
+@dataclass(frozen=True)
+class AedtResources:
+    """Explicit local AEDT solve resources, independent of model geometry."""
+
+    cores: int
+    ram_limit_percent: int
+
+    def __post_init__(self) -> None:
+        if isinstance(self.cores, bool) or not isinstance(self.cores, int) or self.cores <= 0:
+            raise ValueError("cores must be a positive integer")
+        if (
+            isinstance(self.ram_limit_percent, bool)
+            or not isinstance(self.ram_limit_percent, int)
+            or not 1 <= self.ram_limit_percent <= 100
+        ):
+            raise ValueError("ram_limit_percent must be an integer from 1 to 100")
+
+    def to_payload(self) -> dict[str, int]:
+        return {"cores": self.cores, "ram_limit_percent": self.ram_limit_percent}
+
+
 def _text(value: Any, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field} must be non-empty text")

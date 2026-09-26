@@ -27,6 +27,7 @@ from .spec import (
     OFFICIAL_PYAEDT_SOURCE_URL,
     REQUIRED_AEDT_VERSION,
     AedtSpec,
+    AedtResources,
     EigenmodeRunControl,
     HfssEprAnalysisSpec,
     HfssEprSpec,
@@ -48,8 +49,12 @@ class HandoffPlan:
     archive_path: Path
 
 
-def prepare_handoff(*, spec: AedtSpec, output_dir: str | Path) -> HandoffPlan:
+def prepare_handoff(
+    *, spec: AedtSpec, output_dir: str | Path, resources: AedtResources | None = None
+) -> HandoffPlan:
     """Bind every required input into a new portable run directory."""
+    if resources is not None and not isinstance(resources, AedtResources):
+        raise TypeError("resources must be AedtResources or None")
     source_gds: Path | None = None
     preflight: dict[str, int | set[tuple[int, int]]] | None = None
     if not isinstance(spec, Q2dSpec):
@@ -106,6 +111,7 @@ def prepare_handoff(*, spec: AedtSpec, output_dir: str | Path) -> HandoffPlan:
         "materials": payload["materials"],
         "vacuum_material_id": payload["vacuum_material_id"],
         "run_control": payload["run_control"],
+        "execution": {"resources": resources.to_payload() if resources else None},
         "pyaedt": payload["pyaedt"],
         "aedt": payload["aedt"],
         "files": files,
@@ -197,6 +203,7 @@ def prepare_hfss_eigenmode_from_geometry(
     output_dir: str | Path,
     epr_request: EprAnalysisRequest | None = None,
     geometry_workers: int | None = None,
+    resources: AedtResources | None = None,
 ) -> HandoffPlan:
     """Prepare one portable body-first Eigenmode handoff without GDS."""
 
@@ -208,6 +215,8 @@ def prepare_hfss_eigenmode_from_geometry(
         epr_request=epr_request,
     )
     validate_geometry_workers(geometry_workers)
+    if resources is not None and not isinstance(resources, AedtResources):
+        raise TypeError("resources must be AedtResources or None")
     run_dir = Path(output_dir).expanduser().resolve()
     if run_dir.exists():
         raise FileExistsError(
@@ -251,7 +260,10 @@ def prepare_hfss_eigenmode_from_geometry(
         "materials": materials,
         "vacuum_material_id": vacuum_ids[0],
         "run_control": payload["run_control"],
-        "execution": {"geometry_workers": geometry_workers},
+        "execution": {
+            "geometry_workers": geometry_workers,
+            "resources": resources.to_payload() if resources else None,
+        },
         "pyaedt": payload["pyaedt"],
         "aedt": payload["aedt"],
         "files": files,

@@ -28,6 +28,7 @@ from .handoff import (
 )
 from .resolve import ResolvedRun, resolve_results
 from .spec import (
+    AedtResources,
     AedtSpec,
     EigenmodeRunControl,
     FrequencySweepSpec,
@@ -54,6 +55,7 @@ from .spec import (
 )
 
 __all__ = [
+    "AedtResources",
     "AedtSpec",
     "EigenmodeRunControl",
     "FrequencySweepSpec",

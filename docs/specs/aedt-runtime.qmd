@@ -355,6 +355,7 @@ from pathlib import Path
 from typing import Any
 
 from scgsim.aedt import (
+    AedtResources,
     EprAnalysisRequest,
     EigenmodeRunControl,
     HandoffPlan,
@@ -379,6 +380,7 @@ def prepare_surface_epr_handoff(
     project_name: str,
     design_name: str,
     run_control: EigenmodeRunControl,
+    resources: AedtResources | None,
     mode_indices: tuple[int, ...],
     output_dir: Path,
 ) -> tuple[PreparedPlanarGeometry, EprAnalysisRequest, HandoffPlan]:
@@ -434,6 +436,7 @@ def prepare_surface_epr_handoff(
         run_control=run_control,
         output_dir=output_dir,  # must be a new, unused directory
         epr_request=request,
+        resources=resources,
     )
     print("handoff:", handoff.run_dir)
     print("script:", handoff.script_path)
@@ -453,6 +456,13 @@ prepared model but does not solve or produce field integrals. Preparation
 consumes that handoff: its receipt is no longer `not_run`, so a later solve
 requires a newly prepared handoff in a different, unused `output_dir`. No-EPR
 Eigenmode handoffs omit the request and retain their separate one-shot path.
+For a local solve, a Notebook can pass, for example,
+`AedtResources(cores=60, ram_limit_percent=88)` as `resources`; a
+preparation-only handoff records but does not activate it. The ordinary
+`prepare_handoff(spec=..., output_dir=..., resources=...)` entry point accepts
+the same value. At execution, `--cores` and `--ram-limit-percent` may override
+prepared values individually; when no value was prepared, both overrides are
+required. Saved-field `analyze_epr()` has no solve resources.
 
 After a completed saved-field run, `resolve_saved_solution()` verifies the
 sealed project and complete result directory. `analyze_epr()` operates on a
@@ -512,9 +522,23 @@ evidence surfaces and never substitute for each other.
 Native execution remains bound to one explicitly owned Desktop PID, endpoint,
 project, design, and setup. Preparation, solve, cache inspection, project
 save/reopen, and result analysis retain that binding and record release or
-bounded cleanup separately. Authorized EPR solves use two cores, one task, zero
-GPUs, and disabled automatic HPC selection, with the applied settings read back
-before dispatch. A solve exception or false return remains the primary failure;
+bounded cleanup separately. Notebook authors may supply one `AedtResources`
+value (`cores`, `ram_limit_percent`) when preparing an ordinary HFSS, Eigenmode,
+Q3D, Q2D, or EPR solve handoff. These are local solve-execution settings, not
+physical model identity or inset `geometry_workers`. An explicit value creates
+a run-specific AEDT ACF with one task, zero GPUs, disabled automatic HPC
+selection, and the requested core count and RAM percentage. Execution loads
+and verifies that configuration before the designated setup solve and restores
+the prior active design-type configuration afterward. The available native
+readback confirms the selected configuration name; the requested numeric
+settings are evidenced by the generated ACF, not independently read back as
+effective solver limits. The ACF is an AEDT
+Desktop/user configuration, not a saved project or setup property; its RAM
+percentage is not a hard byte cap. The handoff and final receipt distinguish
+requested settings, generated ACF, observed activation, restoration, and
+failure. Without explicit resources SCGSim does not override AEDT's active
+configuration; this supersedes the earlier implicit two-core EPR override.
+A solve exception or false return remains the primary failure;
 SCGSim releases the owned Desktop without automatically saving or exporting a
 partial result. Partial cache or saved records produced by an otherwise
 successful run remain reportable evidence, but cannot be relabelled as complete
