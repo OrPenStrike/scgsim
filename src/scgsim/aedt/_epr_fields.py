@@ -407,7 +407,8 @@ def author_named_expression(
         if authored is False or not isinstance(authored, str):
             raise RuntimeError(f"HFSS expression authoring failed: {name!r}")
         source = Path(authored)
-        retained.write_bytes(source.read_bytes())
+        definition_bytes = source.read_bytes()
+        retained.write_bytes(definition_bytes)
         calculator.ofieldsreporter.LoadNamedExpressions(str(source), "Fields", [name])
     else:
         if (
@@ -438,18 +439,17 @@ def author_named_expression(
         reporter.CalcOp("SurfaceValue")
         reporter.CalcOp("Integrate")
         reporter.AddNamedExpression(name, "Fields")
-        if not calculator.is_expression_defined(name):
-            raise RuntimeError(f"HFSS adjacent expression was not defined: {name!r}")
         reporter.SaveNamedExpressions(str(retained), [name], True)
         reporter.CalcStack("clear")
         if not retained.is_file() or retained.stat().st_size == 0:
             raise RuntimeError(f"HFSS adjacent expression was not saved: {name!r}")
+        definition_bytes = retained.read_bytes()
     if not calculator.is_expression_defined(name):
         raise RuntimeError(f"HFSS expression was not defined: {name!r}")
     return {
         "name": name,
         "identity": identity,
-        "definition_sha256": hashlib.sha256(retained.read_bytes()).hexdigest(),
+        "definition_sha256": hashlib.sha256(definition_bytes).hexdigest(),
         "definition_status": "authored_and_loaded",
         "solution": solution,
         "phase_degrees": float(phase_degrees),

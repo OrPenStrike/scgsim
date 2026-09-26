@@ -113,9 +113,10 @@ def prepare_epr_hfss(
             "reason": "no EPR analysis request was supplied",
         }
     else:
-        expressions, cache = _prepare_expressions_and_cache(
+        expressions, cache, phase_timings = _prepare_expressions_and_cache(
             app, request.workspace, bound, geometry, inset_plan
         )
+        timings["epr_authoring_phases"] = phase_timings
     timings["epr_authoring_seconds"] = round(time.perf_counter() - started, 6)
     started = time.perf_counter()
     if not app.save_project() or not project_path.is_file():
@@ -543,7 +544,7 @@ def analyze_saved_epr(
     geometry = bind_saved_planar_geometry(app, spec.geometry)
     timings["geometry_rebind_seconds"] = round(time.perf_counter() - started, 6)
     started = time.perf_counter()
-    expressions, authoring = _author_epr_expressions(
+    expressions, authoring, phase_timings = _author_epr_expressions(
         app,
         work_root,
         spec,
@@ -554,6 +555,7 @@ def analyze_saved_epr(
     timings["expression_authoring_seconds"] = round(
         time.perf_counter() - started, 6
     )
+    timings["expression_authoring_phases"] = phase_timings
     cache = {
         "schema_version": "scgsim.aedt.epr-cache-request.v1",
         "status": "not_modified_for_saved_field_analysis",
@@ -1193,13 +1195,40 @@ def _author_epr_expressions(
     inset_plan: dict[tuple[str, float], dict[str, Any]],
     *,
     namespace: str = "prepared",
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
     request = spec.epr_request
     if request is None:
         raise RuntimeError("EPR expression preparation requires an analysis request")
     solution = f"{spec.run_control.setup_name} : LastAdaptive"
     evidence_dir = run_dir / "metadata/epr_expressions"
     expressions: list[dict[str, Any]] = []
+    authoring_started = time.perf_counter()
+    phase_seconds = {
+        "pp_sources_seconds": 0.0,
+        "sheet_binding_seconds": 0.0,
+        "ordinary_expression_seconds": 0.0,
+        "adjacent_expression_seconds": 0.0,
+    }
+    expression_counts = {"ordinary": 0, "adjacent": 0}
+    expression_stage_seconds = {
+        "volume": 0.0,
+        "constituent": 0.0,
+        "grouped": 0.0,
+        "junction": 0.0,
+    }
+
+    def _timed_author(stage: str, **kwargs: Any) -> dict[str, Any]:
+        adjacent = kwargs.get("adjacent_selection_name") is not None
+        started = time.perf_counter()
+        result = author_named_expression(app, **kwargs)
+        elapsed = time.perf_counter() - started
+        kind = "adjacent" if adjacent else "ordinary"
+        phase_seconds[f"{kind}_expression_seconds"] += elapsed
+        expression_stage_seconds[stage] += elapsed
+        expression_counts[kind] += 1
+        return result
+
+    started = time.perf_counter()
     # Keep a nonzero modal source selected when saving the project.
     pp_values = {
         f"scgsim_epr_pp_mode_{index}": "1" if index == 1 else "0"
@@ -1212,6 +1241,7 @@ def _author_epr_expressions(
     }
     if app.edit_sources(source_assignment, eigenmode_stored_energy=False) is not True:
         raise RuntimeError("native Eigenmode PP source-vector installation failed")
+    phase_seconds["pp_sources_seconds"] = time.perf_counter() - started
     objects = native_geometry["objects"]
     material_readback = native_geometry["material_readback"]
     for item in objects:
@@ -1222,8 +1252,8 @@ def _author_epr_expressions(
                 quantity=quantity, selection_name=item["object_name"]
             )
             expressions.append(
-                author_named_expression(
-                    app,
+                _timed_author(
+                    "volume",
                     purpose=f"{quantity}_{item['semantic_id']}",
                     operations=operations,
                     solution=solution,
@@ -1257,6 +1287,8 @@ def _author_epr_expressions(
     }
     grouped_constituents: dict[tuple[str, str], list[dict[str, Any]]] = {}
     member_components: dict[tuple[str, float], list[dict[str, Any]]] = {}
+    # Reuse native sheet facts only within this authoring session; side stays per binding.
+    sheet_facts: dict[str, dict[str, Any]] = {}
     selected_contributions = (
         {item.contribution_id for item in spec.geometry.contributions}
         if request.surface_contribution_ids is None
@@ -1273,9 +1305,11 @@ def _author_epr_expressions(
             margin_um = float(margin)
             member_key = (selection["binding_id"], margin_um)
             group = group_by_member[member_key]
+            started = time.perf_counter()
             components = bind_inset_surface_selections(
-                app, binding, selection, margin_um, inset_plan
+                app, binding, selection, margin_um, inset_plan, sheet_facts
             )
+            phase_seconds["sheet_binding_seconds"] += time.perf_counter() - started
             member_components[member_key] = components
             for component in components:
                 component_selection = {
@@ -1295,8 +1329,8 @@ def _author_epr_expressions(
                         adjacent_side=component["adjacent_side"],
                         normal_vector=component["native_normal"],
                     )
-                    authored = author_named_expression(
-                        app,
+                    authored = _timed_author(
+                        "constituent",
                         purpose=(
                             f"{quantity}_{selection['binding_id']}_"
                             f"{margin_um:.17g}um_component_{component['component_index']}"
@@ -1351,8 +1385,8 @@ def _author_epr_expressions(
             for member in members:
                 dependencies.update(member["identity"]["dependencies"])
             expressions.append(
-                author_named_expression(
-                    app,
+                _timed_author(
+                    "grouped",
                     purpose=f"{quantity}_{group['group_id']}",
                     operations=operations,
                     solution=solution,
@@ -1396,8 +1430,8 @@ def _author_epr_expressions(
                 direction_xy=junction.direction_xy,
             )
             expressions.append(
-                author_named_expression(
-                    app,
+                _timed_author(
+                    "junction",
                     purpose=f"{quantity}_{junction.junction_id}",
                     operations=operations,
                     solution=solution,
@@ -1414,10 +1448,25 @@ def _author_epr_expressions(
                     namespace=namespace,
                 )
             )
-    return expressions, {
-        "source_assignment": source_assignment,
-        "postprocessing_variables": pp_observed,
-    }
+    authoring_seconds = time.perf_counter() - authoring_started
+    other_seconds = max(0.0, authoring_seconds - sum(phase_seconds.values()))
+    return (
+        expressions,
+        {
+            "source_assignment": source_assignment,
+            "postprocessing_variables": pp_observed,
+        },
+        {
+            **{key: round(value, 6) for key, value in phase_seconds.items()},
+            "other_seconds": round(other_seconds, 6),
+            "ordinary_expression_count": expression_counts["ordinary"],
+            "adjacent_expression_count": expression_counts["adjacent"],
+            "expression_stage_seconds": {
+                key: round(value, 6) for key, value in expression_stage_seconds.items()
+            },
+            "unique_inset_sheet_count": len(sheet_facts),
+        },
+    )
 
 
 def _submit_epr_cache(
@@ -1470,17 +1519,20 @@ def _prepare_expressions_and_cache(
     spec: HfssEprSpec,
     native_geometry: dict[str, Any],
     inset_plan: dict[tuple[str, float], dict[str, Any]] | None,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
     if inset_plan is None:
         raise RuntimeError("EPR inset geometry must be precomputed before Desktop")
-    expressions, authoring = _author_epr_expressions(
+    expressions, authoring, phase_timings = _author_epr_expressions(
         app,
         run_dir,
         spec,
         native_geometry,
         inset_plan,
     )
-    return expressions, _submit_epr_cache(app, spec, expressions, authoring)
+    started = time.perf_counter()
+    cache = _submit_epr_cache(app, spec, expressions, authoring)
+    phase_timings["cache_seconds"] = round(time.perf_counter() - started, 6)
+    return expressions, cache, phase_timings
 
 
 def _create_setup(app: Any, spec: HfssEprSpec) -> None:

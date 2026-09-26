@@ -667,6 +667,7 @@ def bind_inset_surface_selections(
     base_selection: Mapping[str, Any],
     margin_um: float,
     inset_plan: Mapping[tuple[str, float], Mapping[str, Any]],
+    sheet_facts: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Create or rebind non-model inset sheets without changing solver CAD."""
 
@@ -687,24 +688,36 @@ def bind_inset_surface_selections(
             }
         )
         name = _native_name("epr_inset", contour_sha256)
-        sheet = app.modeler.get_object_from_name(name)
-        if sheet is None:
-            sheet, _ = _analysis_surface_sheet(
-                app,
-                {"plane_basis": plane, "local_region": region},
-                name=name,
-            )
-        native = _native_object_evidence(app, name)
-        if native["native_object_type"] != "Sheet" or len(sheet.faces) != 1:
-            raise RuntimeError(f"inset EPR selection {name!r} is not one sheet")
-        if _native_object_boolean_property(sheet, "Model"):
-            raise RuntimeError(f"inset EPR selection {name!r} became model geometry")
-        normal = sheet.faces[0].normal
-        if normal is None or len(normal) != 3 or not all(
-            math.isfinite(float(value)) for value in normal
-        ):
-            raise RuntimeError(f"inset EPR selection {name!r} has no native normal")
-        native_normal = [float(value) for value in normal]
+        facts = sheet_facts.get(name)
+        if facts is None:
+            sheet = app.modeler.get_object_from_name(name)
+            if sheet is None:
+                sheet, _ = _analysis_surface_sheet(
+                    app,
+                    {"plane_basis": plane, "local_region": region},
+                    name=name,
+                )
+            native = _native_object_evidence(app, name)
+            faces = sheet.faces
+            if native["native_object_type"] != "Sheet" or len(faces) != 1:
+                raise RuntimeError(f"inset EPR selection {name!r} is not one sheet")
+            if _native_object_boolean_property(sheet, "Model"):
+                raise RuntimeError(f"inset EPR selection {name!r} became model geometry")
+            normal = faces[0].normal
+            if normal is None or len(normal) != 3 or not all(
+                math.isfinite(float(value)) for value in normal
+            ):
+                raise RuntimeError(f"inset EPR selection {name!r} has no native normal")
+            facts = {
+                "contour_sha256": contour_sha256,
+                "native": native,
+                "native_normal": [float(value) for value in normal],
+            }
+            sheet_facts[name] = facts
+        if facts["contour_sha256"] != contour_sha256:
+            raise RuntimeError(f"inset EPR selection name collision: {name!r}")
+        native = facts["native"]
+        native_normal = facts["native_normal"]
         orientation = sum(a * b for a, b in zip(native_normal, desired))
         if abs(orientation) <= 1e-12:
             raise RuntimeError(f"inset EPR selection {name!r} has ambiguous field side")
