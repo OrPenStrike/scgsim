@@ -1182,8 +1182,9 @@ def _author_epr_expressions(
     solution = f"{spec.run_control.setup_name} : LastAdaptive"
     evidence_dir = run_dir / "metadata/epr_expressions"
     expressions: list[dict[str, Any]] = []
+    # Keep a nonzero modal source selected when saving the project.
     pp_values = {
-        f"scgsim_epr_pp_mode_{index}": "0"
+        f"scgsim_epr_pp_mode_{index}": "1" if index == 1 else "0"
         for index in range(1, spec.run_control.num_modes + 1)
     }
     pp_observed = install_variables(app, pp_values)
