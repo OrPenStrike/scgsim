@@ -685,8 +685,13 @@ may retain the signed quantity
 under arbitrary phase rotation. The junction contract does not silently add
 resistance, Kerr, or a Palace port result.
 
-Execution must request saved fields, save both the project and complete result
-directory, close the owned Desktop, archive immutable bytes, copy them to a
+Execution does not inject `SaveAnyFields` or `SaveRadFieldsOnly` into the
+Eigenmode setup without established solver-specific support.
+[General AEDT 2024 R2 HFSS documentation](https://ansyshelp.ansys.com/public/Views/Secured/Electronics/v242/en/Subsystems/HFSS/Content/HFSS/SpecifyingSolutionSettings.htm)
+describes Save Fields as a default, not as a verified Eigenmode setup readback;
+the actual completed saved-field inventory remains required evidence. It must
+save both the project and complete result directory,
+close the owned Desktop, archive immutable bytes, copy them to a
 working analysis location, reopen that copy, and perform analysis without any
 solve or export call. A missing result directory, unavailable expression
 definition, context mismatch, or guarded solver attempt fails closed. The

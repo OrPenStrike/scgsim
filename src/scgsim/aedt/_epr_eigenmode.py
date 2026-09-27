@@ -1590,8 +1590,6 @@ def _create_setup(app: Any, spec: HfssEprSpec) -> None:
     setup.props["MinimumPasses"] = spec.run_control.minimum_passes
     setup.props["MinimumConvergedPasses"] = spec.run_control.minimum_converged_passes
     setup.props["PercentRefinement"] = spec.run_control.percent_refinement
-    setup.props["SaveAnyFields"] = True
-    setup.props["SaveRadFieldsOnly"] = False
     if not setup.update():
         raise RuntimeError("HFSS EPR setup update failed")
 
@@ -1621,22 +1619,14 @@ def _read_setup(app: Any, spec: HfssEprSpec) -> dict[str, Any]:
     if observed != expected:
         raise RuntimeError(f"HFSS EPR saved setup readback mismatch: {observed!r}")
     saved_field_properties = {
-        "requested": {
-            "SaveAnyFields": True,
-            "SaveRadFieldsOnly": False,
-        },
+        "basis": "AEDT 2024.2 native Eigenmode field handling; no setup-key verification",
         "serialized": {
             key: raw[key]
             for key in ("SaveAnyFields", "SaveRadFieldsOnly")
             if key in raw
         },
+        "status": "verification_deferred_to_completed_saved_field_inventory",
     }
-    saved_field_properties["status"] = (
-        "verified_serialized"
-        if saved_field_properties["serialized"]
-        == saved_field_properties["requested"]
-        else "verification_deferred_to_completed_saved_field_inventory"
-    )
     return {
         "name": spec.run_control.setup_name,
         "native": observed,
