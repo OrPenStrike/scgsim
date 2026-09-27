@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import csv
+import html
+import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from ._benchmark import BENCHMARK_RELATIVE, read_simulation_benchmark
 from ._hfss_convergence import read_hfss_convergence
 from ._matrix_export import parse_matrix_export, read_q2d_rlgc_matrix
 from ._q2d_convergence import read_q2d_convergence, read_q3d_convergence
@@ -52,6 +55,7 @@ class ResolvedRun:
     provenance_path: Path | None
     receipt_path: Path
     convergence: dict[str, Any] | None = None
+    benchmark_path: Path | None = None
 
     def physics_results(self) -> tuple[dict[str, str], ...]:
         """Return the verified primary result as string-valued rows."""
@@ -95,7 +99,114 @@ class ResolvedRun:
             "execution_seconds": receipt["execution_seconds"],
             "project_bytes": self.project_path.stat().st_size,
             "primary_csv_bytes": self.primary_csv.stat().st_size,
+            "benchmark": (
+                {"status": "not_recorded"}
+                if self.benchmark_path is None
+                else read_simulation_benchmark(
+                    _verified(
+                        self.receipt_path.parent.parent,
+                        BENCHMARK_RELATIVE,
+                        receipt["outputs"],
+                    ),
+                    parse_aedt_spec(
+                        read_json(self.receipt_path.parent.parent / "aedt_spec.json"),
+                        base_dir=self.receipt_path.parent.parent,
+                    ).run_control.setup_name,
+                )
+            ),
         }
+
+    def show_simulation_benchmark(self, *, show_details: bool = False) -> AedtBenchmarkReport:
+        """Return a notebook-displayable, offline view of native profile evidence."""
+        return AedtBenchmarkReport(self.simulation_benchmark(), show_details)
+
+
+@dataclass(frozen=True)
+class AedtBenchmarkReport:
+    """Offline native benchmark view; ``data`` retains the complete profile tree."""
+
+    data: dict[str, Any]
+    show_details: bool = False
+
+    def _ipython_display_(self) -> None:
+        from IPython.display import HTML, display
+
+        benchmark = self.data["benchmark"]
+        status = html.escape(str(benchmark["status"]))
+        mode = html.escape(str(self.data["mode"]))
+        display(HTML(f"<section><h3>AEDT simulation benchmark</h3><p>{mode} · {status}</p>"
+                     f"<p>SCGSim execution: {self.data['execution_seconds']} s; "
+                     f"project: {self.data['project_bytes']} bytes; "
+                     f"primary CSV: {self.data['primary_csv_bytes']} bytes.</p></section>"))
+        if benchmark["status"] != "complete":
+            if benchmark.get("reason"):
+                display(HTML(f"<p>{html.escape(str(benchmark['reason']))}</p>"))
+            return
+        rows: list[dict[str, Any]] = []
+        pass_rows: list[dict[str, Any]] = []
+        def visit(node: dict[str, Any], profile: str, group: str, branch: str, pass_id: int | None = None) -> None:
+            name = str(node["name"])
+            pass_id = node.get("adaptive_pass", pass_id)
+            kind = (
+                "adaptive" if pass_id is not None else
+                "sweep" if "sweep" in name.lower() else
+                "subproblem" if self.data["mode"] in {"q2d", "q3d"} else branch
+            )
+            if node.get("metrics"):
+                rows.append({"profile": profile, "process_group": group, "scope": kind,
+                             "stage": name, "pass": pass_id,
+                             "frequency_native": node.get("native_properties", {}).get("Frequency"),
+                             **node["metrics"]})
+            if "adaptive_pass" in node:
+                peak = node.get("stage_memory_peak", {})
+                pass_rows.append({"profile": profile, "process_group": group, "scope": "adaptive",
+                                  "stage": name, "pass": pass_id,
+                                  "memory_native": peak.get("memory_native", ""),
+                                  **node["metrics"]})
+            for child in node.get("children", []):
+                visit(child, profile, group, kind, pass_id)
+        for profile in benchmark["profiles"]:
+            for group in profile["process_groups"]:
+                visit(group, profile["native_setup_profile"], group["name"], "stage")
+        summary_rows = pass_rows + [
+            row for row in rows
+            if row["pass"] is None and row["scope"] in {"sweep", "subproblem"}
+        ]
+        table_rows = rows if self.show_details else (summary_rows or rows)
+        if table_rows:
+            headings = ("profile", "process_group", "scope", "pass", "stage", "real_seconds", "elapsed_seconds", "cpu_seconds", "memory_native", "tetrahedra", "solved_elements", "elements", "linear_matrix_size")
+            head = "".join(f"<th>{html.escape(key)}</th>" for key in headings)
+            body = "".join("<tr>" + "".join(f"<td>{html.escape(str(row.get(key, '')))}</td>" for key in headings) + "</tr>" for row in table_rows)
+            display(HTML(f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"))
+            try:
+                import plotly.graph_objects as go
+            except ImportError:
+                display(HTML("<p>Plotly is unavailable; the native pass table remains available.</p>"))
+            else:
+                figure = go.Figure()
+                for profile in benchmark["profiles"]:
+                    for group in profile["process_groups"]:
+                        stages = {row["stage"] for row in rows if row["profile"] == profile["native_setup_profile"] and row["process_group"] == group["name"] and row["scope"] == "adaptive" and row["pass"] is not None and ("real_seconds" in row or "elapsed_seconds" in row)}
+                        for stage in sorted(stages):
+                            for metric in ("real_seconds", "elapsed_seconds"):
+                                selected = [row for row in rows if row["profile"] == profile["native_setup_profile"] and row["process_group"] == group["name"] and row["stage"] == stage and row["pass"] is not None and metric in row and (metric == "real_seconds" or "real_seconds" not in row)]
+                                if selected:
+                                    figure.add_scatter(x=[row["pass"] for row in selected], y=[row[metric] for row in selected], mode="lines+markers", name=f"{group['name']} / {stage} ({metric.removesuffix('_seconds')})")
+                if figure.data:
+                    figure.update_layout(xaxis_title="Native adaptive pass", yaxis_title="Native reported time (s; real/elapsed labelled)")
+                    display(figure)
+                sweep = go.Figure()
+                for profile in benchmark["profiles"]:
+                    for group in profile["process_groups"]:
+                        for metric in ("real_seconds", "elapsed_seconds"):
+                            selected = [row for row in rows if row["profile"] == profile["native_setup_profile"] and row["process_group"] == group["name"] and row["scope"] == "sweep" and row["frequency_native"] is not None and metric in row and (metric == "real_seconds" or "real_seconds" not in row)]
+                            if selected:
+                                sweep.add_scatter(x=[row["frequency_native"] for row in selected], y=[row[metric] for row in selected], mode="lines+markers", name=f"{group['name']} ({metric.removesuffix('_seconds')})")
+                if sweep.data:
+                    sweep.update_layout(xaxis_title="Native sweep frequency", yaxis_title="Native reported time (s; real/elapsed labelled)")
+                    display(sweep)
+        if self.show_details:
+            display(HTML("<pre>" + html.escape(json.dumps(benchmark, indent=2)) + "</pre>"))
 
 
 def resolve_results(run_dir: str | Path) -> ResolvedRun:
@@ -175,6 +286,7 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
     outputs = receipt.get("outputs")
     if not isinstance(outputs, dict):
         raise TypeError("completed receipt has no output hash manifest")
+    benchmark_path = _resolved_benchmark(root, receipt, outputs, spec.run_control.setup_name)
     project_relative = f"{spec.project_name}.aedt"
     if receipt.get("project") != project_relative:
         raise RuntimeError("completed receipt project path is not canonical")
@@ -193,6 +305,8 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
             project_relative,
             "results/q2d/rlgc_matrix.csv",
         }
+        if benchmark_path is not None:
+            expected.add(BENCHMARK_RELATIVE)
         if set(outputs) != expected:
             raise RuntimeError("Q2D output manifest is not canonical")
         return ResolvedRun(
@@ -203,9 +317,12 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
             None,
             receipt_path,
             convergence=receipt["convergence"],
+            benchmark_path=benchmark_path,
         )
     if mode == "q3d":
         expected = {project_relative, "results/q3d/c_matrix.csv"}
+        if benchmark_path is not None:
+            expected.add(BENCHMARK_RELATIVE)
         primary = "results/q3d/c_matrix.csv"
         if spec.solve_ac_rl:
             expected.update(
@@ -227,6 +344,7 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
             None,
             receipt_path,
             convergence=receipt["convergence"],
+            benchmark_path=benchmark_path,
         )
     if mode == "eigenmode":
         if isinstance(spec, HfssEprSpec):
@@ -239,6 +357,8 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
                 "results/epr/adaptive-convergence.prop",
                 "results/epr/adaptive-mode-history.json",
             }
+            if benchmark_path is not None:
+                expected.add(BENCHMARK_RELATIVE)
             if spec.epr_request is not None:
                 expected.add("results/epr/adaptive-epr-result.json")
                 saved_summary = receipt.get("saved_solution")
@@ -292,12 +412,15 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
                 _verified(root, "results/epr/eigenmodes.eig", outputs),
                 receipt_path,
                 convergence=receipt["convergence"],
+                benchmark_path=benchmark_path,
             )
         expected = {
             project_relative,
             "results/eigenmode/eigenmodes.csv",
             "results/eigenmode/eigenmodes.eig",
         }
+        if benchmark_path is not None:
+            expected.add(BENCHMARK_RELATIVE)
         if _eigenmode_convergence_source(receipt) == "export_convergence":
             expected.add("results/eigenmode/adaptive-convergence.prop")
         if set(outputs) != expected:
@@ -312,6 +435,7 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
             _verified(root, "results/eigenmode/eigenmodes.eig", outputs),
             receipt_path,
             convergence=receipt["convergence"],
+            benchmark_path=benchmark_path,
         )
     result_stem = "terminal_st" if mode == "terminal" else "modal_s"
     expected = {
@@ -319,6 +443,8 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
         f"results/{mode}/{result_stem}.csv",
         f"results/{mode}/{mode}.s2p",
     }
+    if benchmark_path is not None:
+        expected.add(BENCHMARK_RELATIVE)
     if set(outputs) != expected:
         raise RuntimeError("terminal output manifest is not canonical")
     return ResolvedRun(
@@ -329,7 +455,25 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
         None,
         receipt_path,
         convergence=receipt["convergence"],
+        benchmark_path=benchmark_path,
     )
+
+
+def _resolved_benchmark(
+    root: Path, receipt: dict[str, Any], outputs: dict[str, Any], setup_name: str
+) -> Path | None:
+    marker = receipt.get("benchmark")
+    if marker is None:
+        if BENCHMARK_RELATIVE in outputs:
+            raise RuntimeError("benchmark output lacks a receipt binding")
+        return None
+    if not isinstance(marker, dict) or set(marker) != {"status", "path"} or marker["path"] != BENCHMARK_RELATIVE:
+        raise RuntimeError("benchmark receipt binding is invalid")
+    path = _verified(root, BENCHMARK_RELATIVE, outputs)
+    payload = read_simulation_benchmark(path, setup_name)
+    if marker["status"] != payload["status"]:
+        raise RuntimeError("benchmark receipt status differs from its artifact")
+    return path
 
 
 def _contained(root: Path, relative: str) -> Path:

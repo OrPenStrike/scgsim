@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ._benchmark import export_simulation_benchmark
 from ._epr_fields import (
     compile_named_expression,
     field_integral_operations,
@@ -272,10 +273,15 @@ def solve_and_export_epr(
     timings["final_save_seconds"] = round(time.perf_counter() - started, 6)
     relative = prepared.project_path.relative_to(run_dir).as_posix()
     outputs[relative] = file_sha256(prepared.project_path)
+    benchmark_relative, benchmark_digest, benchmark = export_simulation_benchmark(
+        prepared.app, run_dir, spec.run_control.setup_name
+    )
+    outputs[benchmark_relative] = benchmark_digest
     return {
         "workflow_status": "completed",
         "solver_invoked": True,
         "outputs": outputs,
+        "benchmark": benchmark,
         "connected": {
             "aedt_version": prepared.app.desktop_class.aedt_version_id,
             "pyaedt_version": pyaedt_version(),
@@ -322,7 +328,7 @@ def _saved_field_evidence(
             f"completed EPR solve lacks saved Fields solution {expected_solution!r}: "
             f"{solutions!r}"
         )
-    variation = detached_data(app.available_variations.nominal_w_values_dict)
+    variation = detached_data(app.available_variations.nominal_values)
     if not isinstance(variation, dict) or any(
         not isinstance(key, str) for key in variation
     ):
@@ -553,7 +559,7 @@ def analyze_saved_epr(
         raise RuntimeError("saved EPR analysis did not bind AEDT 2024.2")
     if spec.run_control.setup_name not in app.setup_names:
         raise RuntimeError("saved EPR analysis setup is missing")
-    observed_variation = detached_data(app.available_variations.nominal_w_values_dict)
+    observed_variation = detached_data(app.available_variations.nominal_values)
     observed_variation_identity = json.dumps(
         observed_variation, sort_keys=True, separators=(",", ":")
     )
@@ -698,7 +704,7 @@ def _solution_trace(data: Any, expression: str) -> dict[str, Any]:
     }
 
 
-def _trace_by_pass(trace: dict[str, Any]) -> dict[int, float]:
+def _trace_by_pass(trace: dict[str, Any], *, final_pass: int) -> dict[int, float]:
     columns = trace["columns"]
     if "Pass" not in columns or columns[-1] != "value":
         raise RuntimeError("native adaptive trace lacks explicit Pass/value columns")
@@ -710,6 +716,12 @@ def _trace_by_pass(trace: dict[str, Any]) -> dict[int, float]:
             raise RuntimeError("native adaptive trace Pass coordinate is invalid")
         pass_value = int(pass_number)
         value = float(row[-1])
+        if pass_value > final_pass:
+            if math.isfinite(value):
+                raise RuntimeError(
+                    "native adaptive trace has a finite value beyond the completed pass"
+                )
+            continue
         if not math.isfinite(value):
             raise RuntimeError("native adaptive trace value is nonfinite")
         if pass_value in result:
@@ -746,7 +758,9 @@ def _trace_for_cache_context(
             if query.get("persisted_binding") == "exact"
             and query.get("scope") == "one_hot_one_quantity"
             and query.get("returned_expressions") == [query.get("quantity")]
-            and query.get("quantity_binding") in {"title", "unique_expression"}
+            and query.get("quantity_binding") in {
+                "title", "unique_expression", "native_expression_cache_title"
+            }
             else "not_reported"
         )
         return trace, {
@@ -806,6 +820,9 @@ def _adaptive_epr_result(
 ) -> EprResult:
     frequency_traces = history["frequency_traces"]
     cache = history["cache_integral_traces"]
+    final_pass = convergence["final_pass"]
+    if type(final_pass) is not int or final_pass <= 0:
+        raise RuntimeError("native completed pass identity is invalid")
     trace_by_title = cache["traces"]
     query_by_title = cache.get("queries", {})
     rows: list[dict[str, Any]] = []
@@ -816,7 +833,7 @@ def _adaptive_epr_result(
     )
     for mode in selected_modes:
         frequency_trace = frequency_traces[f"Mode({mode})"]
-        frequencies = _trace_by_pass(frequency_trace)
+        frequencies = _trace_by_pass(frequency_trace, final_pass=final_pass)
         mode_items = [item for item in cache["items"] if item["mode"] == mode]
         item_values: dict[str, dict[int, float]] = {}
         item_contexts: dict[str, dict[str, Any]] = {}
@@ -831,18 +848,16 @@ def _adaptive_epr_result(
             if not context["status"].startswith("verified"):
                 continue
             try:
-                item_values[title] = _trace_by_pass(scoped_trace)
+                item_values[title] = _trace_by_pass(
+                    scoped_trace, final_pass=final_pass
+                )
             except RuntimeError as exc:
                 item_contexts[title] = {
                     **context,
                     "status": "invalid_pass_axis",
                     "error": str(exc),
                 }
-        pass_ids = sorted(
-            set(frequencies).union(
-                *(set(values) for values in item_values.values())
-            )
-        )
+        pass_ids = range(1, final_pass + 1)
         for pass_id in pass_ids:
             missing = [
                 item["title"]
@@ -1006,38 +1021,35 @@ def _adaptive_mode_history(
     }
     if cache_titles:
         try:
-            if solution not in field_solutions:
+            if solution not in frequency_solutions:
                 raise RuntimeError(
-                    f"native adaptive solution is unavailable for Fields: {field_solutions!r}"
+                    f"native adaptive solution is unavailable for {category}: {frequency_solutions!r}"
                 )
-            field_categories = [
+            cache_categories = [
                 str(item)
                 for item in app.post.available_quantities_categories(
-                    "Fields", solution=solution
+                    category, solution=solution
                 )
                 or ()
             ]
-            field_quantities: dict[str, list[str]] = {}
-            for quantity_category in field_categories:
-                field_quantities[quantity_category] = [
+            cache_quantities = (
+                [
                     str(item)
                     for item in app.post.available_report_quantities(
-                        "Fields",
-                        solution=solution,
-                        quantities_category=quantity_category,
+                        category, solution=solution,
+                        quantities_category="Expression Cache",
                     )
                     or ()
                 ]
-            cache_observation["available_quantity_categories"] = field_categories
-            cache_observation["available_quantities"] = field_quantities
+                if "Expression Cache" in cache_categories
+                else []
+            )
+            cache_observation["available_quantity_categories"] = cache_categories
+            cache_observation["available_quantities"] = {
+                "Expression Cache": cache_quantities
+            }
             persisted_by_title = {
                 item["title"]: item for item in persisted_cache_items
-            }
-            expression_counts = {
-                expression: sum(
-                    item["expression"] == expression for item in cache_items
-                )
-                for expression in {item["expression"] for item in cache_items}
             }
             if len(persisted_by_title) != len(persisted_cache_items):
                 raise RuntimeError("persisted EPR cache titles are not unique")
@@ -1062,11 +1074,11 @@ def _adaptive_mode_history(
                 ):
                     query["error"] = "cache item is not the complete one-hot context"
                     continue
+                expected_quantity = f"ExprCache({persisted['title']})"
                 matches = [
-                    (category_name, quantity)
-                    for category_name, names in field_quantities.items()
-                    for quantity in names
-                    if quantity in {persisted["title"], persisted["expression"]}
+                    ("Expression Cache", quantity)
+                    for quantity in cache_quantities
+                    if quantity == expected_quantity
                 ]
                 query["inventory_matches"] = matches
                 if len(matches) != 1:
@@ -1074,12 +1086,7 @@ def _adaptive_mode_history(
                     continue
                 quantity = matches[0][1]
                 query["quantity"] = quantity
-                query["quantity_binding"] = (
-                    "title" if quantity == persisted["title"]
-                    else "unique_expression"
-                    if expression_counts[quantity] == 1
-                    else "shared_expression_requires_reported_axes"
-                )
+                query["quantity_binding"] = "native_expression_cache_title"
                 sweeps = {"Pass": "All", "Phase": "0deg"}
                 sweeps.update(
                     {
@@ -1092,7 +1099,7 @@ def _adaptive_mode_history(
                 query["sweeps"] = sweeps
                 try:
                     cached = app.post.get_solution_data_per_variation(
-                        "Fields", solution, [], sweeps, [quantity]
+                        category, solution, [], sweeps, [quantity]
                     )
                     if not cached:
                         raise RuntimeError("native scoped cache report is unavailable")

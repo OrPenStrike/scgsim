@@ -13,6 +13,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
+from ._benchmark import attach_simulation_benchmark
 from ._hfss_convergence import read_hfss_convergence
 from ._native_common import (
     BoundAedtRequest,
@@ -65,7 +66,10 @@ def run_hfss(
     """Use the same preparation stage as diagnostics, then solve and export."""
     prepared = prepare_hfss(Hfss, run_dir, spec)
     solve_hfss(prepared, resources, resource_evidence)
-    return export_hfss(prepared)
+    result = export_hfss(prepared)
+    return attach_simulation_benchmark(
+        result, prepared.app, run_dir, spec.run_control.setup_name
+    )
 
 
 def prepare_hfss(Hfss: Any, run_dir: Path, spec: HfssSpec) -> PreparedHfss:

@@ -18,7 +18,8 @@ RECEIPT_V2 = "scgsim.aedt.receipt.v2"
 RECEIPT_V3 = "scgsim.aedt.receipt.v3"
 SOURCE_SCHEMA_V1 = "scgsim.aedt.runtime-source.v1"
 SOURCE_SCHEMA_V2 = "scgsim.aedt.runtime-source.v2"
-SOURCE_SCHEMA = SOURCE_SCHEMA_V2
+SOURCE_SCHEMA_V3 = "scgsim.aedt.runtime-source.v3"
+SOURCE_SCHEMA = SOURCE_SCHEMA_V3
 
 # Frozen membership of the public runtime-source.v1 evidence format. Changing
 # producer structure must not silently change what historical readers mean.
@@ -56,6 +57,10 @@ _RUNTIME_SOURCE_V2_PATHS = tuple(
     )
 )
 
+_RUNTIME_SOURCE_V3_PATHS = tuple(
+    sorted((*_RUNTIME_SOURCE_V2_PATHS, "scgsim/aedt/_benchmark.py"))
+)
+
 def _module_manifest() -> list[dict[str, str]]:
     package_root = Path(__file__).resolve().parents[1]
     return [
@@ -64,7 +69,7 @@ def _module_manifest() -> list[dict[str, str]]:
             "path": path,
             "sha256": file_sha256(package_root.parent / path),
         }
-        for path in _RUNTIME_SOURCE_V2_PATHS
+        for path in _RUNTIME_SOURCE_V3_PATHS
     ]
 
 
@@ -162,6 +167,7 @@ def validate_runtime_source(
     expected_paths = {
         SOURCE_SCHEMA_V1: _RUNTIME_SOURCE_V1_PATHS,
         SOURCE_SCHEMA_V2: _RUNTIME_SOURCE_V2_PATHS,
+        SOURCE_SCHEMA_V3: _RUNTIME_SOURCE_V3_PATHS,
     }.get(schema)
     if (
         expected_paths is None

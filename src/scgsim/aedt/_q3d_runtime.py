@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ._benchmark import attach_simulation_benchmark
 from ._matrix_export import parse_matrix_export
 from ._native_common import (
     BoundAedtRequest,
@@ -65,7 +66,10 @@ def run_q3d(
     """Use the same preparation stage as diagnostics, then solve and export."""
     prepared = prepare_q3d(Q3d, run_dir, spec)
     solve_q3d(prepared, resources, resource_evidence)
-    return export_q3d(prepared)
+    result = export_q3d(prepared)
+    return attach_simulation_benchmark(
+        result, prepared.app, run_dir, spec.run_control.setup_name
+    )
 
 
 def prepare_q3d(Q3d: Any, run_dir: Path, spec: Q3dSpec) -> PreparedQ3d:

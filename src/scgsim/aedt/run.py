@@ -284,8 +284,12 @@ def _execute(
                 receipt["epr_result"] = result["result"]
             if "saved_field_evidence" in result:
                 receipt["saved_field_evidence"] = result["saved_field_evidence"]
+            if "benchmark" in result:
+                receipt["benchmark"] = result["benchmark"]
         elif result is not None:
             receipt["save"] = result["save"]
+            if "benchmark" in result:
+                receipt["benchmark"] = result["benchmark"]
         if desktop is not None:
             release_started = time.perf_counter()
             try:

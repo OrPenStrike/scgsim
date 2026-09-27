@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ._benchmark import attach_simulation_benchmark
 from ._matrix_export import read_q2d_rlgc_matrix
 from ._native_common import (
     BoundAedtRequest,
@@ -51,7 +52,10 @@ def run_q2d(
     """Use the same preparation stage as diagnostics, then solve and export."""
     prepared = prepare_q2d(Q2d, run_dir, spec)
     solve_q2d(prepared, resources, resource_evidence)
-    return export_q2d(prepared)
+    result = export_q2d(prepared)
+    return attach_simulation_benchmark(
+        result, prepared.app, run_dir, spec.run_control.setup_name
+    )
 
 
 def prepare_q2d(Q2d: Any, run_dir: Path, spec: Q2dSpec) -> PreparedQ2d:

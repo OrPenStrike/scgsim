@@ -157,6 +157,43 @@ Likewise, a `completed` label and an `.aedt` file alone do not prove that saved
 fields are present or reusable; only the versioned family evidence sealed and
 checked by the resolver has that meaning.
 
+### Native simulation benchmark
+
+Every new completed HFSS Driven Terminal, Driven Modal, Eigenmode (including
+EPR), Q3D, and Q2D solve writes a versioned
+`results/simulation-benchmark.v1.json` during its owned AEDT session. The run
+receipt names and hashes that output. Its `status` distinguishes complete
+native profile data from an unavailable profile or a profile API/format error;
+the latter two do not turn a successful physics solve into solver failure.
+Failure to write or hash the claimed JSON is an artifact-integrity failure.
+Historical completed receipts without this output remain readable and report
+`not_recorded`, without synthesizing old profile measurements. A claimed but
+missing or hash-mismatched benchmark is rejected by `resolve_results()`.
+
+The benchmark preserves exact native setup, variation, solution-process group,
+adaptive pass, and stage identities. It records only available native real or
+elapsed and CPU times, task-executable peak memory with the native formatted
+string and PyAEDT conversion, and explicitly labeled tetrahedra, solved
+elements, or linear matrix size. A terminal result-matrix dimension is never
+called a solver matrix size. Stage peaks are maxima, not sums; parent and child
+times are not added because they may overlap. Missing metrics and Q3D adaptive
+profile limitations remain unavailable, never zero. SCGSim receipt wall times
+stay separate from native task times. Profile capture traverses the native
+`results/profile` OO tree directly so native read failures become benchmark
+errors rather than silently omitted groups; it also retains scalar setup-root
+properties carrying native variation identity.
+
+`ResolvedRun.simulation_benchmark()` retains its four existing summary keys and
+adds the verified benchmark record. `show_simulation_benchmark(show_details=False)`
+returns a notebook-displayable report with the same `.data`, summary cards,
+native-stage/pass table, and Plotly adaptive-stage curves when native values are
+present. When only native elapsed time exists, tables and curves label it
+`elapsed` rather than presenting it as real time. Eigenmode adaptive passes,
+Driven adaptive and sweep scopes, and
+Q3D/Q2D native subproblem and element labels remain separate; a family without
+reported adaptive values has no invented pass curve. Details optionally shows
+stages and exact provenance. Rendering and offline resolution never open AEDT.
+
 ## Q2D native combined matrix export
 
 For new Q2D runs, the canonical result set contains exactly one matrix
