@@ -21,6 +21,19 @@ limits.
 | Resolve returned results | `sim.resolve_results(run_dir=None)` resolves the AEDT run summary. `scgsim.aedt.resolve_epr_result(path)` loads the EPR result record. | `scgsim.palace.resolve_palace_result(run_dir, *, expected_handoff_id)` resolves a returned run; `resolved.epr_result()` detaches its final Eigenmode EPR quantities. `scgsim.palace.resolve_epr_result(path)` loads a detached EPR JSON file without reading the full solver run. |
 | Reanalyze and show | `scgsim.aedt.reanalyze_epr(result, *, surface_defaults=None, group_overrides=None)` returns a fresh `EprResult`; `show_epr(result, *, mode=None, native_pass=None)` returns a Plotly `Figure`. | `scgsim.palace.reanalyze_epr(result, *, surface_defaults=None, group_overrides=None)` returns a fresh `PalaceEprResult`; `show_epr(result, *, mode=None)` returns a Plotly `Figure`. |
 
+::: {.callout-note title="Backend boundary choices"}
+The shared Eigenmode workflow does not promise identical models. In the current
+Palace setup, the external surface of the outer vacuum region is left
+unspecified, so Palace uses its natural PMC boundary ([Palace boundary guide](https://awslabs.github.io/palace/stable/guide/boundaries/)).
+The current SCGSim AEDT EPR setup leaves the Region exterior without a separate
+boundary assignment, so HFSS applies its default Perfect E boundary
+([AEDT runtime specification](specs/aedt-runtime.qmd#public-epr-candidate-surface)).
+These are intentional backend choices; SCGSim does not automatically convert
+one into the other, and the difference is not a missing parity feature.
+Comparisons should note the outer boundary, Region size, and backend settings.
+No harmonization is required.
+:::
+
 The ordinary Palace path prepares and resolves Eigenmode and domain-energy
 results without surface specs, a lumped port, or an EPR request. Those inputs
 are optional EPR declarations, not requirements for an Eigenmode run.

@@ -39,6 +39,7 @@ from ._native_common import (
     _native_boundary_type,
     _native_object_boolean_property,
     _native_object_evidence,
+    _resolve_native_assignment,
     native_object_property,
 )
 
@@ -350,6 +351,7 @@ def _source_payload(
     ]
     native_region = {
         "method": "single_region_absolute_offset.v1",
+        "outer_boundary_policy": "hfss_default.v1",
         "name": "Region",
         "material_id": next(iter(vacuum_material_ids)),
         "logical_vacuum_ids": sorted(item["semantic_id"] for item in vacuum_regions),
@@ -1722,7 +1724,9 @@ def _create_epr_region(app: Any, source: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _assign_closed_enclosure(app: Any, source: Mapping[str, Any]) -> dict[str, Any]:
+def _enclosure_faces(app: Any, source: Mapping[str, Any]) -> dict[str, Any]:
+    """Verify the Region's six outer faces without assigning a boundary."""
+
     region = app.modeler.get_object_from_name("Region")
     if region is None:
         raise RuntimeError("native EPR Region is unavailable")
@@ -1754,21 +1758,49 @@ def _assign_closed_enclosure(app: Any, source: Mapping[str, Any]) -> dict[str, A
     face_ids = [item["face_id"] for item in face_records]
     if len(face_ids) != len(set(face_ids)):
         raise RuntimeError("native closed-enclosure face selection repeats a face")
-    boundary_name = "SCGSimClosedEnclosure"
-    boundary = app.assign_perfect_e(face_ids, name=boundary_name)
-    if boundary is False or boundary is None:
-        raise RuntimeError("native closed-enclosure Perfect E assignment failed")
-    if _native_boundary_type(app, boundary_name) != "Perfect E":
-        raise RuntimeError("native closed-enclosure boundary readback differs")
     return {
-        "boundary_name": boundary_name,
-        "native_boundary_type": "Perfect E",
         "face_records": face_records,
         "envelope_outer_loop_um": _plain(
             source["native_region"]["envelope_outer_loop_um"]
         ),
         "z_range_um": [z_min, z_max],
         "native_bounding_box_um": list(bounds),
+    }
+
+
+def _verify_no_explicit_region_boundary(app: Any) -> None:
+    """Require native assignment evidence that leaves Region to HFSS defaults."""
+
+    raw = [str(value) for value in app.oboundary.GetBoundaries()]
+    if len(raw) % 2:
+        raise RuntimeError("native HFSS boundary list is invalid")
+    names = raw[::2]
+    if len(names) != len(set(names)):
+        raise RuntimeError("native HFSS boundary names are not unique")
+    for name in names:
+        assigned = app.oboundary.GetBoundaryAssignment(name)
+        if assigned is None:
+            raise RuntimeError(f"native boundary assignment is unavailable for {name!r}")
+        try:
+            raw_ids = [int(value) for value in assigned]
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"native boundary assignment IDs are invalid for {name!r}") from exc
+        if not raw_ids or len(raw_ids) != len(set(raw_ids)):
+            raise RuntimeError(f"native boundary assignment IDs are invalid for {name!r}")
+        _, _, objects = _resolve_native_assignment(app, raw_ids)
+        if "Region" in objects:
+            raise RuntimeError(f"Region has an explicit native boundary {name!r}")
+
+
+def _implicit_closed_enclosure(app: Any, source: Mapping[str, Any]) -> dict[str, Any]:
+    if source["native_region"].get("outer_boundary_policy") != "hfss_default.v1":
+        raise ValueError("EPR Region boundary policy requires re-preparation")
+    faces = _enclosure_faces(app, source)
+    _verify_no_explicit_region_boundary(app)
+    return {
+        "boundary_policy": "hfss_default.v1",
+        "explicit_assignment": False,
+        **faces,
     }
 
 
@@ -1780,6 +1812,8 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
     source = detached(prepared.source)
     if source.get("native_region", {}).get("method") != "single_region_absolute_offset.v1":
         raise ValueError("EPR geometry predates single Region; reprepare the handoff")
+    if source["native_region"].get("outer_boundary_policy") != "hfss_default.v1":
+        raise ValueError("EPR Region boundary policy requires re-preparation")
     polygons = {item["polygon_id"]: item for item in source["polygons"]}
     junction_regions = {
         item["source_polygon_id"]: item for item in source["junction_regions"]
@@ -1963,7 +1997,7 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
 
     started = time.perf_counter()
     bindings.insert(0, _create_epr_region(app, source))
-    enclosure = _assign_closed_enclosure(app, source)
+    enclosure = _implicit_closed_enclosure(app, source)
     phase_seconds["region_boundary_seconds"] = time.perf_counter() - started
 
     surface_selections: list[dict[str, Any]] = []
@@ -2164,9 +2198,24 @@ def bind_saved_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -> di
                 **evidence,
             }
         )
-    closed_type = _native_boundary_type(app, "SCGSimClosedEnclosure")
-    if closed_type != "Perfect E":
-        raise RuntimeError("saved EPR closed enclosure boundary differs")
+    boundary_policy = region_plan.get("outer_boundary_policy")
+    if boundary_policy == "hfss_default.v1":
+        enclosure = {
+            **_implicit_closed_enclosure(app, source),
+            "binding_stage": "saved_project_readback_without_cad_creation",
+        }
+    elif "outer_boundary_policy" not in region_plan:
+        # Historical prepared source records an explicit named enclosure.
+        closed_type = _native_boundary_type(app, "SCGSimClosedEnclosure")
+        if closed_type != "Perfect E":
+            raise RuntimeError("saved EPR closed enclosure boundary differs")
+        enclosure = {
+            "boundary_name": "SCGSimClosedEnclosure",
+            "native_boundary_type": closed_type,
+            "binding_stage": "saved_project_readback_without_cad_creation",
+        }
+    else:
+        raise ValueError("saved EPR Region boundary policy is unknown")
     return {
         "schema_version": "scgsim.aedt.epr-native-binding.v1",
         "route": prepared.route,
@@ -2175,11 +2224,7 @@ def bind_saved_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -> di
         "junctions": junctions,
         "surface_selections": selections,
         "material_readback": _material_readback(app, source["materials"]),
-        "closed_enclosure": {
-            "boundary_name": "SCGSimClosedEnclosure",
-            "native_boundary_type": closed_type,
-            "binding_stage": "saved_project_readback_without_cad_creation",
-        },
+        "closed_enclosure": enclosure,
         "binding_stage": "saved_project_readback_without_cad_creation",
     }
 

@@ -353,11 +353,20 @@ the old GDS authoring API remains available and unchanged.
 For new EPR preparations, source vacuum components remain logical topology
 and field-side provenance, not separate native solids. Native model CAD has
 one vacuum `Region` with six editable Absolute Offset padding values from the
-source vacuum record. The Region exterior has an explicit Perfect E boundary.
-Substrate domains stay separate, and electric/magnetic domain integrals count
-the physical Region once alongside each substrate domain; logical vacuum
-components cannot multiply the energy denominator. Historical per-component
-result records remain readable under their original source contract.
+source vacuum record. New preparations use
+`outer_boundary_policy: hfss_default.v1` without an explicit assignment on the
+Region exterior; HFSS applies its default Perfect E boundary to model surfaces
+exposed to the background ([HFSS Perfect E boundaries](https://ansyshelp.ansys.com/public/Views/Secured/Electronics/v242/en/Subsystems/HFSS/Content/HFSS/PerfectEBoundaries.htm)).
+SCGSim still verifies all six Region faces and bounds. The closed-enclosure
+evidence records this policy with `explicit_assignment: false` and does not
+invent a boundary name or type. Saved-field readback verifies the same policy.
+A pre-execution handoff without this marker must be prepared again; saved
+historical projects without it remain readable through the original named
+Perfect E validation path. Substrate domains stay separate, and
+electric/magnetic domain integrals count the physical Region once alongside
+each substrate domain; logical vacuum components cannot multiply the energy
+denominator. Historical per-component result records remain readable under
+their original source contract.
 New surface analysis also emits one unmasked baseline per selected physical
 owner/interface group in addition to the explicitly requested margins. The
 baseline has its own `unmasked_baseline` evaluation identity at zero shrink;
