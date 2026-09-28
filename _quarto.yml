@@ -13,8 +13,8 @@ website:
   title: "SCGSim"
   description: "Independent downstream research toolkit for superconducting-circuit simulation"
   page-navigation: true
-  reader-mode: true
-  search: true
+  reader-mode: false
+  search: false
   repo-url: https://github.com/OrPenStrike/scgsim
   repo-actions: [source, issue]
   navbar:
