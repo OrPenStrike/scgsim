@@ -1,0 +1,334 @@
+---
+title: "Eigenmode and Offline EPR"
+---
+
+::: {.callout-note title="CONVERGING candidate contract"}
+Both backends provide one solver-specific `EigenmodeSim` with surface, bulk,
+and port/junction EPR analysis. Their preparation and result types remain
+backend-owned. Offline film reanalysis uses recorded result evidence and does
+not reopen a solver. This page documents the current candidate; it does not
+claim V1 stability.
+:::
+
+## Workflow and state contract
+
+| Step | AEDT | Palace |
+|---|---|---|
+| Configure | `scgsim.aedt.EigenmodeSim`: `set_geometry(component_or_geometry_input)`, `set_stack(mapping_or_json_path)`, `set_output_dir(path)`, `set_eigenmode(*, project_name, design_name, run_control, route='B', route_a_profile=None, resources=None, geometry_workers=None)`, `set_surface_epr(*, contributions=(), defaults=None)`, `add_junction(PlanarJunction)`, and `set_epr_request(EprAnalysisRequest | None)` | `scgsim.palace.EigenmodeSim`: `set_geometry(component)`, `set_stack(mapping_or_json_path)`, `set_output_dir(path)`, `set_vacuum_region(...)`, `set_eigenmode(*, num_modes=10, target=None, tolerance=1e-6, save=0)`, and `set_mesh(*, refined_mesh_size, max_mesh_size)`. Optional EPR setup: `set_surface_epr(*, representation, specs, route_a_thin_film=None)`, `add_port(name, *, layer, layout_sheet=True, inductance)`, and `set_epr_request(*, surface_interfaces: Sequence[str] | None = None, bulk_domain_ids: Sequence[str] | None = None, port_names: Sequence[str] | None = None)`. |
+| Prepare a handoff | `prepare_handoff()` creates the versioned HFSS Eigenmode package. It does not run HFSS. | `mesh()` creates the local mesh; `write_config()` writes Palace configuration; `prepare_handoff(*, profile, executable, resources=None, setup_commands=(), petsc_options=())` creates the manual run package. Quarto examples are disabled and do not call these methods. |
+| Resolve returned results | `sim.resolve_results(run_dir=None)` resolves the AEDT run summary. `scgsim.aedt.resolve_epr_result(path)` loads the EPR result record. | `scgsim.palace.resolve_palace_result(run_dir, *, expected_handoff_id)` resolves a returned run; `resolved.epr_result()` detaches its final Eigenmode EPR quantities. `scgsim.palace.resolve_epr_result(path)` loads a detached EPR JSON file without reading the full solver run. |
+| Reanalyze and show | `scgsim.aedt.reanalyze_epr(result, *, surface_defaults=None, group_overrides=None)` returns a fresh `EprResult`; `show_epr(result, *, mode=None, native_pass=None)` returns a Plotly `Figure`. | `scgsim.palace.reanalyze_epr(result, *, surface_defaults=None, group_overrides=None)` returns a fresh `PalaceEprResult`; `show_epr(result, *, mode=None)` returns a Plotly `Figure`. |
+
+The ordinary Palace path prepares and resolves Eigenmode and domain-energy
+results without surface specs, a lumped port, or an EPR request. Those inputs
+are optional EPR declarations, not requirements for an Eigenmode run.
+
+The result belongs to its backend: AEDT keeps an `EprResult` anchored to its
+source evidence, while Palace can detach a `PalaceEprResult` with
+`to_payload()` / `from_payload()`. Neither backend uses a shared simulation
+base class. AEDT's `EprAnalysisRequest` is AEDT-specific; it is not a Palace
+configuration object.
+
+An ordinary Palace Eigenmode configuration does not need Surface-EPR specs or
+a lumped port. Add `set_surface_epr()` and `add_port()` only for those EPR
+model elements. Palace's
+`set_epr_request(*, surface_interfaces: Sequence[str] | None = None, bulk_domain_ids: Sequence[str] | None = None, port_names: Sequence[str] | None = None)`
+filters configured outputs. Surface values are `MA`, `MS`, and `SA`; bulk IDs
+are SGB solution-volume `entry_name` values from `Domains.Postprocessing.Energy`;
+port values are configured `LayoutPortBinding.name` values. `None` selects all
+configured entries, `()` selects none, and an explicit subset must resolve.
+Unknown selections fail against the exact index during config writing and
+result extraction. The selection is retained in result-bound metadata and can
+be read without a `Sim` object. It does not remove physical domains or ports
+from the native model or change the normalization; ordinary Palace Eigenmode
+also works without surface specs or ports.
+
+AEDT's `EprAnalysisRequest` has `mode_indices`, `surface_contribution_ids`,
+`junction_ids`, and `bulk_domain_ids`. `mode_indices=None` selects all requested
+Eigenmodes; an explicit mode selection must be nonempty and valid. For each of
+`surface_contribution_ids`, `junction_ids`, and `bulk_domain_ids`, `None` means
+all supported configured entries, an empty tuple means none, and an explicit
+selection must resolve. Omitting the AEDT EPR request means no EPR analysis
+request.
+
+## Quantities and normalization
+
+The reported participation for a supported energy numerator is
+
+$$
+p_i = \frac{U_i}{U_{norm}}.
+$$
+
+AEDT uses the unique electric-domain normalization
+$U_E=\epsilon_0/2\sum_D\int_D\epsilon_r|E|^2dV$ plus the declared
+junction capacitive energies, $U_{norm}=U_E+\sum_j U_{C,j}$. Palace uses
+its final native electric-domain and capacitive-energy tables for its
+normalization. Thin-film estimates are numerator estimates; SCGSim does not add
+them back into either backend's denominator. The detailed AEDT MA/MS/SA
+surface formulas, material-side binding, and linearized junction normalization
+are documented in [the AEDT Eigenmode reference](specs/aedt-runtime.qmd#surface-estimates-and-junction-normalization).
+
+AEDT bulk domain participation uses
+$U_D=\epsilon_0/2\int_D\epsilon_r|E|^2dV$ divided by the same denominator.
+The report presents surface, bulk, and junction/port partitions on separate
+axes; these views do not assert that every physical loss channel has been
+evaluated.
+
+For an AEDT planar junction, the source declaration includes its polygon,
+terminal nets A and B, directed in-plane unit vector, width, inductance, and
+capacitance. The formal area-average voltage and nonnegative inductive and
+capacitive participation follow the convention in the linked reference.
+Palace's `layout_sheet=True` port is a separate backend contract: it binds an
+authored component port to a layer and inductance, then reports Palace's signed
+native port participation. The signed value is phase-convention dependent and
+is not the same quantity as AEDT's nonnegative $p_L$ or $p_C$.
+
+## Surface identity, masks, and loss assumptions
+
+For AEDT, each `SurfaceEprSpec` binds one contribution ID and source polygon ID
+to an interface (`MA`, `MS`, or `SA`), a top/bottom field side, film thickness,
+film permittivity, optional loss tangent, source, preset, and alternative mask
+margins. `MA` means metal-air, `MS` metal-substrate, and `SA` substrate-air.
+The `field_side` records the requested top/bottom side, and the adjacent source
+domains and physical owner remain explicit evidence; none is inferred from a
+display label. AEDT binds a native material side using its normal-based rule.
+Its `effective_domain_id` remains binding metadata rather than a solver-domain
+restriction or proof that the selected field belongs to that material. `MM`
+may remain semantic evidence but is not a dielectric-film energy contribution.
+Surface construction requires thickness and permittivity for MA/MS/SA. At
+initial AEDT configuration, interface defaults fill unspecified optional loss
+and provenance fields on valid contributions; explicit per-contribution
+values, including an explicit zero loss tangent, take precedence. Defaults
+cannot make an incomplete spec valid.
+
+AEDT Surface EPR integrates horizontal top/bottom support only. It does not
+calculate sidewall film energy. Its unmasked baseline and every requested
+margin are separate evaluations; even a caller's explicit zero margin is a
+separate row. Margins are alternatives, not additive bands. Empty physical
+intersection is recorded as a geometric zero. Palace retains its native
+surface and mask identities; when sidewalls were not selected, their energy
+remains uncomputed rather than zero.
+
+Film loss conversion is $Q^{-1}_i=p_i\tan\delta_i$. A missing loss tangent
+means unknown and yields an unavailable inverse-Q contribution; an explicit
+`0.0` is a known zero and yields a zero contribution. Offline reanalysis applies
+partial updates in this order: recorded assumptions, interface defaults, then
+group overrides. A later value replaces only the same field; an explicit
+`None` loss update marks it unknown, while omitted fields retain their current
+values. Group overrides target exact recorded group IDs and unknown IDs fail.
+Reanalysis never selects contribution patches or changes the underlying
+geometry or field evidence.
+
+Palace's native configuration writes `LossTan=0.0` when the user did not
+provide a loss tangent because that is the backend-compatible config value.
+That native value does not turn an unknown assumption into a known zero: the
+Palace v2 index and detached EPR result preserve `loss_tangent=None`, and
+SCGSim's analysis keeps the inverse-Q contribution unavailable. A native
+infinite-Q or zero-loss display is not evidence that the loss is known to be
+zero.
+
+Historical Palace surface-film records before
+`scgsim.palace.surface-film.v2` can contain a recorded `loss_tangent=0.0`
+whose origin is ambiguous. SCGSim retains that raw value in
+`recorded_native_assumptions`, but treats the effective loss tangent as unknown
+and marks its provenance `historical_ambiguous_zero`. Detached EPR results
+preserve both the recorded value and that interpretation; the inverse-Q
+contribution remains unavailable.
+
+Both `show_epr` views identify owners and source coverage, separate known
+baseline inverse-Q subtotals from unknown losses, and label sidewalls
+uncomputed where applicable. The subtotal includes only known baseline terms;
+it is not total device loss or a lifetime estimate. Requested mask rows are
+alternatives and are not added into that subtotal.
+
+## Static component examples
+
+The paired examples use the public OrPen SC PDK Xmon component, which carries
+structured conductor and topology annotations and an authored
+`o_junction_lumped` port. The exact component dimensions, coupon padding and
+clearance, port inductance, and preset names below come from the pinned public
+[Palace Route B Eigenmode notebook](https://github.com/OrPenStrike/orpen-sc-pdk/blob/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/notebooks/src/ComponentSimulation/Kosen2024_Xmon/palace_route_b_eigenmode.qmd)
+and the same revision's public [component source](https://github.com/OrPenStrike/orpen-sc-pdk/blob/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/orpen_sc_pdk/cells/qubit.py)
+and [preset records](https://github.com/OrPenStrike/orpen-sc-pdk/blob/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/orpen_sc_pdk/materials.json).
+The imported layer stack, material records, and vacuum-padding constant are
+defined in the same revision's public [technology source](https://github.com/OrPenStrike/orpen-sc-pdk/blob/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/orpen_sc_pdk/tech.py)
+and [material helpers](https://github.com/OrPenStrike/orpen-sc-pdk/blob/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/orpen_sc_pdk/materials.py).
+The package revision is
+[`50b59e6e44953a5c6b5d760c3c496cb4c2f31264`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/50b59e6e44953a5c6b5d760c3c496cb4c2f31264)
+(`orpen-sc-pdk==0.1.0`), with Python 3.12–3.13 and GDSFactory 9.48.x.
+The public dependency constraints are in the pinned
+[`pyproject.toml`](https://github.com/OrPenStrike/orpen-sc-pdk/blob/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/pyproject.toml).
+The PDK's literature-central film presets are modeling assumptions, not
+measured material properties.
+
+This common input builds the actual annotated component and corresponding
+stack used by both backend snippets:
+
+```python
+import gdsfactory as gf
+import orpen_sc_pdk
+from orpen_sc_pdk import LAYER_STACK, get_material_records
+from orpen_sc_pdk.helpers.assembly import place_flip_chip_ground_short_bumps
+from scgsim.sgb import build_component_stack
+
+orpen_sc_pdk.activate()
+component = gf.get_component(
+    "kosen2024_flip_chip_xmon_qubit",
+    bump_ring_count_per_side=0,
+    qubit_pad_length=309.5,
+    qubit_pad_width=24.65,
+    qubit_gap=20.0,
+)
+coupon = place_flip_chip_ground_short_bumps(
+    component,
+    coupon_padding_um=75.0,
+    clearance_um=30.0,
+    placement_mode="corner_anchors",
+)
+component = coupon.component
+stack = build_component_stack(
+    component=component,
+    layer_stack=LAYER_STACK,
+    material_records=get_material_records(),
+    coupon_padding_um=coupon.stack_coupon_padding_um,
+)
+```
+
+### Palace Route B
+
+The public component exposes `o_junction_lumped` on `D1_BOTTOM_M1`. This
+static setup uses the PDK's validated literature-central MA/MS/SA presets and
+the authored port as a Palace lumped port:
+
+```python
+from pathlib import Path
+
+from orpen_sc_pdk import (
+    get_interface_preset_records,
+    validate_interface_preset_records,
+)
+from orpen_sc_pdk.tech import OUTER_VACUUM_THICKNESS_UM
+from scgsim.palace import EigenmodeSim
+
+records = validate_interface_preset_records(get_interface_preset_records())
+names = {"MA": "LiteratureCentral_MA", "MS": "LiteratureCentral_MS", "SA": "LiteratureCentral_SA"}
+selected = {kind: records[name] for kind, name in names.items()}
+epr_specs = {}
+for kind, name in names.items():
+    record = selected[kind]
+    epr_specs[kind] = {
+        "thickness": record["thickness"],
+        "permittivity": record["permittivity"],
+        "loss_tangent": record["loss_tangent"],
+        "source": record["source"],
+        "preset": name,
+    }
+
+sim = EigenmodeSim()
+sim.set_geometry(component)
+sim.set_stack(stack)
+sim.set_output_dir(Path("artifacts/palace-xmon-eigenmode"))
+sim.set_vacuum_region(
+    padding=(0.0, 0.0, float(OUTER_VACUUM_THICKNESS_UM))
+)
+sim.set_surface_epr(representation="B", specs=epr_specs)
+sim.add_port(
+    "o_junction_lumped",
+    layer="D1_BOTTOM_M1",
+    layout_sheet=True,
+    inductance=11.78e-9,
+)
+sim.set_eigenmode(num_modes=2, target=2e9, tolerance=1e-6, save=0)
+sim.set_epr_request(
+    surface_interfaces=("MA", "MS", "SA"),
+    bulk_domain_ids=None,
+    port_names=("o_junction_lumped",),
+)
+```
+
+The [pinned public Palace notebook](https://github.com/OrPenStrike/orpen-sc-pdk/blob/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/notebooks/src/ComponentSimulation/Kosen2024_Xmon/palace_route_b_eigenmode.qmd)
+continues with explicit mesh controls, config generation, and a locally
+configured manual-handoff profile. Those steps are deliberately not run by
+this documentation build. Use a new, unused relative output directory for
+each prepared handoff.
+
+### AEDT HFSS Eigenmode
+
+The same component and stack can enter the AEDT facade. Surface contributions
+must use real IDs and polygon IDs from the prepared geometry's
+`contribution_catalog`; the [catalogue-driven handoff example](specs/aedt-runtime.qmd#catalogue-driven-handoff)
+shows how to validate those selections before creating complete
+`SurfaceEprSpec` records. No PDK-specific AEDT contribution ID is guessed
+here. This example requests only bulk-domain outputs. The Eigenmode run-control
+numbers below follow the public
+[AEDT Eigenmode notebook](https://github.com/OrPenStrike/orpen-sc-pdk/blob/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/notebooks/src/ComponentSimulation/CpwFiniteGround/aedt_hfss_eigenmode.py)
+at the same pinned PDK revision; that file is cited for run-control values,
+not for its distinct example geometry.
+
+```python
+from pathlib import Path
+
+from scgsim.aedt import (
+    EigenmodeRunControl,
+    EigenmodeSim,
+    EprAnalysisRequest,
+)
+
+sim = EigenmodeSim()
+sim.set_geometry(component)
+sim.set_stack(stack)
+sim.set_output_dir(Path("artifacts/aedt-xmon-eigenmode"))
+sim.set_eigenmode(
+    project_name="xmon_eigenmode",
+    design_name="Eigenmode",
+    run_control=EigenmodeRunControl(
+        setup_name="Setup1",
+        minimum_frequency_ghz=3.0,
+        num_modes=2,
+        maximum_passes=6,
+        maximum_delta_frequency_percent=5.0,
+    ),
+    route="B",
+)
+sim.set_epr_request(
+    EprAnalysisRequest(
+        mode_indices=(1, 2),
+        surface_contribution_ids=(),
+        junction_ids=(),
+        bulk_domain_ids=None,
+    )
+)
+handoff = sim.prepare_handoff()
+```
+
+This request includes all configured bulk-domain outputs for modes 1 and 2; it
+requests no surface-contribution or junction outputs. A surface analysis uses
+`set_surface_epr(contributions=...)` with complete `SurfaceEprSpec` records
+validated against the geometry catalogue, as shown by the linked handoff
+example. Include a `PlanarJunction` only when its source polygon, distinct
+terminal nets, direction, width, inductance, and capacitance are declared by
+the source design. AEDT junctions are model elements; they are not excitation
+ports. The output path must be new and unused.
+
+### Offline Palace result example
+
+The detached file can be moved independently of the full Palace run directory.
+This analysis and ordinary Plotly export do not create a simulation object or
+invoke Palace:
+
+```python
+from pathlib import Path
+
+from scgsim.palace import reanalyze_epr, resolve_epr_result, show_epr
+
+result = resolve_epr_result(Path("palace-eigenmode-epr.json"))
+updated = reanalyze_epr(
+    result,
+    surface_defaults={"MA": {"loss_tangent": 2.0e-4}},
+)
+figure = show_epr(updated, mode=1)
+figure.write_html("palace-epr-mode-1.html")
+```
+
+The AEDT counterpart uses `scgsim.aedt.resolve_epr_result(path)` and the same
+module-level `reanalyze_epr(result, ...)` / `show_epr(result, mode=..., native_pass=...)` pattern. These are static API examples, not records of native solves or numerical validation.

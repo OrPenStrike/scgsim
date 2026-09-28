@@ -6,9 +6,10 @@ title: "Folder Tree and Ownership Boundaries"
 
 ```text
 scgsim/
-├── README.md                 # Documentation-owned project entry
-├── _quarto.yml               # Documentation-owned site configuration
-├── docs/                     # Documentation-owned authored Quarto sources/assets
+├── README.md                 # SCGSim Development-owned package entry
+├── _quarto.yml               # SCGSim Development-owned site configuration
+├── _extensions/              # SCGSim Development-owned vendored Quarto extensions
+├── docs/                     # SCGSim Development-owned authored Quarto sources/assets
 ├── src/scgsim/               # SCGSim Development-owned product source
 ├── schemas/                  # SCGSim Development-owned product schemas
 ├── scripts/                  # SCGSim Development-owned producers/tooling
@@ -21,14 +22,13 @@ Generated site output is never source authority.
 
 | Owner | Responsibility |
 |---|---|
-| SCGSim Development | Package/build/runtime/report source, schemas, tests, scripts, CI/release, and generated API-reference producers |
+| SCGSim Development | Package/build/runtime/report source, schemas, tests, scripts, CI/release, README, Quarto site configuration and extensions, authored documentation and assets, information architecture and prose, generated-reference placement/presentation |
 | OrPen SC PDK | Public PDK facts, public Component source, and public component-simulation notebooks |
-| SCQ Documentation | `README.md`, `_quarto.yml`, authored `docs/**`, authored documentation assets, Quarto information architecture and prose, generated-reference placement/presentation |
 | Chip Design EPR | Surface-EPR requirements and private consumer validation only |
 | `scq-ansys-aedt` | Version-locked AEDT/PyAEDT procedure only; no repository path ownership |
 | Integration & Sync | Repository settings, merges, future pins, synchronization, and cleanup |
 
 Generated API reference may be produced from product-owned source, while its
-placement and presentation remain Documentation-owned. No owner listed here may
+placement and presentation remain package-owned. No owner listed here may
 infer Human acceptance, publication authority, or merge authority from a green
 build.

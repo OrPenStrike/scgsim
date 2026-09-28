@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from numbers import Real
 from typing import Any
 
+from scgsim.semantics.epr import film_assumptions
+
 
 def normalize_surface_epr_specs(
     specs: Mapping[str, Mapping[str, Any]],
@@ -28,9 +30,12 @@ def normalize_surface_epr_specs(
         unknown = set(raw).difference(
             {
                 "thickness",
+                "film_thickness_m",
                 "permittivity",
                 "material_id",
                 "loss_tangent",
+                "source",
+                "preset",
                 "face_kinds",
                 "required",
                 "inset_margins_um",
@@ -41,10 +46,15 @@ def normalize_surface_epr_specs(
                 f"Surface EPR {interface_type} has unknown fields: {sorted(unknown)}."
             )
         thickness = raw.get("thickness")
-        if not _positive(thickness):
+        thickness_m = raw.get("film_thickness_m")
+        if (thickness is None) == (thickness_m is None):
             raise ValueError(
-                f"Surface EPR {interface_type} requires positive thickness."
+                f"Surface EPR {interface_type} requires exactly one native thickness or film_thickness_m."
             )
+        if thickness is not None and not _positive(thickness):
+            raise ValueError(f"Surface EPR {interface_type} requires positive thickness.")
+        if thickness_m is not None:
+            film_assumptions({"film_thickness_m": thickness_m}, partial=True)
         numeric = raw.get("permittivity")
         material_id = raw.get("material_id")
         if (numeric is None) == (material_id is None):
@@ -66,20 +76,20 @@ def normalize_surface_epr_specs(
                     f"Surface EPR {interface_type} material_id must resolve an explicit dielectric material."
                 )
             numeric = material.get("permittivity")
-            default_loss = material.get("loss_tangent", 0.0)
+            default_loss = material.get("loss_tangent")
             resolved = {"material_id": material_id}
         else:
-            default_loss = 0.0
+            default_loss = None
             resolved = {}
         if not _positive(numeric):
             raise ValueError(
                 f"Surface EPR {interface_type} requires positive resolved permittivity."
             )
         loss_tangent = raw.get("loss_tangent", default_loss)
-        if not _nonnegative(loss_tangent):
-            raise ValueError(
-                f"Surface EPR {interface_type} requires non-negative loss_tangent."
-            )
+        film_assumptions({"loss_tangent": loss_tangent}, partial=True)
+        source = raw.get("source", "material" if material_id is not None else "explicit")
+        preset = raw.get("preset")
+        film_assumptions({"source": source, "preset": preset}, partial=True)
         face_kinds = raw.get("face_kinds")
         if face_kinds is not None:
             if not isinstance(face_kinds, (list, tuple)) or not face_kinds:
@@ -118,9 +128,11 @@ def normalize_surface_epr_specs(
                 normalized_margins.append(float(margin))
             resolved["inset_margins_um"] = normalized_margins
         result[interface_type] = {
-            "thickness": float(thickness),
+            **({"thickness": float(thickness)} if thickness is not None else {"film_thickness_m": float(thickness_m)}),
             "permittivity": float(numeric),
-            "loss_tangent": float(loss_tangent),
+            "loss_tangent": None if loss_tangent is None else float(loss_tangent),
+            "source": source,
+            "preset": preset,
             "required": required,
             **resolved,
         }
@@ -158,6 +170,17 @@ def build_surface_epr_postprocessing(
             raise ValueError(
                 f"Required Surface EPR {interface_type} has no matching structured group."
             )
+        native_thickness = (
+            preset["film_thickness_m"] / float(model_l0_m)
+            if "film_thickness_m" in preset else preset["thickness"]
+        )
+        snapshot = {
+            **preset,
+            "thickness": native_thickness,
+            "film_thickness_m": native_thickness * float(model_l0_m),
+            "model_l0_m": float(model_l0_m),
+            "schema_version": "scgsim.palace.surface-film.v2",
+        }
         for name, info in matches:
             index = len(rows) + 1
             attrs = _attributes(info.get("phys_group"))
@@ -166,9 +189,10 @@ def build_surface_epr_postprocessing(
                     "Index": index,
                     "Attributes": attrs,
                     "Type": interface_type,
-                    "Thickness": preset["thickness"],
+                    "Thickness": native_thickness,
                     "Permittivity": preset["permittivity"],
-                    "LossTan": preset["loss_tangent"],
+                    # Palace needs a numeric value; the index snapshot keeps None distinct.
+                    "LossTan": 0.0 if preset["loss_tangent"] is None else preset["loss_tangent"],
                 }
             )
             baseline_entry = {
@@ -179,7 +203,7 @@ def build_surface_epr_postprocessing(
                 "attributes": attrs,
                 "physical_names": [name],
                 "metadata": _structured_metadata(info),
-                "epr_spec": dict(preset),
+                "epr_spec": dict(snapshot),
             }
             if masks_requested:
                 baseline_entry["baseline_index"] = index
@@ -193,7 +217,7 @@ def build_surface_epr_postprocessing(
                     margin_um=float(margin_um),
                 )
                 mask_requests.append(
-                    (index, name, info, preset, attrs, margin_index, float(margin_um))
+                    (index, name, info, snapshot, attrs, margin_index, float(margin_um))
                 )
 
     for (
@@ -216,7 +240,7 @@ def build_surface_epr_postprocessing(
                 "Type": info["interface_type"],
                 "Thickness": preset["thickness"],
                 "Permittivity": preset["permittivity"],
-                "LossTan": preset["loss_tangent"],
+                "LossTan": 0.0 if preset["loss_tangent"] is None else preset["loss_tangent"],
                 "Mask": {"Type": "Inset", "Margin": native_margin},
             }
         )

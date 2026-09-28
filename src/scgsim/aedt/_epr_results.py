@@ -10,6 +10,8 @@ from typing import Any
 
 from pathlib import Path
 
+from scgsim.semantics.epr import film_assumptions, inverse_quality_factor
+
 from ._epr_models import (
     EprAnalysisRequest,
     EprResult,
@@ -125,6 +127,16 @@ def surface_integral_groups(
             groups.setdefault((*signature, *evaluation_key), []).append(member)
     result: list[dict[str, Any]] = []
     for signature, members in sorted(groups.items(), key=lambda item: repr(item[0])):
+        member_assumptions = {
+            (
+                specs[member["contribution_id"]].loss_tangent,
+                specs[member["contribution_id"]].source,
+                specs[member["contribution_id"]].preset,
+            )
+            for member in members
+        }
+        if len(member_assumptions) != 1:
+            raise ValueError("one physical surface group has conflicting film provenance")
         owner_id, interface_kind, thickness, film_epsilon, substrate_epsilon = signature[:5]
         if evaluation_policy is None:
             evaluation_kind = None
@@ -850,6 +862,24 @@ def combine_epr_mode(
                 normal,
                 tangential,
             )
+            group_specs = {
+                (
+                    specs_by_id[member["contribution_id"]].loss_tangent,
+                    specs_by_id[member["contribution_id"]].source,
+                    specs_by_id[member["contribution_id"]].preset,
+                )
+                for member in group["members"]
+            }
+            if len(group_specs) != 1:
+                raise ValueError("one physical surface group has conflicting film provenance")
+            loss_tangent, source_name, preset_name = group_specs.pop()
+            assumptions = film_assumptions({
+                "film_thickness_m": group["film_thickness_m"],
+                "film_relative_permittivity": group["film_relative_permittivity"],
+                "loss_tangent": loss_tangent,
+                "source": source_name,
+                "preset": preset_name,
+            })
             surface_rows.append(
                 {
                     **group,
@@ -860,6 +890,10 @@ def combine_epr_mode(
                     ),
                     "energy_j": energy,
                     "participation": energy / normalization_j,
+                    **({
+                        "assumptions": assumptions,
+                        "inverse_q": inverse_quality_factor(energy / normalization_j, loss_tangent),
+                    } if not prepared._legacy_payload else {}),
                 }
             )
     elif granularity is None:
@@ -977,11 +1011,31 @@ def combine_epr_mode(
                     ),
                     "energy_j": energy,
                     "participation": energy / normalization_j,
+                    **({
+                        "assumptions": film_assumptions({
+                            "film_thickness_m": spec.film_thickness_m,
+                            "film_relative_permittivity": spec.film_relative_permittivity,
+                            "loss_tangent": spec.loss_tangent,
+                            "source": spec.source,
+                            "preset": spec.preset,
+                        }),
+                        "inverse_q": inverse_quality_factor(energy / normalization_j, spec.loss_tangent),
+                    } if not prepared._legacy_payload else {}),
                 }
             )
 
+    selected_domains = (
+        set(domains)
+        if request is None or request.bulk_domain_ids is None
+        else set(request.bulk_domain_ids)
+    )
+    if not selected_domains <= set(domains):
+        raise ValueError("EPR request selects an unknown bulk domain")
     return {
-        "schema_version": "scgsim.aedt.epr-mode-energy.v1",
+        "schema_version": (
+            "scgsim.aedt.epr-mode-energy.v1"
+            if prepared._legacy_payload else "scgsim.aedt.epr-mode-energy.v2"
+        ),
         "surface_granularity": granularity or "per_binding.v1",
         "frequency_hz": frequency_hz,
         "electric_energy_j": electric_energy_j,
@@ -990,10 +1044,274 @@ def combine_epr_mode(
         "magnetic_energy_balance_j": magnetic_energy_j + model_inductive_energy_j,
         "junction_capacitive_energy_j": capacitive_energy_j,
         "normalization_energy_j": normalization_j,
-        "electric_domains": electric_rows,
+        "electric_domains": [
+            row for row in electric_rows if row["domain_id"] in selected_domains
+        ],
         "surface_contributions": surface_rows,
         "junctions": junction_rows,
     }
+
+
+def _surface_original_assumptions(surface: Mapping[str, Any]) -> dict[str, Any]:
+    if "original_assumptions" in surface:
+        return film_assumptions(surface["original_assumptions"], allow_unknown=True)
+    if "assumptions" in surface:
+        return film_assumptions(surface["assumptions"], allow_unknown=True)
+    return film_assumptions(
+        {
+            "film_thickness_m": surface.get("film_thickness_m"),
+            "film_relative_permittivity": surface.get("film_relative_permittivity"),
+            "loss_tangent": None,
+            "source": None,
+            "preset": None,
+        },
+        allow_unknown=True,
+    )
+
+
+def _film_updates(
+    updates: Mapping[str, Mapping[str, Any]] | None, *, name: str
+) -> dict[str, dict[str, Any]]:
+    if updates is None:
+        return {}
+    if not isinstance(updates, Mapping) or any(
+        not isinstance(key, str) or not key for key in updates
+    ):
+        raise TypeError(f"{name} must be a non-empty-string-keyed mapping")
+    return {key: film_assumptions(value, partial=True) for key, value in updates.items()}
+
+
+def reanalyze_epr(
+    result: EprResult,
+    *,
+    surface_defaults: Mapping[str, Mapping[str, Any]] | None = None,
+    group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
+) -> EprResult:
+    """Recompute film estimates from one resolved result; never reopen AEDT."""
+
+    if not isinstance(result, EprResult):
+        raise TypeError("result must be EprResult")
+    defaults = _film_updates(surface_defaults, name="surface_defaults")
+    if set(defaults) - {"MA", "MS", "SA"}:
+        raise ValueError("surface_defaults supports only MA, MS, and SA")
+    overrides = _film_updates(group_overrides, name="group_overrides")
+    known_groups = {
+        str(surface["group_id"])
+        for row in result.rows if row["status"] == "complete"
+        for surface in row["surface_contributions"] if "group_id" in surface
+    }
+    if set(overrides) - known_groups:
+        raise ValueError("group_overrides contains an unknown original group ID")
+    rows: list[Mapping[str, Any]] = []
+    for row in result.rows:
+        if row["status"] != "complete":
+            rows.append(row)
+            continue
+        normalization = _finite(row["normalization_energy_j"], "normalization energy")
+        if normalization <= 0:
+            raise ValueError("normalization energy must be positive")
+        surfaces: list[dict[str, Any]] = []
+        for surface in row["surface_contributions"]:
+            original = _surface_original_assumptions(surface)
+            current = film_assumptions(
+                surface.get("assumptions", original), allow_unknown=True
+            )
+            interface_update = defaults.get(surface["interface_kind"], {})
+            group_update = overrides.get(surface.get("group_id"), {})
+            applied = {**interface_update, **group_update}
+            candidate = {**current, **applied}
+            if any(name in applied for name in ("film_thickness_m", "film_relative_permittivity", "loss_tangent")):
+                if "source" not in applied:
+                    candidate["source"] = (
+                        "offline_group_override" if group_update else "offline_interface_default"
+                    )
+                if "preset" not in applied:
+                    candidate["preset"] = None
+            updated = film_assumptions(
+                candidate,
+                allow_unknown=True,
+            )
+            original_participation = _finite(
+                surface.get("original_participation", surface["participation"]),
+                "original participation",
+            )
+            original_energy = _finite(
+                surface.get("original_energy_j", surface["energy_j"]),
+                "original film energy",
+            )
+            changed_coefficient = any(
+                updated[name] != original[name]
+                for name in ("film_thickness_m", "film_relative_permittivity")
+            )
+            if changed_coefficient:
+                if original["film_thickness_m"] is None or original["film_relative_permittivity"] is None:
+                    raise ValueError("historical film coefficients are unavailable for reanalysis")
+                if updated["film_thickness_m"] is None or updated["film_relative_permittivity"] is None:
+                    raise ValueError("film coefficients cannot be cleared")
+                recombination_terms = {
+                    "normal_integral_v2",
+                    "tangential_integral_v2",
+                }
+                if surface["interface_kind"] == "MS":
+                    recombination_terms.add("substrate_relative_permittivity")
+                if recombination_terms <= set(surface):
+                    energy = _surface_energy_j(
+                        surface["interface_kind"],
+                        updated["film_thickness_m"],
+                        updated["film_relative_permittivity"],
+                        _finite(surface.get("substrate_relative_permittivity", 1.0), "substrate epsilon"),
+                        _finite(surface["normal_integral_v2"], "normal integral"),
+                        _finite(surface["tangential_integral_v2"], "tangential integral"),
+                    )
+                    participation = energy / normalization
+                else:
+                    if "group_id" in surface:
+                        raise ValueError("grouped surface result lacks original field integrals")
+                    # Historical per-binding records may not retain separate field integrals.
+                    if surface["interface_kind"] == "SA" and updated["film_relative_permittivity"] != original["film_relative_permittivity"]:
+                        raise ValueError("SA epsilon change needs stored normal and tangential integrals")
+                    ratio = updated["film_thickness_m"] / original["film_thickness_m"]
+                    if surface["interface_kind"] in {"MA", "MS"}:
+                        ratio *= original["film_relative_permittivity"] / updated["film_relative_permittivity"]
+                    participation = original_participation * ratio
+                    energy = original_energy * ratio
+            else:
+                participation, energy = original_participation, original_energy
+            surfaces.append({
+                **surface,
+                "original_assumptions": original,
+                "original_participation": original_participation,
+                "original_energy_j": original_energy,
+                "assumptions": updated,
+                **({"assumption_update": {
+                    "scope": "group_override" if group_update else "interface_default",
+                    "fields": sorted(applied),
+                    "original_source": original["source"],
+                    "original_preset": original["preset"],
+                }} if applied else {}),
+                "energy_j": energy,
+                "participation": participation,
+                "inverse_q": inverse_quality_factor(participation, updated["loss_tangent"]),
+            })
+        rows.append({
+            **row,
+            "schema_version": "scgsim.aedt.epr-mode-energy.v2",
+            "surface_contributions": surfaces,
+        })
+    original_digest = result.provenance.get("original_result_sha256")
+    if original_digest is None:
+        original_digest = hashlib.sha256(
+            json.dumps(result.to_payload(), sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    provenance = {
+        **result.provenance,
+        "original_result_sha256": original_digest,
+        "film_analysis": {
+            "schema_version": "scgsim.epr.film-analysis.v1",
+            "surface_defaults": defaults,
+            "group_overrides": overrides,
+            "status": "derived_offline",
+        },
+    }
+    return EprResult(
+        result_kind=result.result_kind,
+        setup_name=result.setup_name,
+        rows=tuple(rows),
+        provenance=provenance,
+        _verified_source=result,
+    )
+
+
+def show_epr(
+    result: EprResult, *, mode: int | None = None, native_pass: int | None = None
+) -> Any:
+    """Show one exact pass/mode with separate surface, bulk, and junction axes."""
+
+    if not isinstance(result, EprResult):
+        raise TypeError("result must be EprResult")
+    selected = [
+        row for row in result.rows
+        if (mode is None or row["mode"] == mode)
+        and (native_pass is None or row.get("native_pass") == native_pass)
+    ]
+    if len(selected) != 1:
+        raise ValueError("show_epr requires one exact mode/pass selection")
+    row = selected[0]
+    from plotly import graph_objects as go
+    from plotly.subplots import make_subplots
+
+    figure = make_subplots(rows=3, cols=1, subplot_titles=("Surface", "Bulk", "Junction"))
+    if row["status"] == "complete":
+        surfaces = row["surface_contributions"]
+        surface_labels = [
+            f"{item.get('owner_id', item.get('contribution_id', 'owner'))} / "
+            f"{item['interface_kind']} / {item.get('evaluation_kind', 'requested_margin')} "
+            f"{item['margin_um']:g} µm"
+            for item in surfaces
+        ]
+        figure.add_trace(go.Bar(
+            x=[item["participation"] for item in surfaces], y=surface_labels,
+            orientation="h", name="surface p",
+            customdata=[json.dumps({
+                "group_id": item.get("group_id"),
+                "members": item.get("members", item.get("binding_ids")),
+                "inverse_q": item.get("inverse_q"),
+                "assumptions": item.get("assumptions"),
+                "original_assumptions": item.get("original_assumptions"),
+                "assumption_update": item.get("assumption_update"),
+            }, sort_keys=True, default=str) for item in surfaces],
+            hovertemplate="%{y}<br>p=%{x:.6g}<br>%{customdata}<extra></extra>",
+        ), row=1, col=1)
+        domains = row["electric_domains"]
+        figure.add_trace(go.Bar(
+            x=[item["energy_j"] / row["normalization_energy_j"] for item in domains],
+            y=[item["domain_id"] for item in domains], orientation="h", name="bulk p",
+        ), row=2, col=1)
+        junctions = row["junctions"]
+        figure.add_trace(go.Bar(
+            x=[item["inductive_participation"] for item in junctions],
+            y=[item["junction_id"] for item in junctions], orientation="h", name="junction pL",
+        ), row=3, col=1)
+        figure.add_trace(go.Bar(
+            x=[item["capacitive_participation"] for item in junctions],
+            y=[item["junction_id"] for item in junctions], orientation="h", name="junction pC",
+        ), row=3, col=1)
+        baselines = [
+            item for item in surfaces if item.get("evaluation_kind") == "unmasked_baseline"
+        ]
+        known_baselines = [item["inverse_q"] for item in baselines if item.get("inverse_q") is not None]
+        subtotal = (
+            f"{sum(known_baselines):.6g}" if known_baselines else "unavailable"
+        )
+        figure.add_annotation(
+            text=(
+                f"Coverage: {len(surfaces)} surface rows / "
+                f"{sum(len(item.get('members', item.get('binding_ids', ()))) for item in surfaces)} bindings; "
+                f"{len(domains)} bulk domains; {len(junctions)} junctions. "
+                f"Known baseline 1/Q subtotal: {subtotal}; "
+                f"{sum(item.get('inverse_q') is None for item in baselines)} baseline losses unknown. "
+                "Sidewalls uncomputed; requested margins are alternatives."
+            ),
+            xref="paper", yref="paper", x=0, y=1.08, showarrow=False,
+        )
+    else:
+        frequency = row.get("frequency_hz")
+        frequency_text = (
+            f"; verified frequency {frequency:.6g} Hz"
+            if isinstance(frequency, (int, float)) and math.isfinite(frequency) and frequency > 0
+            else ""
+        )
+        figure.add_annotation(
+            text=f"Partial native result{frequency_text}; EPR quantities unavailable",
+            xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
+        )
+    figure.update_layout(
+        title=f"EPR mode {row['mode']}" + (f" pass {row['native_pass']}" if "native_pass" in row else " saved field"),
+        height=900, showlegend=True,
+    )
+    for axis in ("xaxis", "xaxis2", "xaxis3"):
+        figure.layout[axis].title = "participation"
+    return figure
 
 
 __all__ = [
@@ -1001,4 +1319,6 @@ __all__ = [
     "plot_epr_result",
     "resolve_epr_result",
     "resolve_saved_solution",
+    "reanalyze_epr",
+    "show_epr",
 ]

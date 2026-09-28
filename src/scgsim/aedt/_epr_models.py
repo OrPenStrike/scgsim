@@ -15,6 +15,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal
 
+from scgsim.semantics.epr import film_assumptions
+
 Route = Literal["A", "B"]
 InterfaceKind = Literal["MA", "MS", "SA", "MM"]
 FieldSide = Literal["top", "bottom", "sidewall"]
@@ -48,13 +50,22 @@ def _number(value: Any, name: str, *, minimum: float = 0.0) -> float:
     return result
 
 
-def _freeze(value: Any) -> Any:
+def _freeze(value: Any, *, verified: Any = None) -> Any:
+    if verified is not None and value is verified:
+        return verified
     if isinstance(value, Mapping):
         if any(not isinstance(key, str) for key in value):
             raise TypeError("EPR mapping keys must be strings")
-        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
+        prior = verified if isinstance(verified, Mapping) else {}
+        return MappingProxyType({
+            key: _freeze(item, verified=prior.get(key)) for key, item in value.items()
+        })
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return tuple(_freeze(item) for item in value)
+        prior = verified if isinstance(verified, Sequence) and not isinstance(verified, (str, bytes)) else ()
+        return tuple(
+            _freeze(item, verified=prior[index] if index < len(prior) else None)
+            for index, item in enumerate(value)
+        )
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     raise TypeError(f"EPR data contains unsupported {type(value).__name__}")
@@ -167,7 +178,11 @@ class SurfaceEprSpec:
     margins_um: tuple[float, ...] = (0.0,)
     film_thickness_m: float | None = None
     film_relative_permittivity: float | None = None
+    loss_tangent: float | None = None
+    source: str | None = None
+    preset: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    _legacy_payload: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         for name in ("contribution_id", "source_polygon_id"):
@@ -196,10 +211,30 @@ class SurfaceEprSpec:
             or self.film_relative_permittivity is None
         ):
             raise ValueError(f"{self.interface_kind} requires film thickness and permittivity")
+        film_assumptions(
+            {
+                "film_thickness_m": self.film_thickness_m,
+                "film_relative_permittivity": self.film_relative_permittivity,
+                "loss_tangent": self.loss_tangent,
+                "source": self.source,
+                "preset": self.preset,
+            }
+            if self.interface_kind in {"MA", "MS", "SA"}
+            else {
+                "loss_tangent": self.loss_tangent,
+                "source": self.source,
+                "preset": self.preset,
+            },
+            partial=self.interface_kind == "MM",
+        )
+        if self._legacy_payload and any(
+            value is not None for value in (self.loss_tangent, self.source, self.preset)
+        ):
+            raise ValueError("legacy surface payload cannot carry new film assumptions")
         object.__setattr__(self, "metadata", _freeze(self.metadata))
 
     def to_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "contribution_id": self.contribution_id,
             "source_polygon_id": self.source_polygon_id,
             "interface_kind": self.interface_kind,
@@ -209,6 +244,11 @@ class SurfaceEprSpec:
             "film_relative_permittivity": self.film_relative_permittivity,
             "metadata": detached(self.metadata),
         }
+        if not self._legacy_payload:
+            payload.update(
+                loss_tangent=self.loss_tangent, source=self.source, preset=self.preset
+            )
+        return payload
 
     @classmethod
     def from_payload(cls, value: Any) -> SurfaceEprSpec:
@@ -224,9 +264,10 @@ class SurfaceEprSpec:
             "film_relative_permittivity",
             "metadata",
         }
-        if set(value) != expected:
+        new = expected | {"loss_tangent", "source", "preset"}
+        if set(value) not in (expected, new):
             raise ValueError("surface EPR payload members are not canonical")
-        return cls(**dict(value))
+        return cls(**dict(value), _legacy_payload=set(value) == expected)
 
 
 @dataclass(frozen=True)
@@ -236,9 +277,11 @@ class EprAnalysisRequest:
     mode_indices: tuple[int, ...] | None = None
     surface_contribution_ids: tuple[str, ...] | None = None
     junction_ids: tuple[str, ...] | None = None
+    bulk_domain_ids: tuple[str, ...] | None = None
+    _legacy_payload: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        for name in ("mode_indices", "surface_contribution_ids", "junction_ids"):
+        for name in ("mode_indices", "surface_contribution_ids", "junction_ids", "bulk_domain_ids"):
             value = getattr(self, name)
             if value is None:
                 continue
@@ -253,8 +296,11 @@ class EprAnalysisRequest:
             else:
                 values = tuple(_text(item, name) for item in values)
             object.__setattr__(self, name, values)
+        if self._legacy_payload and self.bulk_domain_ids is not None:
+            raise ValueError("legacy EPR request cannot select bulk domains")
+
     def to_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "mode_indices": (
                 None if self.mode_indices is None else list(self.mode_indices)
             ),
@@ -267,6 +313,11 @@ class EprAnalysisRequest:
                 None if self.junction_ids is None else list(self.junction_ids)
             ),
         }
+        if not self._legacy_payload:
+            payload["bulk_domain_ids"] = (
+                None if self.bulk_domain_ids is None else list(self.bulk_domain_ids)
+            )
+        return payload
 
     @classmethod
     def from_payload(cls, value: Any) -> EprAnalysisRequest:
@@ -277,9 +328,9 @@ class EprAnalysisRequest:
             "surface_contribution_ids",
             "junction_ids",
         }
-        if set(value) != expected:
+        if set(value) not in (expected, expected | {"bulk_domain_ids"}):
             raise ValueError("EPR analysis request members are not canonical")
-        return cls(**dict(value))
+        return cls(**dict(value), _legacy_payload=set(value) == expected)
 
 
 @dataclass(frozen=True)
@@ -294,6 +345,7 @@ class PreparedPlanarGeometry:
     surface_bindings: tuple[Mapping[str, Any], ...]
     model_sha256: str
     source_sha256: str
+    _legacy_payload: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.route not in {"A", "B"}:
@@ -346,7 +398,10 @@ class PreparedPlanarGeometry:
 
     def to_payload(self) -> dict[str, Any]:
         return {
-            "schema_version": "scgsim.aedt.epr-planar.v1",
+            "schema_version": (
+                "scgsim.aedt.epr-planar.v1"
+                if self._legacy_payload else "scgsim.aedt.epr-planar.v2"
+            ),
             "route": self.route,
             "source": detached(self.source),
             "junctions": [item.to_payload() for item in self.junctions],
@@ -374,7 +429,10 @@ class PreparedPlanarGeometry:
             "model_sha256",
             "source_sha256",
         }
-        if set(value) != expected or value.get("schema_version") != "scgsim.aedt.epr-planar.v1":
+        schema = value.get("schema_version")
+        if set(value) != expected or schema not in {
+            "scgsim.aedt.epr-planar.v1", "scgsim.aedt.epr-planar.v2"
+        }:
             raise ValueError("prepared planar payload is not canonical")
         return cls(
             route=value["route"],
@@ -387,6 +445,7 @@ class PreparedPlanarGeometry:
             surface_bindings=tuple(value["surface_bindings"]),
             model_sha256=value["model_sha256"],
             source_sha256=value["source_sha256"],
+            _legacy_payload=schema.endswith(".v1"),
         )
 
 
@@ -489,6 +548,8 @@ class EprResult:
     setup_name: str
     rows: tuple[Mapping[str, Any], ...]
     provenance: Mapping[str, Any]
+    _legacy_payload: bool = field(default=False, repr=False, compare=False)
+    _verified_source: EprResult | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.result_kind not in {"adaptive_history", "saved_field"}:
@@ -499,7 +560,13 @@ class EprResult:
         rows = tuple(self.rows)
         if any(not isinstance(row, Mapping) for row in rows):
             raise TypeError("EPR result rows must contain mappings")
-        frozen_rows = tuple(_freeze(row) for row in rows)
+        if self._verified_source is not None and not isinstance(self._verified_source, EprResult):
+            raise TypeError("verified source must be an EprResult")
+        prior_rows = self._verified_source.rows if self._verified_source is not None else ()
+        frozen_rows = tuple(
+            _freeze(row, verified=prior_rows[index] if index < len(prior_rows) else None)
+            for index, row in enumerate(rows)
+        )
         identities: set[tuple[int, int | None]] = set()
         complete_members = {
             "schema_version",
@@ -549,7 +616,7 @@ class EprResult:
             if status == "complete":
                 if not complete_members.issubset(row) or row.get(
                     "schema_version"
-                ) != "scgsim.aedt.epr-mode-energy.v1":
+                ) not in {"scgsim.aedt.epr-mode-energy.v1", "scgsim.aedt.epr-mode-energy.v2"}:
                     raise ValueError("complete EPR result row lacks canonical energy members")
                 for name in (
                     "frequency_hz",
@@ -580,6 +647,8 @@ class EprResult:
                         surface.get("participation"),
                         "surface contribution participation",
                     )
+                    if row["schema_version"].endswith(".v2"):
+                        film_assumptions(surface.get("assumptions"), allow_unknown=True)
                 for junction in row["junctions"]:
                     _number(
                         junction.get("inductive_participation"),
@@ -589,7 +658,10 @@ class EprResult:
                         junction.get("capacitive_participation"),
                         "junction capacitive participation",
                     )
-        provenance = _freeze(self.provenance)
+        provenance = _freeze(
+            self.provenance,
+            verified=(self._verified_source.provenance if self._verified_source is not None else None),
+        )
         if not isinstance(provenance, Mapping):
             raise TypeError("EPR result provenance must be a mapping")
         for name in ("model_source_sha256", "analysis_source_sha256"):
@@ -613,7 +685,10 @@ class EprResult:
 
     def to_payload(self) -> dict[str, Any]:
         return {
-            "schema_version": "scgsim.aedt.epr-result.v1",
+            "schema_version": (
+                "scgsim.aedt.epr-result.v1"
+                if self._legacy_payload else "scgsim.aedt.epr-result.v2"
+            ),
             "result_kind": self.result_kind,
             "setup_name": self.setup_name,
             "rows": [detached(row) for row in self.rows],
@@ -631,13 +706,17 @@ class EprResult:
             "rows",
             "provenance",
         }
-        if set(value) != expected or value.get("schema_version") != "scgsim.aedt.epr-result.v1":
+        schema = value.get("schema_version")
+        if set(value) != expected or schema not in {
+            "scgsim.aedt.epr-result.v1", "scgsim.aedt.epr-result.v2"
+        }:
             raise ValueError("EPR result payload is not canonical")
         return cls(
             result_kind=value["result_kind"],
             setup_name=value["setup_name"],
             rows=tuple(value["rows"]),
             provenance=value["provenance"],
+            _legacy_payload=schema.endswith(".v1"),
         )
 
 

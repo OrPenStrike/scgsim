@@ -367,12 +367,21 @@ not acquire invented baseline rows.
 analysis. It enters the same `run.py` transaction owner and delegates to the
 private Eigenmode analysis path; the offline resolver never imports PyAEDT or
 owns Desktop. `resolve_saved_solution()` verifies an immutable project plus
-complete result-directory inventory. `resolve_epr_result()` verifies and loads
-partial history or final saved-field results without filling missing values.
-`plot_epr_result()` is a standalone Plotly function over those resolved records;
-it is not wired into the unified Visualizer. Missing native values remain
-missing rather than becoming zero. Film loss tangent and (p\tan\delta) are
-not implemented or reported.
+complete result-directory inventory. `resolve_epr_result()` structurally
+validates and loads partial history or final saved-field result JSON without
+filling missing values; this is not artifact authentication. A detached EPR
+record retains its recorded source identities and, where present, the
+saved-solution content hash, but these values do not authenticate the detached
+JSON.
+`reanalyze_epr()` recomputes film estimates from stored evidence without
+reopening AEDT, and `show_epr()` gives a standalone surface/bulk/junction
+Plotly view. Neither is wired into the unified Visualizer. The older
+`plot_epr_result()` view remains available. Missing native values and unknown
+film loss tangents remain unknown rather than becoming zero. When the film loss
+tangent is known, the reported surface inverse-Q contribution is
+$p\tan\delta$; an explicit zero produces zero, while an unknown value makes
+that contribution unavailable. See [Eigenmode and Offline EPR](../eigenmode-epr.qmd)
+for the two backend APIs, reanalysis precedence, and report coverage.
 
 #### Catalogue-driven handoff
 
@@ -646,10 +655,10 @@ analysis; the former point-to-edge calculator mask is not a fallback.
 
 For a continuous physical planar patch, the mask is
 
-\[
+$$
 \chi_{patch}\,
 \mathbf{1}[d_{finite\ original\ boundary}\geq margin].
-\]
+$$
 
 The displayed mask is the continuous target, not a claim of exact circular CAD
 arcs. Its current implementation uses KLayout integer geometry at the source
@@ -680,45 +689,47 @@ AEDT authoring remains in the single owned Desktop session. Saved-field
 analysis uses the same inset definition and does not reuse historical
 point-to-edge expression names as the new geometry definition.
 
-With peak phasors, film thickness \(t\), film relative permittivity
-\(\epsilon_f\), and substrate relative permittivity \(\epsilon_s\), the fixed
+### Surface estimates and junction normalization {#surface-estimates-and-junction-normalization}
+
+With peak phasors, film thickness $t$, film relative permittivity
+$\epsilon_f$, and substrate relative permittivity $\epsilon_s$, the fixed
 surface estimates are
 
-\[
+$$
 U_{MA}=\frac{\epsilon_0 t}{2\epsilon_f}\int |E_{n,air}|^2\,dA,
 \quad
 U_{MS}=\frac{\epsilon_0 t\epsilon_s^2}{2\epsilon_f}
 \int |E_{n,substrate}|^2\,dA,
-\]
+$$
 
-\[
+$$
 U_{SA}=\frac{\epsilon_0 t}{2}\int
 \left(\epsilon_f|E_{t,air}|^2+\frac{|E_{n,air}|^2}{\epsilon_f}\right)dA.
-\]
+$$
 
 The unique electric normalization is
-\(U_E=\epsilon_0/2\sum_D\int_D\epsilon_r|E|^2dV\) and
-\(U_{norm}=U_E+\sum_j U_{C,j}\). Thin-film estimates are not added back into
+$U_E=\epsilon_0/2\sum_D\int_D\epsilon_r|E|^2dV$ and
+$U_{norm}=U_E+\sum_j U_{C,j}$. Thin-film estimates are not added back into
 that denominator. MM stays semantic evidence but is excluded from dielectric
 film energy.
 
-For a junction sheet of width \(w\), directed length unit vector
-\(\hat{\ell}\), and terminal direction A to B, the formal complex voltage is
+For a junction sheet of width $w$, directed length unit vector
+$\hat{\ell}$, and terminal direction A to B, the formal complex voltage is
 
-\[
+$$
 V=\frac{1}{w}\int_{sheet}E\!\cdot\!\hat{\ell}\,dA.
-\]
+$$
 
 Its real and imaginary parts are integrated separately over the same sheet,
 direction, and bound solution context and then combined. A precreated directed
 line integral is retained only as a diagnostic; it need not equal the area
-average for a nonuniform field. The convention is \(e^{+i\omega t}\), with
-\(\omega=2\pi\operatorname{Re}(f)\),
-\(I_L=V/(i\omega L)\), \(U_L=L|I_L|^2/2\), and
-\(U_C=C|V|^2/2\). Formal \(p_L=U_L/U_{norm}\) and
-\(p_C=U_C/U_{norm}\) are nonnegative. A separately labelled Palace comparison
+average for a nonuniform field. The convention is $e^{+i\omega t}$, with
+$\omega=2\pi\operatorname{Re}(f)$,
+$I_L=V/(i\omega L)$, $U_L=L|I_L|^2/2$, and
+$U_C=C|V|^2/2$. Formal $p_L=U_L/U_{norm}$ and
+$p_C=U_C/U_{norm}$ are nonnegative. A separately labelled Palace comparison
 may retain the signed quantity
-\(\operatorname{copysign}(p_L,\operatorname{Re}I_L)\), which is not invariant
+$\operatorname{copysign}(p_L,\operatorname{Re}I_L)$, which is not invariant
 under arbitrary phase rotation. The junction contract does not silently add
 resistance, Kerr, or a Palace port result.
 

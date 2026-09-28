@@ -6,6 +6,9 @@ project:
     - docs/*.qmd
     - docs/specs/*.qmd
 
+execute:
+  enabled: false
+
 website:
   title: "SCGSim"
   description: "Independent downstream research toolkit for superconducting-circuit simulation"
@@ -43,6 +46,8 @@ website:
       contents:
         - text: "Examples"
           href: docs/examples.qmd
+        - text: "Eigenmode and offline EPR"
+          href: docs/eigenmode-epr.qmd
         - text: "Notebook UX contracts"
           href: docs/notebook-ux.qmd
     - id: architecture
@@ -77,18 +82,13 @@ website:
           href: docs/ownership.qmd
 
 format:
-  html:
+  qdk-html:
     theme:
-      light: [cosmo, docs/theme-light.scss]
-      dark: [cosmo, docs/theme-dark.scss]
+      light: [default, _extensions/arfiligol/qdk/qdk.scss]
+      dark: [default, _extensions/arfiligol/qdk/qdk.scss, _extensions/arfiligol/qdk/qdk-dark.scss]
     css: docs/styles.css
     html-math-method: mathjax
     respect-user-color-scheme: true
     toc: true
     page-layout: article
-    grid:
-      sidebar-width: 260px
-      body-width: 960px
-      margin-width: 240px
-      gutter-width: 2.5rem
     code-copy: true

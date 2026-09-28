@@ -17,6 +17,8 @@ SCHEMA_VERSION = "scgsim.aedt.hfss-driven.v1"
 EIGENMODE_SCHEMA_VERSION = "scgsim.aedt.hfss-eigenmode.v1"
 EPR_EIGENMODE_SCHEMA_VERSION = "scgsim.aedt.hfss-eigenmode-epr.v1"
 EPR_ANALYSIS_SCHEMA_VERSION = "scgsim.aedt.hfss-eigenmode-epr-analysis.v1"
+EPR_EIGENMODE_SCHEMA_VERSION_V2 = "scgsim.aedt.hfss-eigenmode-epr.v2"
+EPR_ANALYSIS_SCHEMA_VERSION_V2 = "scgsim.aedt.hfss-eigenmode-epr-analysis.v2"
 Q3D_SCHEMA_VERSION = "scgsim.aedt.q3d.v1"
 Q2D_SCHEMA_VERSION = "scgsim.aedt.q2d.v1"
 OFFICIAL_PYAEDT_SOURCE_URL = "https://github.com/ansys/pyaedt/tree/v1.3.0"
@@ -827,6 +829,7 @@ class HfssEprSpec:
     epr_request: Any = None
     aedt_version: str = REQUIRED_AEDT_VERSION
     pyaedt_version: str = LOCKED_PYAEDT
+    _legacy_payload: bool = False
 
     @property
     def mode(self) -> Literal["eigenmode"]:
@@ -855,7 +858,10 @@ class HfssEprSpec:
 
     def to_payload(self) -> dict[str, Any]:
         return {
-            "schema_version": EPR_EIGENMODE_SCHEMA_VERSION,
+            "schema_version": (
+                EPR_EIGENMODE_SCHEMA_VERSION
+                if self._legacy_payload else EPR_EIGENMODE_SCHEMA_VERSION_V2
+            ),
             "mode": self.mode,
             "aedt": {"requested_version": self.aedt_version},
             "pyaedt": {
@@ -874,7 +880,8 @@ class HfssEprSpec:
     def from_payload(cls, payload: dict[str, Any]) -> HfssEprSpec:
         from ._epr_models import EprAnalysisRequest, PreparedPlanarGeometry
 
-        if payload.get("schema_version") != EPR_EIGENMODE_SCHEMA_VERSION:
+        schema = payload.get("schema_version")
+        if schema not in {EPR_EIGENMODE_SCHEMA_VERSION, EPR_EIGENMODE_SCHEMA_VERSION_V2}:
             raise ValueError("unsupported HFSS EPR schema")
         if set(payload) != {
             "schema_version",
@@ -911,6 +918,7 @@ class HfssEprSpec:
                 payload.get("pyaedt", {}).get("locked_version"),
                 "pyaedt.locked_version",
             ),
+            _legacy_payload=schema == EPR_EIGENMODE_SCHEMA_VERSION,
         )
 
 
@@ -926,6 +934,7 @@ class HfssEprAnalysisSpec:
     saved_solution: Any
     aedt_version: str = REQUIRED_AEDT_VERSION
     pyaedt_version: str = LOCKED_PYAEDT
+    _legacy_payload: bool = False
 
     @property
     def mode(self) -> Literal["eigenmode"]:
@@ -965,7 +974,10 @@ class HfssEprAnalysisSpec:
 
     def to_payload(self) -> dict[str, Any]:
         return {
-            "schema_version": EPR_ANALYSIS_SCHEMA_VERSION,
+            "schema_version": (
+                EPR_ANALYSIS_SCHEMA_VERSION
+                if self._legacy_payload else EPR_ANALYSIS_SCHEMA_VERSION_V2
+            ),
             "mode": self.mode,
             "aedt": {"requested_version": self.aedt_version},
             "pyaedt": {
@@ -985,7 +997,8 @@ class HfssEprAnalysisSpec:
     ) -> HfssEprAnalysisSpec:
         from ._epr_models import EprAnalysisRequest, PreparedPlanarGeometry, SavedSolution
 
-        if payload.get("schema_version") != EPR_ANALYSIS_SCHEMA_VERSION:
+        schema = payload.get("schema_version")
+        if schema not in {EPR_ANALYSIS_SCHEMA_VERSION, EPR_ANALYSIS_SCHEMA_VERSION_V2}:
             raise ValueError("unsupported HFSS EPR analysis schema")
         if base_dir is None:
             raise ValueError("HFSS EPR analysis requires a bound base directory")
@@ -1023,10 +1036,13 @@ class HfssEprAnalysisSpec:
                 payload.get("pyaedt", {}).get("locked_version"),
                 "pyaedt.locked_version",
             ),
+            _legacy_payload=schema == EPR_ANALYSIS_SCHEMA_VERSION,
         )
 
 
 def _validate_epr_selection(spec: HfssEprSpec | HfssEprAnalysisSpec) -> None:
+    from ._epr_results import surface_integral_groups
+
     request = spec.epr_request
     if request is None:
         return
@@ -1059,6 +1075,16 @@ def _validate_epr_selection(spec: HfssEprSpec | HfssEprAnalysisSpec) -> None:
     )
     if not selected_junctions <= junction_ids:
         raise ValueError("EPR request selects an unknown junction")
+    source_domains = {
+        item["semantic_id"] for item in spec.geometry.source["solution_regions"]
+    }
+    native_region = spec.geometry.source.get("native_region")
+    if native_region is not None:
+        source_domains.difference_update(native_region["logical_vacuum_ids"])
+        source_domains.add("Region")
+    if request.bulk_domain_ids is not None and not set(request.bulk_domain_ids) <= source_domains:
+        raise ValueError("EPR request selects an unknown bulk domain")
+    surface_integral_groups(spec.geometry, request)
 
 
 HfssSpec = HfssDrivenSpec | HfssEigenmodeSpec | HfssEprSpec | HfssEprAnalysisSpec
@@ -1523,9 +1549,9 @@ def parse_aedt_spec(
         return HfssDrivenSpec.from_payload(payload, base_dir=base_dir)
     if payload.get("schema_version") == EIGENMODE_SCHEMA_VERSION:
         return HfssEigenmodeSpec.from_payload(payload, base_dir=base_dir)
-    if payload.get("schema_version") == EPR_EIGENMODE_SCHEMA_VERSION:
+    if payload.get("schema_version") in {EPR_EIGENMODE_SCHEMA_VERSION, EPR_EIGENMODE_SCHEMA_VERSION_V2}:
         return HfssEprSpec.from_payload(payload)
-    if payload.get("schema_version") == EPR_ANALYSIS_SCHEMA_VERSION:
+    if payload.get("schema_version") in {EPR_ANALYSIS_SCHEMA_VERSION, EPR_ANALYSIS_SCHEMA_VERSION_V2}:
         return HfssEprAnalysisSpec.from_payload(payload, base_dir=base_dir)
     if payload.get("schema_version") == Q3D_SCHEMA_VERSION:
         return Q3dSpec.from_payload(payload, base_dir=base_dir)

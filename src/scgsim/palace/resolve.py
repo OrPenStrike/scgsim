@@ -43,6 +43,18 @@ _PROBLEM_FAMILIES = {
     ),
 }
 
+
+def _output_families(problem: str, index_counts: dict[str, int]) -> tuple[str, ...]:
+    if problem != "Eigenmode":
+        return _PROBLEM_FAMILIES[problem]
+    return (
+        "eig",
+        *(("port-EPR", "port-I", "port-V") if index_counts["lumped_port"] else ()),
+        "domain-E",
+        *(("surface-Q",) if index_counts["surface"] else ()),
+        "error-indicators",
+    )
+
 _REQUIRED_FILES = (
     "metadata/palace_handoff_metadata.json",
     "metadata/palace_run_metadata.json",
@@ -153,6 +165,12 @@ class ResolvedPalaceResult:
     tables: dict[str, ParsedTable]
     returned_receipt: PalaceReturnedReceipt
     provenance: PalaceProvenance
+
+    def epr_result(self):
+        """Detach the verified final Eigenmode EPR quantities for offline work."""
+        from ._epr_results import epr_result
+
+        return epr_result(self)
 
     def show_run_trustworthiness(
         self, *, theme: str = "light", show_details: bool = False
@@ -319,7 +337,7 @@ def _discover_results(
 ) -> dict[str, ParsedTable]:
     results_root = root / "results" / "palace"
     discovered: dict[str, ParsedTable] = {}
-    for family in _PROBLEM_FAMILIES[problem]:
+    for family in _output_families(problem, index_counts):
         path = results_root / f"{family}.csv"
         if not path.is_file():
             raise FileNotFoundError(f"required result family is missing: {path}")
@@ -884,14 +902,15 @@ def _validate_config_index_correspondence(
             _validate_ground_boundary_resolution(boundaries, index_map)
     else:
         ports = _expect_list(
-            boundaries.get("LumpedPort"), "config.Boundaries.LumpedPort"
+            boundaries.get("LumpedPort", []), "config.Boundaries.LumpedPort",
+            allow_empty=True,
         )
         if index_counts["lumped_port"] != len(ports):
             raise ValueError("lumped port count mismatch between config and index map.")
 
     postprocessing = _optional_dict(boundaries.get("Postprocessing")) or {}
     post_diel = _expect_list(
-        postprocessing.get("Dielectric"),
+        postprocessing.get("Dielectric", []),
         "config.Boundaries.Postprocessing.Dielectric",
         allow_empty=True,
     )
@@ -1133,12 +1152,15 @@ def _surface_mask_entries(index_map: dict[str, Any]) -> tuple[dict[str, Any], ..
             raise ValueError("surface EPR owners must be non-empty text.")
         _expect_mapping(metadata.get("source_provenance"), "surface EPR provenance")
         epr_spec = _expect_mapping(baseline.get("epr_spec"), "surface EPR spec")
+        film_v2 = epr_spec.get("schema_version") == "scgsim.palace.surface-film.v2"
         for field, positive in (
             ("thickness", True),
             ("permittivity", True),
             ("loss_tangent", False),
         ):
             value = epr_spec.get(field)
+            if field == "loss_tangent" and film_v2 and value is None:
+                continue
             if (
                 isinstance(value, bool)
                 or not isinstance(value, (int, float))
@@ -1146,6 +1168,17 @@ def _surface_mask_entries(index_map: dict[str, Any]) -> tuple[dict[str, Any], ..
                 or (value <= 0 if positive else value < 0)
             ):
                 raise ValueError(f"surface EPR {field} has an invalid value.")
+        if film_v2:
+            scale = epr_spec.get("model_l0_m")
+            physical = epr_spec.get("film_thickness_m")
+            if (
+                isinstance(scale, bool) or not isinstance(scale, (int, float))
+                or not math.isfinite(scale) or scale <= 0
+                or isinstance(physical, bool) or not isinstance(physical, (int, float))
+                or not math.isfinite(physical) or physical <= 0
+                or not math.isclose(physical, epr_spec["thickness"] * scale, rel_tol=1e-12)
+            ):
+                raise ValueError("surface EPR SI thickness conflicts with recorded Model.L0")
     for entry in dielectric:
         index = _expect_scalar(entry, "index", int)
         baseline_index = _expect_scalar(entry, "baseline_index", int)
@@ -1294,11 +1327,13 @@ def _validate_surface_mask_config(config: dict[str, Any], index_map: dict[str, A
             raise ValueError("config surface EPR attributes do not match index evidence.")
         metadata = _expect_mapping(entry.get("metadata"), "surface EPR metadata")
         epr_spec = _expect_mapping(entry.get("epr_spec"), "surface EPR spec")
+        if epr_spec.get("schema_version") == "scgsim.palace.surface-film.v2" and float(epr_spec["model_l0_m"]) != float(model_l0_m):
+            raise ValueError("surface film Model.L0 disagrees with config")
         expected_fields = {
             "Type": metadata.get("interface_type"),
             "Thickness": epr_spec.get("thickness"),
             "Permittivity": epr_spec.get("permittivity"),
-            "LossTan": epr_spec.get("loss_tangent"),
+            "LossTan": 0.0 if epr_spec.get("loss_tangent") is None else epr_spec["loss_tangent"],
         }
         if any(key not in row or row[key] != value for key, value in expected_fields.items()):
             raise ValueError("config surface EPR fields do not match source index evidence.")
@@ -1728,9 +1763,11 @@ def _validate_receipt_payload(
 
     output_files = _expect_list(receipt_payload.get("output_files"), "output_files")
     output_map = _extract_hash_map(output_files)
+    index_map = _read_json(root / "metadata" / "palace_index_map.json")
     required_outputs = _required_output_records(
         problem,
-        masks_configured=bool(_surface_mask_entries(_read_json(root / "metadata" / "palace_index_map.json"))),
+        index_counts=_index_counts(index_map),
+        masks_configured=bool(_surface_mask_entries(index_map)),
     )
     for expected in required_outputs:
         rel = expected["path"]
@@ -1908,9 +1945,9 @@ def _validate_returned_state_agreement(
 
 
 def _required_output_records(
-    problem: str, *, masks_configured: bool = False
+    problem: str, *, index_counts: dict[str, int], masks_configured: bool = False
 ) -> tuple[dict[str, Any], ...]:
-    families = _PROBLEM_FAMILIES[problem]
+    families = _output_families(problem, index_counts)
     records: list[dict[str, Any]] = []
     for family in families:
         rel = f"results/palace/{family}.csv"

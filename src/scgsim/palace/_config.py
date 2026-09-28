@@ -189,8 +189,6 @@ def build_eigenmode_config(
     mesh_path: Path,
 ) -> EigenmodeConfigBuildResult:
     """Build one non-Floquet Eigenmode config from SGB-authored groups."""
-    if not ports:
-        raise ValueError("Eigenmode layout-sheet candidate requires at least one port.")
     if not isinstance(num_modes, int) or isinstance(num_modes, bool) or num_modes < 1:
         raise ValueError("num_modes must be a positive integer.")
     if not _positive_finite(eigenmode_tolerance):
@@ -240,10 +238,9 @@ def build_eigenmode_config(
     }
     if target_hz is not None:
         eigenmode["Target"] = float(target_hz) / 1e9
-    boundaries: dict[str, Any] = {
-        "PEC": {"Attributes": pec_attributes},
-        "LumpedPort": lumped_ports,
-    }
+    boundaries: dict[str, Any] = {"PEC": {"Attributes": pec_attributes}}
+    if lumped_ports:
+        boundaries["LumpedPort"] = lumped_ports
     if epr_rows:
         boundaries["Postprocessing"] = {"Dielectric": epr_rows}
     problem_block = _build_output_formats(numerical)

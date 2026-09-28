@@ -15,7 +15,14 @@ the public component-simulation examples and imports `scgsim.palace`,
 | Q3D | `notebooks/ComponentSimulation/CpwFiniteGround/` | Implemented, converging |
 | Q2D | `notebooks/CrossSectionSimulation/CpwFiniteGround/` | Implemented, converging |
 
-Browse the [OrPen SC PDK notebooks](https://github.com/OrPenStrike/orpen-sc-pdk/tree/develop/notebooks).
+The package-owned [Eigenmode and Offline EPR](eigenmode-epr.qmd) page records
+the current Palace and AEDT APIs, normalization and loss assumptions, and
+static snippets using the public OrPen Xmon component. Those snippets are not
+claims of native solver validation. The public PDK notebooks remain the
+canonical source for full component-simulation workflows.
+
+Browse the [OrPen SC PDK notebooks at the source revision used by the static
+example](https://github.com/OrPenStrike/orpen-sc-pdk/tree/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/notebooks).
 
 The canonical section names and stage ordering remain in
 [Notebook UX Contracts](notebook-ux.qmd). Backend availability and remaining

@@ -17,9 +17,12 @@ from ._epr_models import (
 from ._epr_results import (
     combine_epr_mode,
     plot_epr_result,
+    reanalyze_epr,
     resolve_epr_result,
     resolve_saved_solution,
+    show_epr,
 )
+from .eigenmode import EigenmodeSim
 from .handoff import (
     analyze_epr,
     HandoffPlan,
@@ -61,6 +64,7 @@ __all__ = [
     "FrequencySweepSpec",
     "EprResult",
     "EprAnalysisRequest",
+    "EigenmodeSim",
     "HandoffPlan",
     "HfssDrivenMode",
     "HfssDrivenSpec",
@@ -90,10 +94,12 @@ __all__ = [
     "combine_epr_mode",
     "parse_aedt_spec",
     "plot_epr_result",
+    "reanalyze_epr",
     "prepare_handoff",
     "prepare_hfss_eigenmode_from_geometry",
     "prepare_planar_geometry_input",
     "resolve_epr_result",
     "resolve_results",
     "resolve_saved_solution",
+    "show_epr",
 ]
