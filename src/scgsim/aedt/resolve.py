@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import csv
-import html
-import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
@@ -129,84 +127,9 @@ class AedtBenchmarkReport:
     show_details: bool = False
 
     def _ipython_display_(self) -> None:
-        from IPython.display import HTML, display
+        from ._presentation import display_benchmark
 
-        benchmark = self.data["benchmark"]
-        status = html.escape(str(benchmark["status"]))
-        mode = html.escape(str(self.data["mode"]))
-        display(HTML(f"<section><h3>AEDT simulation benchmark</h3><p>{mode} · {status}</p>"
-                     f"<p>SCGSim execution: {self.data['execution_seconds']} s; "
-                     f"project: {self.data['project_bytes']} bytes; "
-                     f"primary CSV: {self.data['primary_csv_bytes']} bytes.</p></section>"))
-        if benchmark["status"] != "complete":
-            if benchmark.get("reason"):
-                display(HTML(f"<p>{html.escape(str(benchmark['reason']))}</p>"))
-            return
-        rows: list[dict[str, Any]] = []
-        pass_rows: list[dict[str, Any]] = []
-        def visit(node: dict[str, Any], profile: str, group: str, branch: str, pass_id: int | None = None) -> None:
-            name = str(node["name"])
-            pass_id = node.get("adaptive_pass", pass_id)
-            kind = (
-                "adaptive" if pass_id is not None else
-                "sweep" if "sweep" in name.lower() else
-                "subproblem" if self.data["mode"] in {"q2d", "q3d"} else branch
-            )
-            if node.get("metrics"):
-                rows.append({"profile": profile, "process_group": group, "scope": kind,
-                             "stage": name, "pass": pass_id,
-                             "frequency_native": node.get("native_properties", {}).get("Frequency"),
-                             **node["metrics"]})
-            if "adaptive_pass" in node:
-                peak = node.get("stage_memory_peak", {})
-                pass_rows.append({"profile": profile, "process_group": group, "scope": "adaptive",
-                                  "stage": name, "pass": pass_id,
-                                  "memory_native": peak.get("memory_native", ""),
-                                  **node["metrics"]})
-            for child in node.get("children", []):
-                visit(child, profile, group, kind, pass_id)
-        for profile in benchmark["profiles"]:
-            for group in profile["process_groups"]:
-                visit(group, profile["native_setup_profile"], group["name"], "stage")
-        summary_rows = pass_rows + [
-            row for row in rows
-            if row["pass"] is None and row["scope"] in {"sweep", "subproblem"}
-        ]
-        table_rows = rows if self.show_details else (summary_rows or rows)
-        if table_rows:
-            headings = ("profile", "process_group", "scope", "pass", "stage", "real_seconds", "elapsed_seconds", "cpu_seconds", "memory_native", "tetrahedra", "solved_elements", "elements", "linear_matrix_size")
-            head = "".join(f"<th>{html.escape(key)}</th>" for key in headings)
-            body = "".join("<tr>" + "".join(f"<td>{html.escape(str(row.get(key, '')))}</td>" for key in headings) + "</tr>" for row in table_rows)
-            display(HTML(f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"))
-            try:
-                import plotly.graph_objects as go
-            except ImportError:
-                display(HTML("<p>Plotly is unavailable; the native pass table remains available.</p>"))
-            else:
-                figure = go.Figure()
-                for profile in benchmark["profiles"]:
-                    for group in profile["process_groups"]:
-                        stages = {row["stage"] for row in rows if row["profile"] == profile["native_setup_profile"] and row["process_group"] == group["name"] and row["scope"] == "adaptive" and row["pass"] is not None and ("real_seconds" in row or "elapsed_seconds" in row)}
-                        for stage in sorted(stages):
-                            for metric in ("real_seconds", "elapsed_seconds"):
-                                selected = [row for row in rows if row["profile"] == profile["native_setup_profile"] and row["process_group"] == group["name"] and row["stage"] == stage and row["pass"] is not None and metric in row and (metric == "real_seconds" or "real_seconds" not in row)]
-                                if selected:
-                                    figure.add_scatter(x=[row["pass"] for row in selected], y=[row[metric] for row in selected], mode="lines+markers", name=f"{group['name']} / {stage} ({metric.removesuffix('_seconds')})")
-                if figure.data:
-                    figure.update_layout(xaxis_title="Native adaptive pass", yaxis_title="Native reported time (s; real/elapsed labelled)")
-                    display(figure)
-                sweep = go.Figure()
-                for profile in benchmark["profiles"]:
-                    for group in profile["process_groups"]:
-                        for metric in ("real_seconds", "elapsed_seconds"):
-                            selected = [row for row in rows if row["profile"] == profile["native_setup_profile"] and row["process_group"] == group["name"] and row["scope"] == "sweep" and row["frequency_native"] is not None and metric in row and (metric == "real_seconds" or "real_seconds" not in row)]
-                            if selected:
-                                sweep.add_scatter(x=[row["frequency_native"] for row in selected], y=[row[metric] for row in selected], mode="lines+markers", name=f"{group['name']} ({metric.removesuffix('_seconds')})")
-                if sweep.data:
-                    sweep.update_layout(xaxis_title="Native sweep frequency", yaxis_title="Native reported time (s; real/elapsed labelled)")
-                    display(sweep)
-        if self.show_details:
-            display(HTML("<pre>" + html.escape(json.dumps(benchmark, indent=2)) + "</pre>"))
+        display_benchmark(self.data, show_details=self.show_details)
 
 
 def resolve_results(run_dir: str | Path) -> ResolvedRun:

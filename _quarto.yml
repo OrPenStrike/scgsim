@@ -37,7 +37,7 @@ website:
           href: README.md
         - text: "Goals and upstream relationship"
           href: docs/goals-and-upstream.qmd
-        - text: "Roadmap and current status"
+        - text: "Roadmap and priorities"
           href: docs/roadmap.qmd
     - id: examples
       title: "Examples"
@@ -74,6 +74,8 @@ website:
       contents:
         - text: "Backend support matrix"
           href: docs/backend-support.qmd
+        - text: "AEDT Runtime Families"
+          href: docs/specs/aedt-runtime.qmd
         - text: "Palace Electrostatic + SGB"
           href: docs/specs/palace-electrostatic-sgb.qmd
         - text: "Provenance and data boundaries"

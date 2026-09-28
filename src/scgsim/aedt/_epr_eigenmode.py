@@ -9,9 +9,10 @@ import math
 import re
 import shutil
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from ._benchmark import export_simulation_benchmark
 from ._epr_fields import (
@@ -28,7 +29,7 @@ from ._epr_geometry import (
     plan_inset_sheet_names,
     prepare_native_planar_geometry,
 )
-from ._epr_models import EprResult, detached, surface_evaluations
+from ._epr_models import EprResult, _freeze, detached, surface_evaluations
 from ._epr_results import combine_epr_mode, surface_integral_groups
 from ._hfss_convergence import read_hfss_convergence
 from ._hfss_runtime import _export_eigenmode
@@ -49,6 +50,58 @@ _SURFACE_ANALYSIS_SCOPE = {
     "excluded_sidewall_energy": "not_evaluated_not_zero",
     "q2d_sidewall_correction": "not_applied",
 }
+
+IntegralKind = Literal[
+    "effective_volume", "electric_volume", "magnetic_energy",
+    "electric_normal", "electric_tangential", "masked_area",
+    "junction_voltage_real", "junction_voltage_imag",
+]
+_INTEGRAL_KINDS: tuple[IntegralKind, ...] = (
+    "effective_volume", "electric_volume", "magnetic_energy",
+    "electric_normal", "electric_tangential", "masked_area",
+    "junction_voltage_real", "junction_voltage_imag",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class IntegralTarget:
+    """Private, immutable interpretation of one persisted expression binding."""
+
+    kind: IntegralKind
+    scope_id: str
+    selection: Mapping[str, Any]
+
+
+def _integral_target(purpose: str, selection: Mapping[str, Any]) -> IntegralTarget:
+    """Decode the legacy identity once; never add these fields to its wire form."""
+
+    kind = next(
+        (item for item in _INTEGRAL_KINDS if purpose.startswith(f"{item}_")),
+        None,
+    )
+    if kind is None:
+        raise RuntimeError(f"unknown EPR expression purpose {purpose!r}")
+    if not isinstance(selection, Mapping):
+        raise TypeError("EPR expression selection must be a mapping")
+    if kind in {"effective_volume", "electric_volume", "magnetic_energy"}:
+        selection_kind, key = "volume", "semantic_id"
+    elif kind in {"electric_normal", "electric_tangential", "masked_area"}:
+        selection_kind, key = "surface_group", "group_id"
+    else:
+        selection_kind, key = "junction_sheet", "junction_id"
+    scope_id = selection.get(key)
+    if selection.get("kind") != selection_kind or not isinstance(scope_id, str) or not scope_id:
+        raise RuntimeError(f"{kind} requires a {selection_kind} selection with {key}")
+    if kind == "magnetic_energy":
+        permeability = selection.get("relative_permeability")
+        if (
+            isinstance(permeability, bool)
+            or not isinstance(permeability, (int, float))
+            or not math.isfinite(permeability)
+            or permeability <= 0
+        ):
+            raise RuntimeError("magnetic energy requires positive relative permeability")
+    return IntegralTarget(kind, scope_id, _freeze(selection))
 
 
 @dataclass(frozen=True)
@@ -348,11 +401,11 @@ def _saved_field_evidence(
 
 
 def _canonical_integral(
-    scalar: dict[str, Any], *, purpose: str
+    scalar: dict[str, Any], *, target: IntegralTarget, purpose: str
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Normalize only the dimensions of the six owned CLC integral recipes."""
 
-    expected_unit = _purpose_unit(purpose)
+    expected_unit = _purpose_unit(target.kind)
     native_unit = scalar["unit"]
     suffix = "" if native_unit is None else str(native_unit).strip()
     number = float(scalar["value"])
@@ -384,22 +437,21 @@ def _canonical_integral(
 
 
 def _store_integral(
-    raw: dict[str, Any], *, purpose: str, selection: dict[str, Any], value: dict[str, Any]
+    raw: dict[str, Any], *, target: IntegralTarget, value: dict[str, Any]
 ) -> None:
-    if purpose.startswith("effective_volume_"):
-        raw["effective_domain_volumes_m3"][selection["semantic_id"]] = value
-    elif purpose.startswith("electric_volume_"):
-        raw["electric_domain_integrals_v2_m"][selection["semantic_id"]] = value
-    elif purpose.startswith("magnetic_energy_"):
-        raw["magnetic_domain_integrals_a2_m"][selection["semantic_id"]] = value
-        raw["relative_permeability"][selection["semantic_id"]] = {
-            "value": selection["relative_permeability"],
+    if target.kind == "effective_volume":
+        raw["effective_domain_volumes_m3"][target.scope_id] = value
+    elif target.kind == "electric_volume":
+        raw["electric_domain_integrals_v2_m"][target.scope_id] = value
+    elif target.kind == "magnetic_energy":
+        raw["magnetic_domain_integrals_a2_m"][target.scope_id] = value
+        raw["relative_permeability"][target.scope_id] = {
+            "value": target.selection["relative_permeability"],
             "unit": "1",
         }
-    elif purpose.startswith("electric_normal_") or purpose.startswith(
-        "electric_tangential_"
-    ):
-        key = selection["group_id"]
+    elif target.kind in {"electric_normal", "electric_tangential"}:
+        key = target.scope_id
+        selection = detached(target.selection)
         if (
             key in raw["surface_group_provenance"]
             and raw["surface_group_provenance"][key] != selection
@@ -407,10 +459,11 @@ def _store_integral(
             raise RuntimeError("surface group expression provenance differs")
         raw["surface_group_provenance"][key] = selection
         record = raw["surface_integrals_v2"].setdefault(key, {})
-        component = "normal" if purpose.startswith("electric_normal_") else "tangential"
+        component = "normal" if target.kind == "electric_normal" else "tangential"
         record[component] = value
-    elif purpose.startswith("masked_area_"):
-        key = selection["group_id"]
+    elif target.kind == "masked_area":
+        key = target.scope_id
+        selection = detached(target.selection)
         if (
             key in raw["surface_group_provenance"]
             and raw["surface_group_provenance"][key] != selection
@@ -418,32 +471,30 @@ def _store_integral(
             raise RuntimeError("surface group expression provenance differs")
         raw["surface_group_provenance"][key] = selection
         raw["masked_areas_m2"][key] = value
-    elif purpose.startswith("junction_voltage_real_") or purpose.startswith(
-        "junction_voltage_imag_"
-    ):
+    elif target.kind in {"junction_voltage_real", "junction_voltage_imag"}:
         record = raw["junction_integrals_v_m"].setdefault(
-            selection["junction_id"], {}
+            target.scope_id, {}
         )
-        component = "real" if purpose.startswith("junction_voltage_real_") else "imag"
+        component = "real" if target.kind == "junction_voltage_real" else "imag"
         record[component] = value
     else:
-        raise RuntimeError(f"unknown EPR expression purpose {purpose!r}")
+        raise AssertionError(f"unsupported integral kind {target.kind!r}")
 
 
-def _purpose_unit(purpose: str) -> str:
-    if purpose.startswith("effective_volume_"):
+def _purpose_unit(kind: IntegralKind) -> str:
+    if kind == "effective_volume":
         return "m^3"
-    if purpose.startswith("electric_volume_"):
+    if kind == "electric_volume":
         return "V^2*m"
-    if purpose.startswith("magnetic_energy_"):
+    if kind == "magnetic_energy":
         return "A^2*m"
-    if purpose.startswith(("electric_normal_", "electric_tangential_")):
+    if kind in {"electric_normal", "electric_tangential"}:
         return "V^2"
-    if purpose.startswith("masked_area_"):
+    if kind == "masked_area":
         return "m^2"
-    if purpose.startswith(("junction_voltage_real_", "junction_voltage_imag_")):
+    if kind in {"junction_voltage_real", "junction_voltage_imag"}:
         return "V*m"
-    raise RuntimeError(f"unknown EPR expression purpose {purpose!r}")
+    raise AssertionError(f"unsupported integral kind {kind!r}")
 
 
 def _empty_raw_integrals() -> dict[str, Any]:
@@ -485,6 +536,7 @@ def _evaluate_mode_integrals(
         identity = expression["identity"]
         selection = identity["selection"]
         purpose = str(identity["purpose"])
+        target = _integral_target(purpose, selection)
         scalar = parse_native_scalar(
             app.post.fields_calculator.evaluate(
                 expression["name"],
@@ -493,9 +545,9 @@ def _evaluate_mode_integrals(
             )
         )
         value, item_evidence = _canonical_integral(
-            scalar, purpose=purpose
+            scalar, target=target, purpose=purpose
         )
-        _store_integral(raw, purpose=purpose, selection=selection, value=value)
+        _store_integral(raw, target=target, value=value)
         evidence.append(
             {
                 "name": expression["name"],
@@ -888,9 +940,11 @@ def _adaptive_epr_result(
                     continue
                 native_unit = trace_by_title[title].get("unit")
                 context = item_contexts[title]
+                target = _integral_target(item["purpose"], item["selection"])
                 try:
                     value, unit_evidence = _canonical_integral(
                         {"value": values[pass_id], "unit": native_unit},
+                        target=target,
                         purpose=item["purpose"],
                     )
                 except RuntimeError as exc:
@@ -898,7 +952,7 @@ def _adaptive_epr_result(
                         {
                             "title": title,
                             "native_unit": native_unit,
-                            "expected_unit": _purpose_unit(item["purpose"]),
+                            "expected_unit": _purpose_unit(target.kind),
                             "error": str(exc),
                         }
                     )
@@ -913,8 +967,7 @@ def _adaptive_epr_result(
                 )
                 _store_integral(
                     raw,
-                    purpose=item["purpose"],
-                    selection=item["selection"],
+                    target=target,
                     value=value,
                 )
             row["raw_integrals"] = raw

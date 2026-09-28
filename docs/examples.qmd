@@ -6,27 +6,39 @@ SCGSim owns runtime, not duplicate public notebook source. OrPen SC PDK owns
 the public component-simulation examples and imports `scgsim.palace`,
 `scgsim.aedt`, and `scgsim.sgb`.
 
-## Workflow categories
+## Start by task
 
-| Category | Canonical OrPen source | State |
-|---|---|---|
-| Palace Route A/B Electrostatic and Eigenmode | `notebooks/ComponentSimulation/Kosen2024_Xmon/` | Implemented, converging |
-| HFSS Driven Terminal/Modal and Eigenmode | `notebooks/ComponentSimulation/CpwFiniteGround/` | Implemented, converging |
-| Q3D | `notebooks/ComponentSimulation/CpwFiniteGround/` | Implemented, converging |
-| Q2D | `notebooks/CrossSectionSimulation/CpwFiniteGround/` | Implemented, converging |
+| If you want to… | Start here |
+|---|---|
+| Choose a backend and see the implementation state, exercised evidence, and limits | [Backend Support Matrix](backend-support.qmd) |
+| Follow a complete public component-simulation workflow | Use the canonical OrPen SC PDK notebooks listed below; SCGSim does not duplicate them. |
+| Configure or reanalyze Eigenmode EPR results offline | [Eigenmode and Offline EPR](eigenmode-epr.qmd) |
+| Place controls beside the notebook stage that uses them | [Notebook UX Contracts](notebook-ux.qmd) |
+| Prepare a local or Slurm handoff | [Execution Profiles and Handoff](execution-profiles.qmd) |
+
+## Canonical notebook groups
+
+These links use the same public OrPen SC PDK revision as the static Xmon
+examples. That revision provides source attribution; it does not validate a
+SCGSim native solve.
+
+| Workflow | OrPen SC PDK notebook group |
+|---|---|
+| Palace Route A/B Electrostatic and Eigenmode | [`notebooks/src/ComponentSimulation/Kosen2024_Xmon/`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/notebooks/src/ComponentSimulation/Kosen2024_Xmon) |
+| HFSS Driven Terminal/Modal and Eigenmode | [`notebooks/src/ComponentSimulation/CpwFiniteGround/`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/notebooks/src/ComponentSimulation/CpwFiniteGround) |
+| Q3D | [`notebooks/src/ComponentSimulation/CpwFiniteGround/`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/notebooks/src/ComponentSimulation/CpwFiniteGround) |
+| Q2D | [`notebooks/src/CrossSectionSimulation/CpwFiniteGround/`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/notebooks/src/CrossSectionSimulation/CpwFiniteGround) |
 
 The package-owned [Eigenmode and Offline EPR](eigenmode-epr.qmd) page records
-the current Palace and AEDT APIs, normalization and loss assumptions, and
-static snippets using the public OrPen Xmon component. Those snippets are not
-claims of native solver validation. The public PDK notebooks remain the
-canonical source for full component-simulation workflows.
+the method-level interpretation, loss assumptions, and static snippets using
+the public OrPen Xmon component. The backend specs own exact API and data
+contracts. The public PDK notebooks remain the canonical source for complete
+component-simulation workflows.
 
-Browse the [OrPen SC PDK notebooks at the source revision used by the static
-example](https://github.com/OrPenStrike/orpen-sc-pdk/tree/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/notebooks).
-
-The canonical section names and stage ordering remain in
-[Notebook UX Contracts](notebook-ux.qmd). Backend availability and remaining
-scope are in the [Backend Support Matrix](backend-support.qmd).
+The [AEDT runtime contracts](specs/aedt-runtime.qmd) and
+[Palace + SGB contracts](specs/palace-electrostatic-sgb.qmd) document exact
+backend behavior. Report availability and result presentation belong to the
+[Unified Report Model](report-model.qmd).
 
 ## Evidence boundary
 

@@ -22,7 +22,10 @@ AEDT handoff/run/resolve workflows for HFSS Driven Terminal/Modal, HFSS
 Eigenmode, Q3D, and Q2D. The Eigenmode candidate includes backend-specific
 surface, bulk, and port/junction EPR analysis, offline film reanalysis, and
 owner-and-coverage reports. These are implemented candidates, not V1-stable
-contracts; the two backends retain separate preparation and result APIs.
+contracts; the two backends retain separate preparation and result APIs. The
+[Backend Support Matrix](docs/backend-support.qmd) separates implementation
+status from exercised evidence and current limits. Static EPR examples do not
+claim native solver validation.
 
 The package supports Python 3.12 and 3.13. The optional AEDT integration pins
 PyAEDT 1.3.0; Python 3.13 package support does not by itself establish native
@@ -47,16 +50,31 @@ duplicate notebook source and has no runtime dependency on OrPen.
 
 ## Read the site
 
-- [Goals and upstream relationship](docs/goals-and-upstream.qmd)
-- [Examples](docs/examples.qmd)
-- [Eigenmode and offline EPR](docs/eigenmode-epr.qmd)
-- [Architecture and data flow](docs/architecture.qmd)
-- [Backend support matrix](docs/backend-support.qmd)
+### Workflows
+
+- [Choose a workflow and find public notebooks](docs/examples.qmd)
+- [Eigenmode methods, EPR, and offline reanalysis](docs/eigenmode-epr.qmd)
 - [Notebook UX contracts](docs/notebook-ux.qmd)
+- [Execution profiles and handoff](docs/execution-profiles.qmd)
+
+### Reference
+
+- [Backend implementation, evidence, and limits](docs/backend-support.qmd)
+- [AEDT runtime and data contracts](docs/specs/aedt-runtime.qmd)
+- [Palace Electrostatic and SGB contracts](docs/specs/palace-electrostatic-sgb.qmd)
+- [Unified report model](docs/report-model.qmd)
+- [Architecture and data flow](docs/architecture.qmd)
+
+### Project context
+
+- [Goals and upstream relationship](docs/goals-and-upstream.qmd)
+- [Roadmap](docs/roadmap.qmd)
+- [Provenance and data boundaries](docs/provenance.qmd)
 - [Error archive](docs/errors.qmd)
-- [Roadmap and current status](docs/roadmap.qmd)
+- [Folder tree and ownership](docs/ownership.qmd)
 
 ## Current nonclaims
 
-Palace Driven and Magnetostatic remain unimplemented. There is no cloud
-fallback, release, deployment, or publication authority for private evidence.
+Palace Driven and Magnetostatic are not implemented; the [support matrix](docs/backend-support.qmd)
+has the complete capability state. SCGSim does not use cloud fallback or grant
+publication authority for private evidence.

@@ -74,11 +74,12 @@ rewrite existing artifacts, or provide a legacy-name fallback.
 New handoffs retain `scgsim.aedt.handoff.v1` and
 `scgsim.aedt.handoff-manifest.v1`. Both records add
 `expected_receipt_schema: scgsim.aedt.receipt.v3`, and the initial receipt is
-V3. It contains `prepared_runtime_source`: a deterministic, sorted manifest of
-the SCGSim transaction, family, common, spec, persistence, and native-readback
-modules, a content digest over that manifest, and a truthful preparation Git
-observation when one is available. Git observation may be explicitly
-unavailable; module hashes and the content digest are mandatory.
+V3. It contains `prepared_runtime_source`: a deterministic, sorted
+`runtime-source.v4` manifest of the SCGSim transaction, family, common, spec,
+persistence, native-readback, and AEDT presentation modules, a content digest
+over that manifest, and a truthful preparation Git observation when one is
+available. Git observation may be explicitly unavailable; module hashes and
+the content digest are mandatory.
 
 Before writing `running`, execution accepts exactly one of three cohorts:
 
@@ -99,13 +100,14 @@ receipt and records `prepared_runtime_source.status` as
 V2 handoff retains its prepared V2 provenance cohort when execution emits V3;
 it is not relabeled as new V3 preparation.
 
-Every completed V3 receipt has a separate `runtime_source` manifest and content
-digest for the code that actually executed it, while retaining the historical
-`revision`, `run_py_sha256`, `spec_py_sha256`, convergence, and matrix-helper
-keys. Execution provenance failure therefore produces a failed receipt, never a
-strict-resolvable completed one. Preparation and execution hashes are evidence
-with different timing, not an equality requirement, and historical hashes are
-not compared to the currently installed package.
+Every new completed V3 receipt has a separate `runtime_source` manifest using
+`runtime-source.v4` and a content digest for the code that actually executed
+it, while retaining the historical `revision`, `run_py_sha256`,
+`spec_py_sha256`, convergence, and matrix-helper keys. Execution provenance
+failure therefore produces a failed receipt, never a strict-resolvable
+completed one. Preparation and execution hashes are evidence with different
+timing, not an equality requirement, and historical hashes are not compared to
+the currently installed package.
 
 `resolve_results()` preserves the existing rules for genuine historical
 completed V1 and V2 receipts. A receipt relabeled below its preparation markers
@@ -117,14 +119,15 @@ evidence; this requirement is never projected onto historical V1/V2 receipts.
 These unsigned consistency checks do not authenticate an artifact set against
 an actor able to rewrite every member.
 
-`runtime-source.v1` is a frozen thirteen-module receipt contract, not a live
-enumeration rule. The current producer inventory is maintained separately and
-must match that frozen contract before a new receipt can claim it. A pure
-initial-receipt codec owns exact V1/V2/V3 member order, two-space JSON
-indentation, and the trailing newline. V1 omits prepared provenance; V2 and V3
-insert it between `source` and `outputs`. Reading historical evidence uses the
-declared frozen schema and does not compare historical hashes with the installed
-package.
+`runtime-source.v1` is a frozen thirteen-module reader contract, not a live
+enumeration rule. The V2 and V3 inventories are also frozen. Current producer
+receipts use V4, which extends the V3 inventory with
+`scgsim/aedt/_presentation.py`; older module membership and hashes retain their
+historical meaning. A pure initial-receipt codec owns exact V1/V2/V3 member
+order, two-space JSON indentation, and the trailing newline. V1 omits prepared
+provenance; V2 and V3 insert it between `source` and `outputs`. Reading
+historical evidence uses the declared frozen schema and does not compare
+historical hashes with the installed package.
 
 Execution computes mandatory runtime-source provenance inside the receipt-bound
 failure transaction, before importing PyAEDT or constructing Desktop. Missing

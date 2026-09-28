@@ -32,11 +32,29 @@ loss tangent was supplied. It does not turn an unknown assumption into a known
 zero: the v2 index and detached `PalaceEprResult` retain `loss_tangent=None`,
 and SCGSim leaves the corresponding inverse-Q contribution unavailable. An
 explicit known zero instead gives a zero contribution. Neither state creates a
-surface-loss lifetime claim. The EPR-specific
-[`show_epr()` view](eigenmode-epr.qmd#workflow-and-state-contract) presents
-surface, bulk, and port partitions with ownership and coverage; Palace's
-generic `domain-E.csv` Volume Energy table still has no general-purpose report
-renderer.
+surface-loss lifetime claim. The [Eigenmode and Offline EPR guide](eigenmode-epr.qmd)
+documents its analysis methods and assumptions. Palace's generic `domain-E.csv`
+Volume Energy table still has no general-purpose report renderer.
+
+## Eigenmode EPR presentation
+
+AEDT and Palace keep separate `show_epr()` inputs and return a Plotly `Figure`;
+the view consumes an existing result and does not resolve files or start a
+solver. This page owns the report's visible availability and coverage contract.
+
+Each figure separates surface and bulk participation. AEDT shows junction
+inductive and capacitive participation together on a junction axis; Palace
+shows its signed native port participation separately. Surface bars identify the
+semantic owner or owners, interface, and baseline or requested-margin
+evaluation. Hover data retains source members, field side, and loss assumptions.
+The coverage annotation counts reported surface rows and source bindings or
+surfaces, bulk domains, and junctions or ports.
+
+The displayed inverse-Q subtotal includes only known, unmasked baseline
+surface terms. Unknown baseline losses are counted as unknown; requested mask
+margins are alternative views and are not added to the subtotal. Sidewall
+energy remains labeled uncomputed where it was not evaluated. These figures
+show the available evidence and do not claim total device loss or a lifetime.
 
 Palace and AEDT quantities resolved from original run packages remain bound to
 their applicable receipt, artifact-hash, handoff, and solver identities. A

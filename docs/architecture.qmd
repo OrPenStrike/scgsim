@@ -33,6 +33,18 @@ facts, before SGB topology construction, and adds an AEDT-owned binding sidecar.
 It does not feed Gmsh faces or tags into AEDT and does not reinterpret an AEDT
 native observation as source geometry or contact intent.
 
+## Maintainer responsibility map
+
+This table records the current private boundaries for the CONVERGING
+maintainability work. The candidate implementation is under review; these
+changes do not alter a public API.
+
+| Area | Responsibility | Behavior to preserve |
+|---|---|---|
+| AEDT transaction | `scgsim.aedt.run._execute()` retains transaction ownership and release/seal eligibility. `_record_result_before_release`, `_record_epr_project_after_release`, and `_record_ordinary_result_after_release` isolate bounded result-recording steps. | Same phase order and exception boundaries; original dispatch/export error outranks release failure; release failure prevents sealing; partial export stays incomplete. |
+| AEDT integral targeting | `scgsim.aedt._epr_eigenmode._integral_target()` decodes one transient `IntegralTarget`; unit mapping and raw storage consume `kind` and `scope_id`. | Valid identity, payload, units, and formulas stay unchanged; malformed selections may fail earlier. The target is not persisted. |
+| Result presentation | AEDT history, EPR, and benchmark projections live in `scgsim.aedt._presentation`; Palace EPR presentation lives in `scgsim.palace._presentation`. Existing public delegates remain at their entry points. | Keep signatures, Figure/`.data` outputs, visible row/trace values and order, missingness, coverage, baselines, masks, loss states, and backend-specific port/junction meaning. Add no resolver, native I/O, new physics, or shared result schema. |
+
 ## Contract boundaries
 
 | Boundary | Authority |
@@ -91,31 +103,12 @@ the existing SGB and Palace adapters retain their source-specific validation,
 error messages, and call order.
 
 For Palace routes, PDK fabrication owns substrate materials and Z ranges;
-component intent owns metal nets and polygon selections. SGB verifies
-positive-area contact between the complete normalized face-metal and modeled
-dielectric regions, including explicit holes, before Route-A substrate support
-is recorded. A contact candidate cannot be inferred from bounding boxes.
-Palace may request a generated background Region after those source facts are
-declared. Its internal conductor-host reference allows construction and cuts,
-but neither the Region envelope nor a coupon bounding box proves attachment
-or creates a physical die-to-die gap. Existing authored vacuum regions keep
-their own records and explicit unresolved host references remain errors.
-
-The dev27 candidate partitions each Route-A sheet by exact local bottom/top
-solution domains before SA/AA construction. It therefore preserves supported
-MS/MA and synthetic partial-contact MA/MA patches without assigning substrate
-support to an exposed remainder. Contact caps retain only the surviving side,
-and a lumped-port footprint must belong to one compatible local patch. Route B
-applies the same local evidence to finite top, bottom, and sidewall records.
-Fully freestanding Route-A sheets remain unsupported.
-
-Each patch keeps its semantic side contributions in one provenance ledger.
-Physical surface kinds remain the Palace classification boundary: separate
-MS/MA kinds lower separately, while two MA sides sharing one native surface
-lower to one aggregate MA row with internal-boundary cracking enabled. The
-ledger and the aggregate policy remain present in physical-group, index, and
-report metadata; native output is not presented as side-resolved. Historical
-records without a ledger remain readable and are not reconstructed.
+component intent owns metal nets and polygon selections. SGB establishes
+source-side contact and local route evidence before Palace-specific lowering;
+native geometry cannot create source contact intent. The Route A/B contact,
+background-region, patch, and aggregation contracts are documented in
+[Geometry and SGB Route A/B](geometry-sgb.qmd) and
+[Palace Electrostatic + SGB](specs/palace-electrostatic-sgb.qmd).
 
 ## Current truth
 
@@ -123,8 +116,8 @@ The Human accepted the PDK/Component/SCGSim semantic-authority split and public
 notebook ownership on 2026-08-16. SCGSim owns no public notebook source; OrPen
 SC PDK owns the public component examples and calls the shared runtime directly.
 
-The Palace Electrostatic/Eigenmode and version-locked AEDT runtime families are
-implemented but remain `CONVERGING`, not V1 stable.
+The per-family implementation status, exercised evidence, and current limits
+are maintained in the [Backend Support Matrix](backend-support.qmd).
 
 Palace mesh-quality inspection is an offline reader over the emitted MSH file.
 It neither owns mesh construction nor starts a native backend. The reader binds
@@ -186,17 +179,18 @@ carrier and cannot reinterpret a caller spec or workspace.
 
 New preparation keeps the handoff and handoff-manifest schemas at V1 while both
 declare that the mutable run receipt uses `scgsim.aedt.receipt.v3`. The initial
-V3 receipt records a complete preparation-time SCGSim module manifest and
-content digest. Before mutation, execution verifies the canonical manifest and
-binds the initial-receipt and prepared-manifest hashes. A canonical historical
+V3 receipt records a complete `runtime-source.v4` preparation-time SCGSim module
+manifest and content digest. Before mutation, execution verifies the canonical
+manifest and binds the initial-receipt and prepared-manifest hashes. A canonical historical
 V1 `not_run` handoff with neither marker remains executable, but its resulting
 V3 receipt records preparation provenance as `legacy_v1_not_recorded`; it does
 not fabricate history.
 
-Every completed V3 receipt records a separate complete execution-time module
-manifest and digest while retaining the former runtime-source keys. Preparation
-and execution identities are not required to match: their separation records
-what prepared and what actually executed the handoff. Historical completed V1
+Every new completed V3 receipt records a separate complete `runtime-source.v4`
+execution-time module manifest and digest while retaining the former
+runtime-source keys. Preparation and execution identities are not required to
+match: their separation records what prepared and what actually executed the
+handoff. Historical completed V1
 receipts remain subject to their old resolution rules, except that a V1 receipt
 combined with either later-version expectation marker is rejected as an
 inconsistent cohort. Historical completed V2 receipts retain their existing
@@ -204,13 +198,14 @@ resolution rules; new V3-only native PEC checks do not reinterpret them. This
 consistency contract is not source authenticity for an actor able
 to rewrite the entire unsigned artifact set.
 
-The frozen `runtime-source.v1` reader contract is distinct from the current
-producer inventory used to emit it. One pure, versioned initial-receipt codec
-owns the historical V1/V2 and current V3 JSON member order, indentation, and
-final newline; handoff writing and initial-receipt reconstruction use that same
-codec. A producer may emit the frozen schema only while its current inventory
-matches the declared thirteen-module contract. Historical receipt hashes are
-never compared with installed source, and prepared and actual identities remain
+The `runtime-source.v1` thirteen-module contract and the V2/V3 extensions are
+frozen reader formats. New V3 receipts use `runtime-source.v4`, which adds the
+AEDT presentation module to the frozen V3 inventory; it does not change the
+receipt schema or historical module membership. One pure, versioned
+initial-receipt codec owns the historical V1/V2 and current V3 JSON member
+order, indentation, and final newline; handoff writing and initial-receipt
+reconstruction use that same codec. Historical receipt hashes are never
+compared with installed source, and prepared and actual identities remain
 independent evidence.
 
 Runtime-source provenance is computed inside the receipt-owned failure

@@ -1,26 +1,19 @@
 ---
-title: "Roadmap and Current Status"
+title: "Roadmap and Priorities"
 ---
 
 ## Current status
 
-| Surface | State |
-|---|---|
-| PDK/Component/SCGSim authority and notebook ownership | ACCEPTED 2026-08-16 |
-| Solver runtime contracts | CONVERGING; not V1 stable |
-| Installable/importable package and version metadata | Implemented and CI-validated |
-| In-tree `scgsim.sgb` Core | Implemented; Route A/B candidate |
-| `scgsim.palace` | Electrostatic/Eigenmode implemented; LTlab Slurm + strict report exercised |
-| `scgsim.aedt` | Five version-locked runtime families implemented and exercised |
-| Common run/handoff and profiles | Implemented for current Palace/AEDT families |
-| Report/resolve | Solver-specific strict resolvers and notebook summaries implemented |
-| Public notebook interfaces | Owned by OrPen SC PDK; SCGSim source duplication removed |
+The [Backend Support Matrix](backend-support.qmd) is the detailed source for
+implementation state, exercised evidence, and current limits. The
+PDK/Component/SCGSim authority split and public notebook ownership were accepted
+on 2026-08-16; this page records priorities rather than repeating capability
+status.
 
 ## Near term
 
-1. Stabilize the accepted semantic-authority and notebook-ownership scope.
-2. Continue converging the solver runtime contracts.
-3. Continue solver-specific report presentation without flattening physics.
+1. Continue converging the solver runtime contracts.
+2. Continue solver-specific report presentation without flattening physics.
 
 ## Later
 

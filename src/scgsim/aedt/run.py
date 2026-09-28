@@ -22,7 +22,7 @@ from ._epr_geometry import precompute_inset_surfaces, validate_geometry_workers
 from ._hfss_runtime import run_hfss
 from ._epr_results import seal_saved_solution
 from ._native_common import owned_application_constructor, pyaedt_version
-from ._q2d_runtime import _export_q2d, run_q2d
+from ._q2d_runtime import _export_q2d, run_q2d  # noqa: F401 -- private diagnostic alias.
 from ._q3d_runtime import run_q3d
 from ._runtime_provenance import (
     RECEIPT_V1,
@@ -263,33 +263,8 @@ def _execute(
     except Exception as exc:  # noqa: BLE001 -- receipt must record any solver failure.
         failure = f"{type(exc).__name__}: {exc}"
     finally:
-        if result is not None and isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec)):
-            receipt["outputs"] = result["outputs"]
-            receipt["connected"] = result["connected"]
-            receipt["project"] = result["project"]
-            receipt["geometry"] = result["geometry"]
-            receipt["setup"] = result["setup"]
-            receipt["expressions"] = result.get("expressions", [])
-            receipt["cache"] = result.get("cache", {"status": "not_applicable"})
-            receipt["timings"] = {
-                **receipt.get("timings", {}), **result.get("timings", {})
-            }
-            receipt["solver_invoked"] = result["solver_invoked"]
-            receipt["workflow_status"] = result["workflow_status"]
-            if "convergence" in result:
-                receipt["convergence"] = result["convergence"]
-            if "result_readback" in result:
-                receipt["result_readback"] = result["result_readback"]
-            if "result" in result:
-                receipt["epr_result"] = result["result"]
-            if "saved_field_evidence" in result:
-                receipt["saved_field_evidence"] = result["saved_field_evidence"]
-            if "benchmark" in result:
-                receipt["benchmark"] = result["benchmark"]
-        elif result is not None:
-            receipt["save"] = result["save"]
-            if "benchmark" in result:
-                receipt["benchmark"] = result["benchmark"]
+        if result is not None:
+            _record_result_before_release(receipt, result, spec)
         if desktop is not None:
             release_started = time.perf_counter()
             try:
@@ -315,27 +290,12 @@ def _execute(
         if isinstance(spec, HfssEprSpec):
             receipt["solver_invoked"] = epr_solver_attempted
         if result is not None and isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec)):
-            project_relative = result["project"]
-            project_path = _contained(run_dir, project_relative)
-            if not project_path.is_file():
+            if not _record_epr_project_after_release(run_dir, receipt, result):
                 status = "failed"
                 if failure is None:
                     failure = "EPR project is missing after owned Desktop release"
                     receipt["error"] = failure
             else:
-                project_sha256 = file_sha256(project_path)
-                result["outputs"] = {project_relative: project_sha256, **{
-                    key: value
-                    for key, value in result["outputs"].items()
-                    if key != project_relative
-                }}
-                result["save"] = {
-                    "ok": True,
-                    "project_sha256": project_sha256,
-                    "identity_stage": "after_owned_desktop_release",
-                }
-                receipt["outputs"] = result["outputs"]
-                receipt["save"] = result["save"]
                 if (
                     isinstance(spec, HfssEprSpec)
                     and spec.epr_request is not None
@@ -371,19 +331,7 @@ def _execute(
                             failure = seal_error
                             receipt["error"] = failure
         elif result is not None:
-            receipt["outputs"] = result["outputs"]
-            receipt["connected"] = result["connected"]
-            receipt["project"] = result["project"]
-            receipt["ports"] = result.get("ports", [])
-            receipt["nets"] = result.get("nets", [])
-            receipt["conductors"] = result.get("conductors", [])
-            receipt["mesh"] = result.get("mesh", {})
-            receipt["materials"] = result["materials"]
-            receipt["region"] = result["region"]
-            receipt["result_readback"] = result["result_readback"]
-            receipt["setup"] = result.get("setup")
-            if "convergence" in result:
-                receipt["convergence"] = result["convergence"]
+            _record_ordinary_result_after_release(receipt, result)
         receipt["diagnostics"] = _read_physics_warnings(run_dir)
         receipt["status"] = status
         receipt["finished_at_utc"] = _utc_now()
@@ -394,6 +342,85 @@ def _execute(
         "epr_analysis_completed",
         "native_preparation_only",
     } else 1
+
+
+def _record_result_before_release(
+    receipt: dict[str, Any], result: dict[str, Any], spec: AedtSpec
+) -> None:
+    """Copy returned facts before releasing the one transaction-owned Desktop."""
+
+    if isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec)):
+        receipt["outputs"] = result["outputs"]
+        receipt["connected"] = result["connected"]
+        receipt["project"] = result["project"]
+        receipt["geometry"] = result["geometry"]
+        receipt["setup"] = result["setup"]
+        receipt["expressions"] = result.get("expressions", [])
+        receipt["cache"] = result.get("cache", {"status": "not_applicable"})
+        receipt["timings"] = {
+            **receipt.get("timings", {}), **result.get("timings", {})
+        }
+        receipt["solver_invoked"] = result["solver_invoked"]
+        receipt["workflow_status"] = result["workflow_status"]
+        if "convergence" in result:
+            receipt["convergence"] = result["convergence"]
+        if "result_readback" in result:
+            receipt["result_readback"] = result["result_readback"]
+        if "result" in result:
+            receipt["epr_result"] = result["result"]
+        if "saved_field_evidence" in result:
+            receipt["saved_field_evidence"] = result["saved_field_evidence"]
+        if "benchmark" in result:
+            receipt["benchmark"] = result["benchmark"]
+    else:
+        receipt["save"] = result["save"]
+        if "benchmark" in result:
+            receipt["benchmark"] = result["benchmark"]
+
+
+def _record_epr_project_after_release(
+    run_dir: Path, receipt: dict[str, Any], result: dict[str, Any]
+) -> bool:
+    """Hash the released EPR project; return false only when it is missing."""
+
+    project_relative = result["project"]
+    project_path = _contained(run_dir, project_relative)
+    if not project_path.is_file():
+        return False
+    project_sha256 = file_sha256(project_path)
+    result["outputs"] = {project_relative: project_sha256, **{
+        key: value
+        for key, value in result["outputs"].items()
+        if key != project_relative
+    }}
+    result["save"] = {
+        "ok": True,
+        "project_sha256": project_sha256,
+        "identity_stage": "after_owned_desktop_release",
+    }
+    receipt["outputs"] = result["outputs"]
+    receipt["save"] = result["save"]
+    return True
+
+
+def _record_ordinary_result_after_release(
+    receipt: dict[str, Any], result: dict[str, Any]
+) -> None:
+    """Copy ordinary HFSS/Q3D/Q2D export facts after Desktop release."""
+
+    receipt["outputs"] = result["outputs"]
+    receipt["connected"] = result["connected"]
+    receipt["project"] = result["project"]
+    receipt["ports"] = result.get("ports", [])
+    receipt["nets"] = result.get("nets", [])
+    receipt["conductors"] = result.get("conductors", [])
+    receipt["mesh"] = result.get("mesh", {})
+    receipt["materials"] = result["materials"]
+    receipt["region"] = result["region"]
+    receipt["result_readback"] = result["result_readback"]
+    receipt["setup"] = result.get("setup")
+    if "convergence" in result:
+        receipt["convergence"] = result["convergence"]
 
 
 def _execution_resources(

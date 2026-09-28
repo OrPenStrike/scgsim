@@ -7,7 +7,9 @@ Both backends provide one solver-specific `EigenmodeSim` with surface, bulk,
 and port/junction EPR analysis. Their preparation and result types remain
 backend-owned. Offline film reanalysis uses recorded result evidence and does
 not reopen a solver. This page documents the current candidate; it does not
-claim V1 stability.
+claim V1 stability. The [Backend Support Matrix](backend-support.qmd) separates
+the implemented candidate from the currently documented exercise evidence and
+limits.
 :::
 
 ## Workflow and state contract
@@ -135,11 +137,11 @@ and marks its provenance `historical_ambiguous_zero`. Detached EPR results
 preserve both the recorded value and that interpretation; the inverse-Q
 contribution remains unavailable.
 
-Both `show_epr` views identify owners and source coverage, separate known
-baseline inverse-Q subtotals from unknown losses, and label sidewalls
-uncomputed where applicable. The subtotal includes only known baseline terms;
-it is not total device loss or a lifetime estimate. Requested mask rows are
-alternatives and are not added into that subtotal.
+The `show_epr` figure layout, owner labels, coverage counts, and baseline
+inverse-Q subtotal are specified in the [Unified Report Model](report-model.qmd#eigenmode-epr-presentation).
+The subtotal is not total device loss or a lifetime estimate; requested mask
+rows are alternatives and are not added into it. Sidewall terms remain
+uncomputed where they were not evaluated.
 
 ## Static component examples
 
