@@ -2,29 +2,75 @@
 title: "Execution Profiles and Local/Manual-HPC Handoff"
 ---
 
-SCGSim uses one run-and-handoff contract. It does not define separate semantic
-runners for different machines.
+SCGSim prepares portable handoffs; the caller owns where and how a prepared
+solver runs. A profile records the launch shape and the resources supplied by
+the caller. It does not submit a scheduler job or open a native desktop.
 
 ## Fixed handoff profiles
 
 Profile names describe launch shape, not a site or hostname.
 
-| Profile | Intended use | Required receipt scope |
+| Profile | Intended use | Recorded evidence |
 |---|---|---|
-| `direct-local` | Direct local binary; smoke, debug, mesh/config validation, and small solves | Executable identity, inputs, environment, exit state, artifacts |
-| `slurm-single-node` | Single-node `sbatch`; MPI/OpenMP, scheduler lifecycle, resource receipt, and result resolution | Scheduler/job identity, resources, launch shape, artifacts, resolution state |
-| `slurm-multi-node` | Multi-node / high-memory `sbatch`; production-scale runs | Scheduler/job identity, nodes/resources, launch shape, artifacts, resolution state |
+| `direct-local` | Run the generated Palace shell script on one host | Executable, inputs, environment, exit state, and artifacts |
+| `slurm-single-node` | Submit the generated Palace batch script for one node | Job identity, requested resources, launch shape, and artifacts |
+| `slurm-multi-node` | Submit the generated Palace batch script for multiple nodes | Job identity, node/resource request, launch shape, and artifacts |
 
-Machine differences live in caller-supplied executable, setup commands,
-resources, and receipts. They do not fork the run model.
+The Palace caller supplies a non-empty resource mapping. Slurm profiles
+require `ntasks`, `cpus_per_task`, and `nodes`. `slurm-single-node` requires
+one node; `slurm-multi-node` requires at least two and a `mem` or
+`mem_per_cpu` request. Resource sizing is the caller's responsibility. Slurm
+allocation keys such as `ntasks`, `cpus_per_task`, `nodes`, and `mem` become
+`#SBATCH` directives. Scheduler output and error logs remain bound to the
+handoff's Palace log. The caller also supplies the executable, any host setup
+commands, and optional launcher tokens. None of these values is a SCGSim
+site-wide default.
+
+## Palace command shapes
+
+The generated command depends on the profile and `resources.command_style`:
+
+| Selection | Generated launch behavior |
+|---|---|
+| `direct-local` + `binary` | Calls the configured executable with `config.json`; `threads` sets `OMP_NUM_THREADS`. SCGSim adds no MPI launcher or rank argument, so use this only when direct invocation matches the host's Palace build. |
+| `direct-local` + `wrapper` | Calls the configured Palace MPI wrapper with `-np <processes> -nt <threads> config.json`. The installed `palace` script wraps an MPI launcher (by default `mpirun`) and accepts these controls; see the [Palace runner guide](https://awslabs.github.io/palace/stable/run/) and [parallelism guide](https://awslabs.github.io/palace/stable/guide/parallelism/). |
+| Either Slurm profile | Writes `run_palace.sbatch` with the caller's scheduler resources and invokes the configured launcher (default `srun`) before the Palace executable and `config.json`. Slurm profiles require `command_style="binary"`; wrapper mode is rejected. |
+
+For Slurm, the user submits the prepared script with `sbatch`; the script's
+default `srun` launches the Palace binary inside the allocation. `srun` is the
+scheduler launcher, not the Palace MPI wrapper. Do not stack the Palace
+`-np`/`-nt` wrapper on top of the Slurm launcher. The required
+`cpus_per_task` sets `OMP_NUM_THREADS` unless the caller separately supplies a
+`threads` value; keep an override aligned with the scheduler allocation. The
+configured executable, launcher, and site setup commands must match the
+target host. SCGSim does not guess an MPI setup.
+
+The Palace script performs a native `--dry-run` compatibility check on the
+exact handoff `config.json` before the solve command. A failed check records a
+preflight failure and does not invoke the solver. Successful preparation alone
+does not establish that the executable, config, or native geometry is valid.
 
 ## Handoff lifecycle
 
 ```text
-prepare inputs -> validate -> package handoff -> execute or transfer manually
--> collect immutable results -> resolve -> report
+configure model -> inspect input summary -> prepare handoff
+-> transfer the complete package -> run on the target host
+-> retrieve the complete returned package -> resolve and show results
 ```
 
-External gdsfactory/cloud execution is unsupported and must never be used as a
-fallback. Palace handoff scripts and AEDT execution remain explicit;
-preparation never silently submits a scheduler job or opens AEDT.
+For Palace, retain `handoff.handoff_id` in preparation-side notes outside the
+transferred package. After the full returned run directory is retrieved,
+`resolve_palace_result(run_dir, expected_handoff_id=...)` checks it against
+that independently retained identity before showing results. Do not learn the
+expected identity from files that arrived with the returned package.
+
+For AEDT, transfer the prepared run directory to the AEDT host and retrieve
+the complete returned run directory. `resolve_results(run_dir)` verifies the
+receipt-bound artifacts; `ResolvedRun.show_all_results()` displays the
+verified primary, benchmark, and requested EPR evidence. Copying only an EPR
+JSON file is not a substitute for resolving the returned package.
+
+External gdsfactory/cloud execution is unsupported and is never a fallback.
+Preparation does not silently submit a scheduler job or open AEDT. The
+[Palace tutorial](tutorial-xmon-palace.qmd) and [AEDT tutorial](tutorial-xmon-aedt.qmd)
+show their backend-specific handoff and return steps.

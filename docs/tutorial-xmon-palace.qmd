@@ -96,39 +96,85 @@ normalization. Palace's external Region surface remains natural PMC when left
 unspecified; see the [EPR methods guide](eigenmode-epr.qmd#workflow-and-state-contract)
 for the boundary comparison and interpretation limits.
 
+## Review normalized inputs before meshing
+
+`input_summary()` displays the bound normalized input and current Palace
+settings. It does not mesh or start a solver.
+
+```python
+from IPython.display import display
+
+display(sim.input_summary())
+```
+
 ## Prepare a manual handoff
 
+Supply the executable, resource mapping, and any target-host setup commands
+from your own environment. These example variable names are not SCGSim
+settings; no site path, module command, process count, or thread count is
+assumed by this tutorial. See [Execution Profiles](execution-profiles.qmd)
+before choosing `direct-local` or a Slurm profile.
+
+```python
+import json
+import os
+
+palace_profile = os.environ["SCGSIM_PALACE_PROFILE"]
+palace_executable = os.environ["SCGSIM_PALACE_EXECUTABLE"]
+palace_resources = json.loads(os.environ["SCGSIM_PALACE_RESOURCES_JSON"])
+raw_setup_commands = json.loads(
+    os.environ.get("SCGSIM_PALACE_SETUP_COMMANDS_JSON", "[]")
+)
+if not isinstance(raw_setup_commands, list) or any(
+    not isinstance(command, str) for command in raw_setup_commands
+):
+    raise TypeError("SCGSIM_PALACE_SETUP_COMMANDS_JSON must be a JSON string list")
+palace_setup_commands = tuple(raw_setup_commands)
+```
+
+This cell reads caller-provided values and fails if required variables are
+missing or malformed. It does not install Palace or configure the remote host.
+The resource keys and their profile-specific requirements are listed in the
+[execution profile reference](execution-profiles.qmd#fixed-handoff-profiles).
+
 The following calls build a local mesh, write Palace configuration, and create
-a run handoff. They do not execute Palace.
+a manual handoff. They do not execute Palace.
 
 ```python
 mesh_path = sim.mesh()
 config_path = sim.write_config()
 handoff = sim.prepare_handoff(
-    profile="direct-local",
-    executable="palace",
-    resources={"processes": 32, "threads": 2, "command_style": "wrapper"},
-    setup_commands=("module load palace",),
+    profile=palace_profile,
+    executable=palace_executable,
+    resources=palace_resources,
+    setup_commands=palace_setup_commands,
 )
-print(mesh_path, config_path, handoff.run_dir, handoff.script_path)
+handoff_id_note = Path.cwd() / ".artifacts" / "public-xmon-palace-handoff-id.txt"
+handoff_id_note.parent.mkdir(parents=True, exist_ok=True)
+handoff_id_note.write_text(handoff.handoff_id + "\n", encoding="utf-8")
+print(mesh_path, config_path, handoff.run_dir, handoff.script_path, handoff.archive_path)
 ```
 
-On a machine with the declared Palace executable and resources, inspect the
-generated script, then run it manually from the handoff directory:
+Inspect the generated script and transfer the complete handoff package to the
+target host. Run the generated command there manually. For a direct-local
+profile, from inside the handoff directory:
 
 ```bash
-cd /path/to/public-xmon-palace-route-b
 bash run_palace.sh
 ```
 
-That command runs Palace on the user's host. Quarto does not run it. Keep the
-handoff ID with the returned run directory.
+For a Slurm profile, submit the generated `run_palace.sbatch` with `sbatch`;
+the script invokes the selected launcher inside the allocation. These commands
+are separate user actions and Quarto never runs them. Keep `handoff_id_note`
+on the preparation side, outside the handoff directory and archive, and make
+that independently retained value available when resolving the returned
+package.
 
 ## Resolve a returned run
 
-Use this block only after the real Palace run and its return artifacts are
-available. In a new Python session, set `expected_handoff_id` to the exact ID
-from the preparation receipt.
+Use this block only after the complete returned Palace run directory is
+available. Resolve it against the preparation-side ID note; the expected ID
+must not be read from the returned package.
 
 ```python
 import json
@@ -137,7 +183,8 @@ from pathlib import Path
 from scgsim.palace import resolve_palace_result
 
 returned_run_dir = Path(".artifacts/public-xmon-palace-route-b")
-expected_handoff_id = input("Handoff ID from the prepared run: ").strip()
+handoff_id_note = Path(".artifacts/public-xmon-palace-handoff-id.txt")
+expected_handoff_id = handoff_id_note.read_text(encoding="utf-8").strip()
 if not expected_handoff_id:
     raise ValueError("the returned run must be matched to its prepared handoff ID")
 resolved = resolve_palace_result(
@@ -146,6 +193,8 @@ resolved = resolve_palace_result(
 )
 resolved.show_all_results()
 epr_result = resolved.epr_result()
+if epr_result is None:
+    raise RuntimeError("this Eigenmode handoff requested a Palace EPR result")
 epr_json = returned_run_dir / "results" / "palace-epr-result.json"
 epr_json.write_text(
     json.dumps(epr_result.to_payload(), indent=2),
@@ -153,7 +202,10 @@ epr_json.write_text(
 )
 ```
 
-The detached `PalaceEprResult` can be saved with the run or moved for later
-offline analysis. See the [offline EPR workflow](eigenmode-epr.qmd#offline-palace-result-example)
-to select a mode, change loss assumptions, compare the owner-labeled views,
+The resolver verifies the complete returned run against the ID retained during
+preparation. `show_all_results()` presents the resolved run, and
+`epr_result()` returns its detached EPR record. The final lines save that
+record as a standalone JSON file for the
+[offline EPR workflow](eigenmode-epr.qmd#offline-palace-result-example), where
+you can select a mode, change loss assumptions, compare owner-labeled views,
 and export Plotly HTML without reopening Palace.

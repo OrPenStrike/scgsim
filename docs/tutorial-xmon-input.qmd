@@ -16,6 +16,14 @@ simulation inputs, not measured device data or paper-mask dimensions. Use the
 matched SCGSim and OrPen versions listed there. Quarto shows this code without
 executing it.
 
+The [pinned public OrPen Xmon sources](https://github.com/OrPenStrike/orpen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/src/ComponentSimulation/Kosen2024_Xmon)
+provide the Palace Route B lumped-port inductance of $11.78\,\mathrm{nH}$ used
+in the backend tutorials. The AEDT tutorial sets capacitance to zero as an
+explicit inductive-only circuit-model assumption; this is not a measured zero
+or a claim about the physical device. Its MA/MS/SA film values come from
+OrPen's validated synthetic `LiteratureCentral` presets and remain modeling
+assumptions, as described on the backend pages.
+
 ## Build the component and named coupon occurrences
 
 The device component owns local Entity IDs for its pad and couplers, the

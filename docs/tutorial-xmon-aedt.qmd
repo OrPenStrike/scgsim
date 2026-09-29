@@ -7,10 +7,13 @@ execute:
 Run the [shared Xmon input tutorial](tutorial-xmon-input.qmd) first in the
 same Python session. This page uses its immutable `snapshot`, `port_name`, and
 `coupon` to prepare a portable HFSS Eigenmode handoff with surface, bulk, and
-junction EPR outputs. The candidate requires AEDT 2024.2 and PyAEDT 1.3.0; the
-local Python environment needs the SCGSim `aedt-epr` dependencies described in
-the [installation guide](../README.md). Quarto does not open AEDT, create native
-geometry, or solve this model.
+junction EPR outputs. The Python input-preparation environment needs the
+SCGSim `aedt-epr` extra and matched public OrPen inputs. The extra supplies
+layout-geometry and PyAEDT Python dependencies; it does not install AEDT or
+provide a license. The target run host needs AEDT 2024.2, PyAEDT 1.3.0, and an
+appropriate AEDT license. Use the matching SCGSim source revision listed in
+[Examples](examples.qmd). Quarto does not open AEDT, create native geometry, or
+solve this model.
 
 ## Configure surface and junction EPR
 
@@ -78,56 +81,27 @@ if not {"MA", "MS", "SA"}.issubset(
     raise ValueError("the prepared Xmon catalogue must include MA, MS, and SA")
 ```
 
-The port sheet and terminal nets come from the actual annotated component
-source. Its perpendicular sheet width is derived from the prepared polygon,
-and its direction is the source port's in-plane direction. The public Palace
-example models the port as inductive with $L=11.78\,\mathrm{nH}$. This AEDT
-example sets $C=0$ as an explicit inductive-only circuit-model assumption; it
-does not claim that the physical device has zero capacitance or that a
-capacitance was measured.
+The public component annotation identifies the source port sheet and its host
+geometry. The final host Nets come from the Notebook `GeometryPlan` in the
+[shared input tutorial](tutorial-xmon-input.qmd). `planar_junction_from_port`
+binds that exact normalized sheet, checks the explicit terminal Nets, and
+derives the in-plane direction and perpendicular width from its recorded
+source geometry. The public Palace example models the port as inductive with
+$L=11.78\,\mathrm{nH}$. This AEDT example sets $C=0$ as an explicit
+inductive-only circuit-model assumption; it does not claim that the physical
+device has zero capacitance or that a capacitance was measured.
 
 ```python
-from scgsim.aedt import PlanarJunction
+from scgsim.aedt import planar_junction_from_port
 
-source_ports = [
-    item
-    for item in snapshot.geometry_input.port_sheet_regions
-    if item.metadata.get("source_name") == port_name
-]
-if len(source_ports) != 1:
-    raise ValueError(f"expected one prepared source sheet for {port_name!r}")
-port_sheet = source_ports[0]
-if port_sheet.holes:
-    raise ValueError("the Xmon junction source sheet must not contain holes")
-
-entity_nets = {
-    item.semantic_id: item.net_id for item in snapshot.geometry_input.entities
-}
-overlap_nets = {
-    entity_nets[item.host_semantic_id] for item in port_sheet.overlaps
-}
-if overlap_nets != {"Ground", "xmon_pad"}:
-    raise ValueError("the prepared source sheet must overlap the Xmon and ground nets")
-
-direction_x, direction_y = port_sheet.metadata["direction"][:2]
-across = [
-    -direction_y * x + direction_x * y
-    for x, y in port_sheet.exterior
-]
-junction_width_um = max(across) - min(across)
-if junction_width_um <= 0:
-    raise ValueError("the prepared junction sheet must have positive width")
-
-junction = PlanarJunction(
+junction = planar_junction_from_port(
+    snapshot.geometry_input,
+    port_name=port_name,
     junction_id="jj",
-    source_polygon_id=port_sheet.source_polygon_id,
     terminal_a_net="Ground",
     terminal_b_net="xmon_pad",
-    direction_xy=(direction_x, direction_y),
-    width_um=junction_width_um,
     inductance_h=11.78e-9,
     capacitance_f=0.0,  # Explicit inductive-only modeling assumption.
-    metadata={"source_port_name": port_name},
 )
 ```
 
@@ -143,12 +117,27 @@ rows; they do not remove physical domains, junctions, or the surface model and
 do not change the normalization. See the [EPR quantity and selection
 contract](eigenmode-epr.qmd#workflow-and-state-contract).
 
+Supply resources allowed by the target AEDT host or job allocation. These
+example environment variable names are caller-owned values, not SCGSim
+defaults; `AedtResources` records the selected core count and RAM-limit
+percentage in the handoff.
+
 ```python
+import os
 from pathlib import Path
 
-from scgsim.aedt import EprAnalysisRequest, EigenmodeRunControl, EigenmodeSim
+from scgsim.aedt import (
+    AedtResources,
+    EprAnalysisRequest,
+    EigenmodeRunControl,
+    EigenmodeSim,
+)
 
 aedt_run_dir = Path.cwd() / ".artifacts" / "public-xmon-aedt-route-b"
+aedt_resources = AedtResources(
+    cores=int(os.environ["SCGSIM_AEDT_CORES"]),
+    ram_limit_percent=int(os.environ["SCGSIM_AEDT_RAM_LIMIT_PERCENT"]),
+)
 bulk_domain_ids = (
     "D0_SUBSTRATE",
     "D0_TO_D1_GAP",
@@ -172,6 +161,7 @@ sim.set_eigenmode(
         minimum_passes=1,
         minimum_converged_passes=1,
     ),
+    resources=aedt_resources,
 )
 sim.set_surface_epr(contributions=surface_specs)
 sim.add_junction(junction)
@@ -185,6 +175,21 @@ sim.set_epr_request(
         bulk_domain_ids=bulk_domain_ids,
     )
 )
+```
+
+Before writing a mesh or handoff, inspect the normalized source and configured
+AEDT settings:
+
+```python
+from IPython.display import display
+
+display(sim.input_summary())
+```
+
+The summary is a pre-solve view of the current inputs. It does not open AEDT
+or claim that native geometry has been built.
+
+```python
 handoff = sim.prepare_handoff()
 print(handoff.run_dir, handoff.script_path, handoff.archive_path)
 ```
@@ -197,45 +202,47 @@ open AEDT, create native geometry, or run the solver.
 ## Run only on the AEDT host
 
 Review the generated script and transfer the complete handoff directory to a
-machine with the required AEDT and PyAEDT versions. Running this command is a
-separate user action; it is not part of the documentation build:
+machine with the required AEDT and PyAEDT versions. From inside that prepared
+directory on the AEDT host, run the script as a separate user action:
 
 ```bash
-cd /path/to/public-xmon-aedt-route-b
 bash run_aedt.sh
 ```
 
-This page includes no returned native project or numerical result. Native
-geometry and solver behavior must be checked on the AEDT host before treating
-the prepared input as a completed simulation.
+Retrieve the complete returned directory after the host run. The prepared
+inputs alone are not a completed simulation.
 
-## Load and plot a returned EPR record
+## Resolve and show a returned package {#load-and-plot-a-returned-epr-record}
 
-An ordinary Eigenmode run writes its adaptive history to
-`results/epr/adaptive-epr-result.json`. Load that record to plot mode 1 and its
-convergence history. This projection reads the saved result and does not
-reopen AEDT.
+Resolve the complete returned run directory, then show its receipt-bound
+primary, benchmark, and EPR results. `epr_result()` returns the captured
+adaptive history; it does not reopen AEDT.
 
 ```python
 from pathlib import Path
 
-from scgsim.aedt import plot_epr_result, resolve_epr_result
+from scgsim.aedt import plot_epr_result, resolve_results
 
 returned_run_dir = Path(".artifacts/public-xmon-aedt-route-b")
-result = resolve_epr_result(
-    returned_run_dir / "results" / "epr" / "adaptive-epr-result.json"
-)
-figure = plot_epr_result(result, mode=1, show_convergence=True)
+resolved = resolve_results(returned_run_dir)
+resolved.show_all_results()
+epr_result = resolved.epr_result()
+if epr_result is None:
+    raise RuntimeError("this Eigenmode handoff requested an adaptive EPR result")
+
+figure = plot_epr_result(epr_result, mode=1, show_convergence=True)
 figure.write_html("aedt-xmon-adaptive-epr.html")
 ```
 
-When `native_pass` is omitted, the plot selects the recorded
-`solver_last_completed_pass`. A partial row or a missing mode at that pass
-remains unavailable, and convergence traces retain gaps. The plot does not
-fall back to an earlier complete pass. For owner views and loss reanalysis at
-an explicitly selected pass, continue with the
+`show_all_results()` uses the actual last completed native pass and shows the
+requested modes and adaptive history. `plot_epr_result()` also selects the
+recorded `solver_last_completed_pass` when `native_pass` is omitted; a partial
+row or missing mode remains unavailable, with no fallback to an earlier
+complete pass. For owner views and loss reanalysis at an explicitly selected
+pass, continue with the
 [adaptive-pass example](eigenmode-epr.qmd#select-an-adaptive-mode-and-pass),
-which supplies `native_pass` to `show_epr`. The separate saved-field analysis
-writes `results/epr/epr-result.json`; see the
+which supplies `native_pass` to `show_epr`. Saved-field analysis is a separate
+step and writes `results/epr/epr-result.json`; see the
 [offline AEDT example](eigenmode-epr.qmd#offline-aedt-result-example) for that
-analysis result. This page does not run saved-field analysis.
+analysis result. This page does not run saved-field analysis. `resolve_results`
+needs the complete returned run directory, not only an EPR JSON file.
