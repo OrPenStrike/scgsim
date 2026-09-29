@@ -1712,6 +1712,65 @@ def _junction_terminal_line(
     return line, along_max - along_min
 
 
+def planar_junction_from_port(
+    build_input: GeometryBuildInput,
+    *,
+    port_name: str,
+    junction_id: str,
+    terminal_a_net: str,
+    terminal_b_net: str,
+    inductance_h: float,
+    capacitance_f: float,
+) -> PlanarJunction:
+    """Bind an explicit circuit junction to one normalized authored port sheet."""
+
+    if not isinstance(build_input, GeometryBuildInput):
+        raise TypeError("build_input must be GeometryBuildInput")
+    if not isinstance(port_name, str) or not port_name:
+        raise ValueError("port_name must be non-empty text")
+    validate_geometry_input(build_input)
+    matches = tuple(
+        region for region in build_input.port_sheet_regions
+        if region.metadata.get("source_name") == port_name
+    )
+    if len(matches) != 1:
+        raise ValueError(
+            f"port {port_name!r} requires exactly one normalized source sheet; "
+            f"found {len(matches)}"
+        )
+    region = matches[0]
+    entities = {entity.semantic_id: entity for entity in build_input.entities}
+    overlap_nets = {
+        entities[overlap.host_semantic_id].net_id for overlap in region.overlaps
+    }
+    if overlap_nets != {terminal_a_net, terminal_b_net}:
+        raise ValueError(
+            f"port {port_name!r} overlaps must identify exactly the explicit "
+            "terminal A and B Nets"
+        )
+    direction = region.metadata["direction"]
+    dx, dy = float(direction[0]), float(direction[1])
+    magnitude = math.hypot(dx, dy)
+    dx, dy = dx / magnitude, dy / magnitude
+    across = tuple(-dy * x + dx * y for x, y in region.exterior)
+    width_um = max(across) - min(across)
+    junction = PlanarJunction(
+        junction_id=junction_id,
+        source_polygon_id=region.source_polygon_id,
+        terminal_a_net=terminal_a_net,
+        terminal_b_net=terminal_b_net,
+        direction_xy=(dx, dy),
+        width_um=width_um,
+        inductance_h=inductance_h,
+        capacitance_f=capacitance_f,
+        metadata={"source_port_name": port_name},
+    )
+    _junction_terminal_line(
+        {"exterior": region.exterior, "holes": region.holes}, junction, 0.0
+    )
+    return junction
+
+
 def _region_bounds(region: Any) -> tuple[float, ...]:
     bounds = tuple(float(value) for value in region.bounding_box)
     if (

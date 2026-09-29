@@ -10,7 +10,10 @@ from pathlib import Path
 from typing import Any, Literal
 
 from scgsim._mesh_quality import MeshQualityReport, check_mesh_quality
-from scgsim.sgb import GeometryPlanSnapshot, VacuumRegionSpec
+from scgsim.sgb import (
+    GeometryPlanSnapshot, InputSummary, VacuumRegionSpec,
+    summarize_geometry_input,
+)
 from ._config import (
     _MODEL_L0_M,
     LayoutPortBinding,
@@ -118,6 +121,39 @@ class EigenmodeSim:
         self._materials = trial._materials
         self._plan_snapshot = snapshot
         self._invalidate_mesh()
+
+    def input_summary(self) -> InputSummary:
+        """Show the bound Plan source and Palace settings before mesh work."""
+
+        if self._plan_snapshot is None:
+            raise ValueError(
+                "input_summary requires a bound GeometryPlan snapshot; normalize "
+                "a raw Component explicitly first"
+            )
+        data = summarize_geometry_input(
+            self._plan_snapshot.geometry_input,
+            prepared_stack=self._plan_snapshot.stack,
+        ).data
+        data["backend"] = {
+            "name": "palace",
+            "route": self.route,
+            "route_a_thin_film": self.route_a_thin_film,
+            "airbox": self.airbox,
+            "ports": [
+                {"name": item.name, "layer": item.layer,
+                 "inductance_h": item.inductance}
+                for item in self.ports
+            ],
+            "surface_epr_specs": self.surface_epr_specs,
+            "epr_request": self.epr_request,
+            "num_modes": self.num_modes,
+            "target_hz": self.target_hz,
+            "eigenmode_tolerance": self.eigenmode_tolerance,
+            "save_fields": self.save_fields,
+            "numerical": self.numerical,
+            "indium_ground_bumps": self.indium_ground_bumps,
+        }
+        return InputSummary(data)
 
     def set_stack(self, stack: Mapping[str, Any] | str | Path) -> None:
         if self._plan_snapshot is not None:

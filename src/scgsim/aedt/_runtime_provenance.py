@@ -21,7 +21,8 @@ SOURCE_SCHEMA_V2 = "scgsim.aedt.runtime-source.v2"
 SOURCE_SCHEMA_V3 = "scgsim.aedt.runtime-source.v3"
 SOURCE_SCHEMA_V4 = "scgsim.aedt.runtime-source.v4"
 SOURCE_SCHEMA_V5 = "scgsim.aedt.runtime-source.v5"
-SOURCE_SCHEMA = SOURCE_SCHEMA_V5
+SOURCE_SCHEMA_V6 = "scgsim.aedt.runtime-source.v6"
+SOURCE_SCHEMA = SOURCE_SCHEMA_V6
 
 # Frozen membership of the public runtime-source.v1 evidence format. Changing
 # producer structure must not silently change what historical readers mean.
@@ -77,6 +78,12 @@ _RUNTIME_SOURCE_V5_PATHS = tuple(sorted((
     "scgsim/sgb/__init__.py",
 )))
 
+# Public input summaries are imported by both execution-facing Eigenmode facades.
+_RUNTIME_SOURCE_V6_PATHS = tuple(sorted((
+    *_RUNTIME_SOURCE_V5_PATHS,
+    "scgsim/sgb/summary.py",
+)))
+
 def _module_manifest() -> list[dict[str, str]]:
     package_root = Path(__file__).resolve().parents[1]
     return [
@@ -85,7 +92,7 @@ def _module_manifest() -> list[dict[str, str]]:
             "path": path,
             "sha256": file_sha256(package_root.parent / path),
         }
-        for path in _RUNTIME_SOURCE_V5_PATHS
+        for path in _RUNTIME_SOURCE_V6_PATHS
     ]
 
 
@@ -186,6 +193,7 @@ def validate_runtime_source(
         SOURCE_SCHEMA_V3: _RUNTIME_SOURCE_V3_PATHS,
         SOURCE_SCHEMA_V4: _RUNTIME_SOURCE_V4_PATHS,
         SOURCE_SCHEMA_V5: _RUNTIME_SOURCE_V5_PATHS,
+        SOURCE_SCHEMA_V6: _RUNTIME_SOURCE_V6_PATHS,
     }.get(schema)
     if (
         expected_paths is None

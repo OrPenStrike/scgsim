@@ -50,6 +50,17 @@ evaluation. Hover data retains source members, field side, and loss assumptions.
 The coverage annotation counts reported surface rows and source bindings or
 surfaces, bulk domains, and junctions or ports.
 
+An AEDT `ResolvedRun` provides `epr_result()` for its bound EPR record and
+`show_all_results(show_details=False)` for the integrated run view; the latter
+returns `None`. The view uses all requested modes at the actual last completed
+pass and includes the adaptive history. Missing or partial values remain
+unavailable; presentation does not fall back to an earlier complete pass. It
+checks consumed result CSVs and benchmark data against hashes captured during
+resolution, without consulting a live simulation object or rereading native
+AEDT state. See the
+[AEDT runtime reference](specs/aedt-runtime.qmd) for strict resolution and
+missing-artifact behavior.
+
 The displayed inverse-Q subtotal includes only known, unmasked baseline
 surface terms. Unknown baseline losses are counted as unknown; requested mask
 margins are alternative views and are not added to the subtotal. Sidewall

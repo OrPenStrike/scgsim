@@ -225,3 +225,16 @@ geometry evidence; it cannot manufacture source contact intent. Route-A
 profile normalization still happens once at the shared frontend boundary, and
 Route-B finite-body facts stay distinct from PEC approximation and the AEDT
 implementation that realizes them.
+
+## Pre-solve input summary
+
+`scgsim.sgb.summarize_geometry_input(build_input, *, prepared_stack)` returns an
+`InputSummary` with detached `.data` and an HTML representation for notebook
+display. Both Eigenmode facades expose `input_summary()` to combine this
+normalized source with their configured backend settings. AEDT summarizes its
+normalized build input and stack; Palace requires its bound `GeometryPlan`.
+Passing a raw component without explicit normalization fails rather than
+guessing a stack. The summary records source, entity, Net, material, Z/vacuum,
+port, EPR, and run-control inputs; unset or unknown values stay explicit. It
+does no file I/O, meshing, catalogue rebuild, or native solver inspection and
+does not claim native geometry or run evidence.

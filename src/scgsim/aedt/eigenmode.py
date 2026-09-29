@@ -13,7 +13,9 @@ from scgsim.semantics.epr import film_assumptions
 from scgsim.sgb import (
     GeometryBuildInput,
     GeometryPlanSnapshot,
+    InputSummary,
     build_gds_stack_geometry_input,
+    summarize_geometry_input,
 )
 
 from ._epr_geometry import prepare_planar_geometry_input, validate_geometry_workers
@@ -259,6 +261,42 @@ class EigenmodeSim:
         metadata.pop("gds_file", None)
         metadata.pop("stack_file", None)
         return replace(prepared, metadata=metadata)
+
+    def input_summary(self) -> InputSummary:
+        """Show configured normalized inputs without writing GDS or preparing HFSS."""
+
+        if self._plan_snapshot is not None:
+            source, stack = self._plan_snapshot.geometry_input, self._plan_snapshot.stack
+        elif self.build_input is not None and self.stack is not None:
+            source, stack = self.build_input, self.stack
+        else:
+            raise ValueError(
+                "input_summary requires a GeometryPlan snapshot or an already-"
+                "normalized GeometryBuildInput with stack; normalize a raw "
+                "Component explicitly first"
+            )
+        data = summarize_geometry_input(source, prepared_stack=stack).data
+        data["backend"] = {
+            "name": "aedt",
+            "route": self.route,
+            "route_a_profile": self.route_a_profile,
+            "project_name": self.project_name,
+            "design_name": self.design_name,
+            "run_control": (
+                None if self.run_control is None else self.run_control.to_payload()
+            ),
+            "resources": None if self.resources is None else self.resources.to_payload(),
+            "geometry_workers": self.geometry_workers,
+            "surface_contributions": [
+                item.to_payload() for item in self.surface_contributions
+            ],
+            "surface_defaults": self.surface_defaults,
+            "junctions": [item.to_payload() for item in self.junctions],
+            "epr_request": (
+                None if self.epr_request is None else self.epr_request.to_payload()
+            ),
+        }
+        return InputSummary(data)
 
     def prepare_handoff(self) -> HandoffPlan:
         source_stack = self._plan_snapshot.stack if self._plan_snapshot is not None else self.stack

@@ -5,7 +5,7 @@ Failure intent: public entrypoints preserve explicit partial adaptive-history
 records, but reject corrupt or identity-inconsistent state without fallback.
 """
 
-from ._epr_geometry import prepare_planar_geometry_input
+from ._epr_geometry import planar_junction_from_port, prepare_planar_geometry_input
 from ._epr_models import (
     EprAnalysisRequest,
     EprResult,
@@ -93,6 +93,7 @@ __all__ = [
     "analyze_epr",
     "combine_epr_mode",
     "parse_aedt_spec",
+    "planar_junction_from_port",
     "plot_epr_result",
     "reanalyze_epr",
     "prepare_handoff",

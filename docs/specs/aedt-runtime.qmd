@@ -397,6 +397,27 @@ $p\tan\delta$; an explicit zero produces zero, while an unknown value makes
 that contribution unavailable. See [Eigenmode and Offline EPR](../eigenmode-epr.qmd)
 for the two backend APIs, reanalysis precedence, and report coverage.
 
+Strict `resolve_results()` also resolves the declared adaptive-mode-history and
+adaptive-EPR JSON artifacts and verifies their captured hashes. It validates
+the EPR payload's existing source, setup, mode, and pass provenance; the history
+artifact remains receipt-hash evidence and is not parsed for those checks.
+`ResolvedRun.epr_result()` returns
+the immutable EPR result, or `None` only when the handoff requested no EPR. A
+missing or corrupt requested artifact fails resolution; valid partial history
+remains partial. Result presentation uses the resolved object and its captured
+artifact identities rather than consulting a current `EigenmodeSim` or
+re-reading native AEDT state. The distinct saved-field `analyze_epr()` workflow
+is unchanged.
+
+`planar_junction_from_port(build_input, *, port_name, junction_id,
+terminal_a_net, terminal_b_net, inductance_h, capacitance_f)` returns a
+`PlanarJunction` when `port_name` matches exactly one normalized port's
+recorded `source_name`. The helper uses the recorded source sheet for direction
+and width, while the caller supplies the terminal nets and circuit values
+explicitly. Missing, ambiguous, or invalid source sheets fail; the helper does
+not infer connectivity. It retains the existing rectangular-sheet and
+owner-overlap checks.
+
 #### Catalogue-driven handoff
 
 The inputs below are the real `GeometryBuildInput` and prepared-stack mapping

@@ -321,6 +321,96 @@ def show_epr(result: EprResult, *, mode: int | None = None, native_pass: int | N
     return figure
 
 
+def display_resolved_run(resolved: Any, *, show_details: bool) -> None:
+    """Compose receipt-bound tables and existing EPR figures for a notebook."""
+
+    from IPython.display import HTML, display
+
+    rows = resolved.physics_results()
+    benchmark = resolved.simulation_benchmark()
+    result = resolved.epr_result()
+    project_sha = dict(resolved._output_hashes)[resolved.project_path.name]
+    source_sha = (
+        result.provenance["analysis_source_sha256"] if result is not None else None
+    )
+    final_pass = (
+        result.provenance["solver_last_completed_pass"] if result is not None else None
+    )
+    display(HTML(
+        "<section><h3>AEDT completed run</h3>"
+        f"<p>Mode: {html.escape(resolved.mode)}; "
+        f"project: {html.escape(resolved.project_path.name)}; "
+        f"receipt: {html.escape(resolved.receipt_path.relative_to(resolved.receipt_path.parent.parent).as_posix())}"
+        + (f"; observed final pass: {final_pass}" if final_pass is not None else "")
+        + ".</p>"
+        f"<p>Spec SHA-256: {html.escape(str(resolved._spec_sha256))}; "
+        f"project SHA-256: {html.escape(project_sha)}; "
+        f"EPR analysis source SHA-256: {html.escape(str(source_sha))}.</p>"
+        "</section>"
+    ))
+    display_benchmark(benchmark, show_details=show_details)
+    headings = tuple(rows[0]) if rows else ()
+    shown = rows if show_details else rows[:20]
+    display(HTML(
+        "<section><h3>AEDT resolved results</h3>"
+        f"<p>{html.escape(resolved.mode)}; {len(rows)} primary result rows "
+        "verified against the completed receipt.</p>"
+        + (
+            "<table><thead><tr>"
+            + "".join(f"<th>{html.escape(key)}</th>" for key in headings)
+            + "</tr></thead><tbody>"
+            + "".join(
+                "<tr>" + "".join(
+                    f"<td>{html.escape(str(row.get(key, '')))}</td>"
+                    for key in headings
+                ) + "</tr>"
+                for row in shown
+            ) + "</tbody></table>"
+            if headings else "<p>No primary result rows were recorded.</p>"
+        )
+        + (
+            f"<p>Showing {len(shown)} of {len(rows)} rows; "
+            "set show_details=True for the full table.</p>"
+            if len(shown) != len(rows) else ""
+        )
+        + "</section>"
+    ))
+    if result is None:
+        display(HTML("<p>Adaptive EPR was not requested for this run.</p>"))
+        return
+    last_pass = result.provenance["solver_last_completed_pass"]
+    requested_modes = result.provenance["requested_modes"]
+    display(HTML(
+        f"<h3>Adaptive EPR at observed pass {last_pass}</h3>"
+        "<p>Requested modes are shown individually with surface, bulk, and "
+        "junction evidence. Missing or partial values remain unavailable.</p>"
+    ))
+    try:
+        display(plot_epr_result(result, show_convergence=True))
+    except ImportError:
+        display(HTML("<p>Plotly is unavailable; the adaptive history figure cannot be shown.</p>"))
+    for mode in requested_modes:
+        selected = [
+            row for row in result.rows
+            if row["mode"] == mode and row["native_pass"] == last_pass
+        ]
+        if not selected:
+            display(HTML(
+                f"<p>Mode {mode}: observed pass {last_pass} has no EPR row.</p>"
+            ))
+            continue
+        if len(selected) != 1:
+            raise RuntimeError("adaptive EPR contains duplicate mode/pass rows")
+        try:
+            display(show_epr(result, mode=mode, native_pass=last_pass))
+        except ImportError:
+            status = html.escape(str(selected[0]["status"]))
+            display(HTML(
+                f"<p>Mode {mode}, observed pass {last_pass}: {status}; "
+                "Plotly is unavailable for the separate EPR axes.</p>"
+            ))
+
+
 def _benchmark_view(data: dict[str, Any], *, show_details: bool) -> dict[str, Any]:
     """Project the recorded native profile tree into display-only rows and series."""
 
