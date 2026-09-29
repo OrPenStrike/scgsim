@@ -14,7 +14,9 @@ website:
   description: "Independent downstream research toolkit for superconducting-circuit simulation"
   page-navigation: true
   reader-mode: false
-  search: false
+  search:
+    location: navbar
+    type: overlay
   repo-url: https://github.com/OrPenStrike/scgsim
   repo-actions: [source, issue]
   navbar:
@@ -92,10 +94,7 @@ website:
           href: docs/ownership.qmd
 
 format:
-  qdk-html:
-    theme:
-      light: [default, _extensions/arfiligol/qdk/qdk.scss]
-      dark: [default, _extensions/arfiligol/qdk/qdk.scss, _extensions/arfiligol/qdk/qdk-dark.scss]
+  askr-html:
     css: docs/styles.css
     html-math-method: mathjax
     respect-user-color-scheme: true
