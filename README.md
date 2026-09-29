@@ -16,6 +16,12 @@ provenance only: new SCGSim work must not consume them directly or use them as a
 fallback; the in-tree `scgsim.sgb` Core is the current geometry and topology
 authority.
 
+The converging geometry candidate starts from component-local entities and
+named occurrences. A Notebook-authored `GeometryPlan` applies the final
+`Net -> Entity` map and prepares one immutable input for the Palace and AEDT
+backends. The [GeometryPlan and SGB guide](docs/geometry-sgb.qmd) documents
+this source-identity contract.
+
 The current `CONVERGING` package provides the in-tree `scgsim.sgb` Core,
 Palace Electrostatic/Eigenmode geometry-to-report workflows, and version-locked
 AEDT handoff/run/resolve workflows for HFSS Driven Terminal/Modal, HFSS
@@ -53,6 +59,9 @@ duplicate notebook source and has no runtime dependency on OrPen.
 ### Workflows
 
 - [Choose a workflow and find public notebooks](docs/examples.qmd)
+- [Build the shared public Xmon inputs](docs/tutorial-xmon-input.qmd)
+- [Prepare a Palace Route B Xmon Eigenmode handoff](docs/tutorial-xmon-palace.qmd)
+- [AEDT Route B Xmon Eigenmode and EPR guide](docs/tutorial-xmon-aedt.qmd)
 - [Eigenmode methods, EPR, and offline reanalysis](docs/eigenmode-epr.qmd)
 - [Notebook UX contracts](docs/notebook-ux.qmd)
 - [Execution profiles and handoff](docs/execution-profiles.qmd)

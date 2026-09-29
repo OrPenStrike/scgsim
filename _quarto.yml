@@ -23,6 +23,8 @@ website:
         href: README.md
       - text: "Examples"
         href: docs/examples.qmd
+      - text: "Xmon tutorials"
+        href: docs/tutorial-xmon-input.qmd
       - text: "Architecture"
         href: docs/architecture.qmd
       - text: "Specs"
@@ -46,6 +48,12 @@ website:
       contents:
         - text: "Examples"
           href: docs/examples.qmd
+        - text: "Shared Xmon inputs"
+          href: docs/tutorial-xmon-input.qmd
+        - text: "Palace Route B Eigenmode"
+          href: docs/tutorial-xmon-palace.qmd
+        - text: "AEDT Route B Eigenmode + EPR"
+          href: docs/tutorial-xmon-aedt.qmd
         - text: "Eigenmode and offline EPR"
           href: docs/eigenmode-epr.qmd
         - text: "Notebook UX contracts"
@@ -57,7 +65,7 @@ website:
       contents:
         - text: "Architecture and data flow"
           href: docs/architecture.qmd
-        - text: "Geometry and SGB Route A/B"
+        - text: "GeometryPlan and SGB Route A/B"
           href: docs/geometry-sgb.qmd
         - text: "Headless geometry preview"
           href: docs/geometry-preview.qmd

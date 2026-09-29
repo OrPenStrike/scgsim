@@ -1,0 +1,168 @@
+---
+title: "Public Xmon: shared Eigenmode inputs"
+execute:
+  enabled: false
+---
+
+This page builds one reusable source snapshot for the [Palace](tutorial-xmon-palace.qmd)
+and [AEDT](tutorial-xmon-aedt.qmd) workflows. It starts from OrPen's public
+Kosen2024 Xmon preview cell and ground-short coupon. The cell is an independent
+parametric adaptation of Kosen et al., [PRX Quantum 5, 030350
+(2024)](https://doi.org/10.1103/PRXQuantum.5.030350), shared under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); it is not an
+author-supplied mask. The dimensions and coupon settings follow the public
+Palace Route B example linked from [Examples](examples.qmd); they are public
+simulation inputs, not measured device data or paper-mask dimensions. Use the
+matched SCGSim and OrPen versions listed there. Quarto shows this code without
+executing it.
+
+## Build the component and named coupon occurrences
+
+The device component owns local Entity IDs for its pad and couplers, the
+junction port, and source geometry. Its junction ground arm is a local metal
+contribution to the root D1 plane, not a separate conductor Entity. The
+`place_flip_chip_ground_short_bumps` helper returns a final coupon with named
+device and bump references and one root-local D0/D1 ground-plane pair, authored
+by OrPen's `author_common_flip_chip_ground_planes` helper. Register the actual
+device and bump references by their names; do not reconstruct hierarchy from
+flattened polygon names.
+
+```python
+from pathlib import Path
+import hashlib
+import json
+
+import gdsfactory as gf
+import orpen_sc_pdk
+from orpen_sc_pdk import LAYER_STACK, get_material_records
+from orpen_sc_pdk.helpers.assembly import place_flip_chip_ground_short_bumps
+from orpen_sc_pdk.tech import OUTER_VACUUM_THICKNESS_UM
+from scgsim.sgb import GeometryPlan, build_gds_stack_geometry_input
+
+output_dir = Path.cwd() / ".artifacts" / "public-xmon-inputs"
+output_dir.mkdir(parents=True, exist_ok=True)
+gds_path = output_dir / "xmon.gds"
+stack_path = output_dir / "xmon.stack.json"
+
+orpen_sc_pdk.activate()
+gf.clear_cache()
+device = gf.get_component(
+    "kosen2024_flip_chip_xmon_qubit",
+    bump_ring_count_per_side=0,
+    qubit_pad_length=309.5,
+    qubit_pad_width=24.65,
+    qubit_gap=20.0,
+)
+coupon = place_flip_chip_ground_short_bumps(
+    device,
+    coupon_padding_um=75.0,
+    clearance_um=30.0,
+    placement_mode="corner_anchors",
+)
+component = coupon.component
+```
+
+The zero ring count leaves the public device's authored coupon shorts as the
+only bump instances. The helper may increase `coupon_padding_um` to fit them;
+`coupon.stack_coupon_padding_um` is the corresponding stack value. The common
+planes belong to the final coupon, while the device's local ground-arm
+contribution is resolved against its named occurrence and included in D1.
+The component, layer stack, and material records come from OrPen. SCGSim does
+not author a second copy of those PDK facts.
+
+## Assign the final Net map and prepare one snapshot
+
+The component's local Entity IDs are scoped by their occurrence paths. This
+example places the root D0 and D1 planes, four device couplers, and eight
+sibling shorts on `Ground`, and the device's `D1_XMON_PAD` Entity on
+`xmon_pad`. The local junction ground arm is already included in the root D1
+plane, so it is not listed as a separate Net member. The final Net assignment
+is a Notebook operation on `GeometryPlan`. Entity IDs preserve source lineage;
+they do not create one measurement or field expression per Entity. Physical
+mesh groups are separate computational aggregates: the eight same-role,
+same-material Ground bump Entities share one physical group while remaining
+eight qualified Entity members. AEDT's EPR owner/interface/integral grouping
+remains its own backend contract.
+
+```python
+plan = GeometryPlan(
+    component=component,
+    root_id="chip",
+    layer_stack=LAYER_STACK,
+    material_records=get_material_records(),
+    coupon_padding_um=coupon.stack_coupon_padding_um,
+)
+for name, reference in coupon.named_instances.items():
+    plan.register_instance(f"chip/{name}", reference)
+
+plan.set_nets({
+    "xmon_pad": ("chip/device/D1_XMON_PAD",),
+    "Ground": (
+        "chip/D0_TOP_GROUND_PLANE",
+        "chip/D1_BOTTOM_GROUND_PLANE",
+        *(f"chip/device/D1_COUPLER_{index}" for index in range(1, 5)),
+        *(
+            f"chip/{name}/D0_D1_INDIUM_BUMP"
+            for name in coupon.named_instances
+            if name.startswith("short_")
+        ),
+    ),
+})
+plan.set_vacuum_region(
+    padding=(0.0, 0.0, float(OUTER_VACUUM_THICKNESS_UM))
+)
+snapshot = plan.prepare()
+```
+
+The outer Region padding is an explicit shared input, not a backend-specific
+override. The authored `D0_TO_D1_GAP` remains its own vacuum Entity. Palace and
+AEDT choose different external boundary defaults; matching source geometry
+does not make those physical models identical.
+
+## Save and reread the GDS plus stack
+
+`GeometryPlanSnapshot.gds_bytes` and the detached `snapshot.stack` provide a
+portable GDS/JSON pair. The public SGB reader can load that pair independently
+of the live component references. This round trip checks the emitted GDS hash
+and qualified Entity identities; it does not validate native solver geometry.
+
+```python
+gds_path.write_bytes(snapshot.gds_bytes)
+stack_path.write_text(
+    json.dumps(snapshot.stack, sort_keys=True, indent=2),
+    encoding="utf-8",
+)
+
+reloaded = build_gds_stack_geometry_input(
+    gds_file=gds_path,
+    stack_file=stack_path,
+    top_cell_name=snapshot.stack["metadata"]["top_cell_name"],
+)
+actual_gds_sha256 = hashlib.sha256(gds_path.read_bytes()).hexdigest()
+if actual_gds_sha256 != snapshot.gds_sha256:
+    raise ValueError("GDS/stack round trip changed the source GDS identity")
+if reloaded.metadata["gds_sha256"] != actual_gds_sha256:
+    raise ValueError("the detached stack does not identify these GDS bytes")
+if {item.semantic_id for item in reloaded.entities} != {
+    item.semantic_id for item in snapshot.geometry_input.entities
+}:
+    raise ValueError("GDS/stack round trip changed qualified Entity identities")
+
+port_name = "chip/device/o_junction_lumped"
+port_sheets = [
+    item for item in snapshot.geometry_input.port_sheet_regions
+    if item.metadata.get("source_name") == port_name
+]
+if len(port_sheets) != 1:
+    raise ValueError(f"expected one authored source sheet for {port_name!r}")
+port_sheet = port_sheets[0]
+if len(port_sheet.overlaps) != 2:
+    raise ValueError("the authored junction sheet must overlap two terminal owners")
+print(gds_path, stack_path, snapshot.gds_sha256)
+```
+
+The shared variable `snapshot` is ready for either backend page. The source
+sheet ID and its two owner overlaps come from the actual prepared port record;
+the examples do not invent a polygon ID or junction geometry. See the
+[GeometryPlan contract](geometry-sgb.qmd#component-to-backend-geometry-contract)
+for identity, grouping, and validation boundaries.

@@ -12,11 +12,11 @@ the implemented candidate from the currently documented exercise evidence and
 limits.
 :::
 
-## Workflow and state contract
+## Workflow and state contract {#workflow-and-state-contract}
 
 | Step | AEDT | Palace |
 |---|---|---|
-| Configure | `scgsim.aedt.EigenmodeSim`: `set_geometry(component_or_geometry_input)`, `set_stack(mapping_or_json_path)`, `set_output_dir(path)`, `set_eigenmode(*, project_name, design_name, run_control, route='B', route_a_profile=None, resources=None, geometry_workers=None)`, `set_surface_epr(*, contributions=(), defaults=None)`, `add_junction(PlanarJunction)`, and `set_epr_request(EprAnalysisRequest | None)` | `scgsim.palace.EigenmodeSim`: `set_geometry(component)`, `set_stack(mapping_or_json_path)`, `set_output_dir(path)`, `set_vacuum_region(...)`, `set_eigenmode(*, num_modes=10, target=None, tolerance=1e-6, save=0)`, and `set_mesh(*, refined_mesh_size, max_mesh_size)`. Optional EPR setup: `set_surface_epr(*, representation, specs, route_a_thin_film=None)`, `add_port(name, *, layer, layout_sheet=True, inductance)`, and `set_epr_request(*, surface_interfaces: Sequence[str] | None = None, bulk_domain_ids: Sequence[str] | None = None, port_names: Sequence[str] | None = None)`. |
+| Configure | Both facades consume the same prepared `scgsim.sgb.GeometryPlanSnapshot` through `set_plan(snapshot)`. AEDT then uses `set_output_dir(path)`, `set_eigenmode(*, project_name, design_name, run_control, route='B', route_a_profile=None, resources=None, geometry_workers=None)`, `set_surface_epr(*, contributions=(), defaults=None)`, `add_junction(PlanarJunction)`, and `set_epr_request(EprAnalysisRequest | None)`. | Palace then uses `set_output_dir(path)`, `set_eigenmode(*, num_modes=10, target=None, tolerance=1e-6, save=0)`, and `set_mesh(*, refined_mesh_size, max_mesh_size)`. Optional EPR setup: `set_surface_epr(*, representation, specs, route_a_thin_film=None)`, `add_port(qualified_name, *, layer, layout_sheet=True, inductance)`, and `set_epr_request(*, surface_interfaces: Sequence[str] | None = None, bulk_domain_ids: Sequence[str] | None = None, port_names: Sequence[str] | None = None)`. The outer vacuum envelope comes from the plan snapshot. |
 | Prepare a handoff | `prepare_handoff()` creates the versioned HFSS Eigenmode package. It does not run HFSS. | `mesh()` creates the local mesh; `write_config()` writes Palace configuration; `prepare_handoff(*, profile, executable, resources=None, setup_commands=(), petsc_options=())` creates the manual run package. Quarto examples are disabled and do not call these methods. |
 | Resolve returned results | `sim.resolve_results(run_dir=None)` resolves the AEDT run summary. `scgsim.aedt.resolve_epr_result(path)` loads the EPR result record. | `scgsim.palace.resolve_palace_result(run_dir, *, expected_handoff_id)` resolves a returned run; `resolved.epr_result()` detaches its final Eigenmode EPR quantities. `scgsim.palace.resolve_epr_result(path)` loads a detached EPR JSON file without reading the full solver run. |
 | Reanalyze and show | `scgsim.aedt.reanalyze_epr(result, *, surface_defaults=None, group_overrides=None)` returns a fresh `EprResult`; `show_epr(result, *, mode=None, native_pass=None)` returns a Plotly `Figure`. | `scgsim.palace.reanalyze_epr(result, *, surface_defaults=None, group_overrides=None)` returns a fresh `PalaceEprResult`; `show_epr(result, *, mode=None)` returns a Plotly `Figure`. |
@@ -25,8 +25,9 @@ limits.
 The shared Eigenmode workflow does not promise identical models. In the current
 Palace setup, the external surface of the outer vacuum region is left
 unspecified, so Palace uses its natural PMC boundary ([Palace boundary guide](https://awslabs.github.io/palace/stable/guide/boundaries/)).
-The current SCGSim AEDT EPR setup leaves the Region exterior without a separate
-boundary assignment, so HFSS applies its default Perfect E boundary
+New SCGSim AEDT EPR preparations record the `hfss_default.v1` policy and leave
+the Region exterior without a separate boundary assignment, so HFSS applies
+its default Perfect E boundary
 ([AEDT runtime specification](specs/aedt-runtime.qmd#public-epr-candidate-surface)).
 These are intentional backend choices; SCGSim does not automatically convert
 one into the other, and the difference is not a missing parity feature.
@@ -66,7 +67,7 @@ all supported configured entries, an empty tuple means none, and an explicit
 selection must resolve. Omitting the AEDT EPR request means no EPR analysis
 request.
 
-## Quantities and normalization
+## Quantities and normalization {#quantities-and-normalization}
 
 The reported participation for a supported energy numerator is
 
@@ -98,7 +99,7 @@ authored component port to a layer and inductance, then reports Palace's signed
 native port participation. The signed value is phase-convention dependent and
 is not the same quantity as AEDT's nonnegative $p_L$ or $p_C$.
 
-## Surface identity, masks, and loss assumptions
+## Surface identity, masks, and loss assumptions {#surface-identity-masks-and-loss-assumptions}
 
 For AEDT, each `SurfaceEprSpec` binds one contribution ID and source polygon ID
 to an interface (`MA`, `MS`, or `SA`), a top/bottom field side, film thickness,
@@ -156,194 +157,142 @@ The subtotal is not total device loss or a lifetime estimate; requested mask
 rows are alternatives and are not added into it. Sidewall terms remain
 uncomputed where they were not evaluated.
 
-## Static component examples
+## Static component examples {#static-component-examples}
 
-The paired examples use the public OrPen SC PDK Xmon component, which carries
-structured conductor and topology annotations and an authored
-`o_junction_lumped` port. The exact component dimensions, coupon padding and
-clearance, port inductance, and preset names below come from the pinned public
-[Palace Route B Eigenmode notebook](https://github.com/OrPenStrike/orpen-sc-pdk/blob/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/notebooks/src/ComponentSimulation/Kosen2024_Xmon/palace_route_b_eigenmode.qmd)
-and the same revision's public [component source](https://github.com/OrPenStrike/orpen-sc-pdk/blob/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/orpen_sc_pdk/cells/qubit.py)
-and [preset records](https://github.com/OrPenStrike/orpen-sc-pdk/blob/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/orpen_sc_pdk/materials.json).
-The imported layer stack, material records, and vacuum-padding constant are
-defined in the same revision's public [technology source](https://github.com/OrPenStrike/orpen-sc-pdk/blob/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/orpen_sc_pdk/tech.py)
-and [material helpers](https://github.com/OrPenStrike/orpen-sc-pdk/blob/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/orpen_sc_pdk/materials.py).
-The package revision is
-[`50b59e6e44953a5c6b5d760c3c496cb4c2f31264`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/50b59e6e44953a5c6b5d760c3c496cb4c2f31264)
-(`orpen-sc-pdk==0.1.0`), with Python 3.12–3.13 and GDSFactory 9.48.x.
-The public dependency constraints are in the pinned
-[`pyproject.toml`](https://github.com/OrPenStrike/orpen-sc-pdk/blob/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/pyproject.toml).
-The PDK's literature-central film presets are modeling assumptions, not
-measured material properties.
+The public Xmon inputs, component metadata, layer stack, and backend setup now
+live in the linked tutorials. They use the OrPen SC PDK source pinned in
+[Examples](examples.qmd); its film presets are modeling assumptions, not
+measured material properties. The shared page exports the annotated component
+and stack used by the Palace tutorial. The AEDT page documents a separate
+backend candidate on the same source snapshot and its authored vacuum-domain
+contract. The following backend sections retain their historical fragment
+URLs and link to the workflow guides.
 
-This common input builds the actual annotated component and corresponding
-stack used by both backend snippets:
+### Palace Route B {#palace-route-b}
 
-```python
-import gdsfactory as gf
-import orpen_sc_pdk
-from orpen_sc_pdk import LAYER_STACK, get_material_records
-from orpen_sc_pdk.helpers.assembly import place_flip_chip_ground_short_bumps
-from scgsim.sgb import build_component_stack
+[Prepare the Palace Route B Eigenmode handoff](tutorial-xmon-palace.qmd) from
+the [shared Xmon inputs](tutorial-xmon-input.qmd). The tutorial owns the
+backend-specific setup, manual handoff, and returned-run resolution. Preparing
+or running the handoff is a user action; Quarto does not execute it.
 
-orpen_sc_pdk.activate()
-component = gf.get_component(
-    "kosen2024_flip_chip_xmon_qubit",
-    bump_ring_count_per_side=0,
-    qubit_pad_length=309.5,
-    qubit_pad_width=24.65,
-    qubit_gap=20.0,
-)
-coupon = place_flip_chip_ground_short_bumps(
-    component,
-    coupon_padding_um=75.0,
-    clearance_um=30.0,
-    placement_mode="corner_anchors",
-)
-component = coupon.component
-stack = build_component_stack(
-    component=component,
-    layer_stack=LAYER_STACK,
-    material_records=get_material_records(),
-    coupon_padding_um=coupon.stack_coupon_padding_um,
-)
-```
+### AEDT HFSS Eigenmode {#aedt-hfss-eigenmode}
 
-### Palace Route B
+[AEDT Route B Eigenmode guide](tutorial-xmon-aedt.qmd) describes the backend
+facade and candidate source bindings. Its static examples do not claim a
+native geometry check or solver run. Surface and junction selections must
+come from source bindings; see the
+[catalogue-driven handoff reference](specs/aedt-runtime.qmd#catalogue-driven-handoff).
 
-The public component exposes `o_junction_lumped` on `D1_BOTTOM_M1`. This
-static setup uses the PDK's validated literature-central MA/MS/SA presets and
-the authored port as a Palace lumped port:
+### Offline Palace result example {#offline-palace-result-example}
 
-```python
-from pathlib import Path
-
-from orpen_sc_pdk import (
-    get_interface_preset_records,
-    validate_interface_preset_records,
-)
-from orpen_sc_pdk.tech import OUTER_VACUUM_THICKNESS_UM
-from scgsim.palace import EigenmodeSim
-
-records = validate_interface_preset_records(get_interface_preset_records())
-names = {"MA": "LiteratureCentral_MA", "MS": "LiteratureCentral_MS", "SA": "LiteratureCentral_SA"}
-selected = {kind: records[name] for kind, name in names.items()}
-epr_specs = {}
-for kind, name in names.items():
-    record = selected[kind]
-    epr_specs[kind] = {
-        "thickness": record["thickness"],
-        "permittivity": record["permittivity"],
-        "loss_tangent": record["loss_tangent"],
-        "source": record["source"],
-        "preset": name,
-    }
-
-sim = EigenmodeSim()
-sim.set_geometry(component)
-sim.set_stack(stack)
-sim.set_output_dir(Path("artifacts/palace-xmon-eigenmode"))
-sim.set_vacuum_region(
-    padding=(0.0, 0.0, float(OUTER_VACUUM_THICKNESS_UM))
-)
-sim.set_surface_epr(representation="B", specs=epr_specs)
-sim.add_port(
-    "o_junction_lumped",
-    layer="D1_BOTTOM_M1",
-    layout_sheet=True,
-    inductance=11.78e-9,
-)
-sim.set_eigenmode(num_modes=2, target=2e9, tolerance=1e-6, save=0)
-sim.set_epr_request(
-    surface_interfaces=("MA", "MS", "SA"),
-    bulk_domain_ids=None,
-    port_names=("o_junction_lumped",),
-)
-```
-
-The [pinned public Palace notebook](https://github.com/OrPenStrike/orpen-sc-pdk/blob/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/notebooks/src/ComponentSimulation/Kosen2024_Xmon/palace_route_b_eigenmode.qmd)
-continues with explicit mesh controls, config generation, and a locally
-configured manual-handoff profile. Those steps are deliberately not run by
-this documentation build. Use a new, unused relative output directory for
-each prepared handoff.
-
-### AEDT HFSS Eigenmode
-
-The same component and stack can enter the AEDT facade. Surface contributions
-must use real IDs and polygon IDs from the prepared geometry's
-`contribution_catalog`; the [catalogue-driven handoff example](specs/aedt-runtime.qmd#catalogue-driven-handoff)
-shows how to validate those selections before creating complete
-`SurfaceEprSpec` records. No PDK-specific AEDT contribution ID is guessed
-here. This example requests only bulk-domain outputs. The Eigenmode run-control
-numbers below follow the public
-[AEDT Eigenmode notebook](https://github.com/OrPenStrike/orpen-sc-pdk/blob/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/notebooks/src/ComponentSimulation/CpwFiniteGround/aedt_hfss_eigenmode.py)
-at the same pinned PDK revision; that file is cited for run-control values,
-not for its distinct example geometry.
-
-```python
-from pathlib import Path
-
-from scgsim.aedt import (
-    EigenmodeRunControl,
-    EigenmodeSim,
-    EprAnalysisRequest,
-)
-
-sim = EigenmodeSim()
-sim.set_geometry(component)
-sim.set_stack(stack)
-sim.set_output_dir(Path("artifacts/aedt-xmon-eigenmode"))
-sim.set_eigenmode(
-    project_name="xmon_eigenmode",
-    design_name="Eigenmode",
-    run_control=EigenmodeRunControl(
-        setup_name="Setup1",
-        minimum_frequency_ghz=3.0,
-        num_modes=2,
-        maximum_passes=6,
-        maximum_delta_frequency_percent=5.0,
-    ),
-    route="B",
-)
-sim.set_epr_request(
-    EprAnalysisRequest(
-        mode_indices=(1, 2),
-        surface_contribution_ids=(),
-        junction_ids=(),
-        bulk_domain_ids=None,
-    )
-)
-handoff = sim.prepare_handoff()
-```
-
-This request includes all configured bulk-domain outputs for modes 1 and 2; it
-requests no surface-contribution or junction outputs. A surface analysis uses
-`set_surface_epr(contributions=...)` with complete `SurfaceEprSpec` records
-validated against the geometry catalogue, as shown by the linked handoff
-example. Include a `PlanarJunction` only when its source polygon, distinct
-terminal nets, direction, width, inductance, and capacitance are declared by
-the source design. AEDT junctions are model elements; they are not excitation
-ports. The output path must be new and unused.
-
-### Offline Palace result example
-
-The detached file can be moved independently of the full Palace run directory.
-This analysis and ordinary Plotly export do not create a simulation object or
-invoke Palace:
+Load a detached Palace EPR result on a later day, compare the recorded and
+updated loss assumptions for the same mode, and export both owner-labeled
+surface views. The detached result can be moved independently of the full run
+directory. The value below is an illustrative loss assumption, not a measured
+material property. This code creates no simulation object and invokes no
+Palace solver:
 
 ```python
 from pathlib import Path
 
 from scgsim.palace import reanalyze_epr, resolve_epr_result, show_epr
 
-result = resolve_epr_result(Path("palace-eigenmode-epr.json"))
+result = resolve_epr_result(
+    Path(".artifacts/public-xmon-palace-route-b/results/palace-epr-result.json")
+)
+mode = min(row["mode"] for row in result.rows)
+recorded_figure = show_epr(result, mode=mode)
 updated = reanalyze_epr(
     result,
     surface_defaults={"MA": {"loss_tangent": 2.0e-4}},
 )
-figure = show_epr(updated, mode=1)
-figure.write_html("palace-epr-mode-1.html")
+updated_figure = show_epr(updated, mode=mode)
+recorded_figure.write_html("palace-epr-recorded.html")
+updated_figure.write_html("palace-epr-updated.html")
 ```
 
-The AEDT counterpart uses `scgsim.aedt.resolve_epr_result(path)` and the same
-module-level `reanalyze_epr(result, ...)` / `show_epr(result, mode=..., native_pass=...)` pattern. These are static API examples, not records of native solves or numerical validation.
+Both figures show owner/interface labels and coverage in the surface panel;
+their hover data includes source membership and loss assumptions. Comparing
+the recorded and updated figures makes the effect of that assumption change
+visible while keeping the selected mode fixed.
+
+### Offline AEDT result example
+
+Load the final AEDT `epr-result.json` only after its separate saved-field
+analysis has completed. This file has no adaptive pass; select a mode, apply a
+new loss assumption, and compare the same mode before and after. Set `run_dir`
+to the directory containing the saved-field analysis:
+
+```python
+from pathlib import Path
+
+from scgsim.aedt import reanalyze_epr, resolve_epr_result, show_epr
+
+run_dir = Path("runs/aedt-eigenmode")
+result = resolve_epr_result(run_dir / "results/epr/epr-result.json")
+mode = min(row["mode"] for row in result.rows)
+recorded_figure = show_epr(result, mode=mode)
+updated = reanalyze_epr(
+    result,
+    surface_defaults={"MA": {"loss_tangent": 2.0e-4}},
+)
+updated_figure = show_epr(updated, mode=mode)
+recorded_figure.write_html("aedt-epr-recorded.html")
+updated_figure.write_html("aedt-epr-updated.html")
+```
+
+The surface bars carry owner labels and hover details, and the coverage note
+identifies uncomputed sidewalls and unknown losses. The loss value above is an
+illustrative assumption, not a measured material property.
+
+#### Select an adaptive mode and pass
+
+Adaptive history is a separate result from final saved-field EPR. To compare
+an exact historical pass before and after reanalysis, load its
+`adaptive-epr-result.json`, choose the latest complete pass for one returned
+mode, and use the public report view for the pass/convergence record:
+
+```python
+from pathlib import Path
+
+from scgsim.aedt import (
+    plot_epr_result,
+    reanalyze_epr,
+    resolve_epr_result,
+    show_epr,
+)
+
+run_dir = Path("runs/aedt-eigenmode")
+history = resolve_epr_result(
+    run_dir / "results/epr/adaptive-epr-result.json"
+)
+complete_rows = [row for row in history.rows if row["status"] == "complete"]
+if not complete_rows:
+    raise ValueError("adaptive history contains no complete passes for any mode")
+mode = min(row["mode"] for row in complete_rows)
+native_pass = max(
+    row["native_pass"]
+    for row in complete_rows
+    if row["mode"] == mode
+)
+history_before = show_epr(history, mode=mode, native_pass=native_pass)
+history_updated = reanalyze_epr(
+    history,
+    surface_defaults={"MA": {"loss_tangent": 2.0e-4}},
+)
+history_after = show_epr(history_updated, mode=mode, native_pass=native_pass)
+history_before.write_html("aedt-epr-pass-recorded.html")
+history_after.write_html("aedt-epr-pass-updated.html")
+convergence = plot_epr_result(
+    history,
+    mode=mode,
+    native_pass=native_pass,
+    show_convergence=True,
+)
+convergence.write_html("aedt-epr-convergence.html")
+```
+
+The adaptive history figure and final saved-field figure remain separate; the
+first does not stand in for the second. These are static API workflows. Quarto
+does not prepare a handoff or run either solver, and the examples make no
+numerical-validation claim.

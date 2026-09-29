@@ -1,49 +1,80 @@
 ---
-title: "Examples"
+title: "Examples and tutorials"
 ---
 
-SCGSim owns runtime, not duplicate public notebook source. OrPen SC PDK owns
-the public component-simulation examples and imports `scgsim.palace`,
-`scgsim.aedt`, and `scgsim.sgb`.
+SCGSim owns the solver handoff, result, and report APIs. OrPen SC PDK owns the
+public component-simulation notebooks. This site links a short package-owned
+Xmon tutorial path without copying those notebooks.
 
-## Start by task
+## Learn the shared Xmon workflow
+
+Start with the shared public Xmon inputs, then follow the Palace Route B path.
+The AEDT page is a separate backend candidate. Its input contract retains an
+authored `D0_TO_D1_GAP` as a vacuum entity while adding only the outer
+background. Static pages do not establish native-geometry validation or a
+solver run.
+
+1. [Build the public Xmon inputs](tutorial-xmon-input.qmd): construct the
+   component-local geometry, register named occurrences, set the Notebook's
+   final `Net -> Entity` map, and prepare the immutable input snapshot.
+2. [Prepare a Palace Route B Eigenmode handoff](tutorial-xmon-palace.qmd): use
+   that snapshot with Palace-specific configuration and result resolution.
+3. [Prepare an AEDT Route B Eigenmode handoff](tutorial-xmon-aedt.qmd): add
+   catalogue-bound MA/MS/SA surfaces, the source-linked Xmon junction, and
+   selected bulk domains using AEDT's backend-specific request.
+
+The backend pages keep their setup, handoff, and result contracts separate.
+Palace and AEDT Route B pages show backend-specific handoff preparation; the
+AEDT page includes no native geometry check or solver result. Both remain
+converging candidates. For Route A background and the complete public notebook
+context, use the pinned
+[OrPen Xmon component-simulation sources](https://github.com/OrPenStrike/orpen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/src/ComponentSimulation/Kosen2024_Xmon).
+The [geometry guide](geometry-sgb.qmd) explains SCGSim's Route A/B geometry
+choices.
+
+## Prerequisites and scope
+
+Use Python 3.12 or 3.13 with the public OrPen SC PDK inputs at revision
+[`35b4dc1cdd3f921badcac2fe57a98366315ae8d9`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9).
+That revision declares OrPen SC PDK `0.1.0` and GDSFactory 9.48.x; the
+[pinned project metadata](https://github.com/OrPenStrike/orpen-sc-pdk/blob/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/pyproject.toml)
+records its dependency constraints. Read each backend page for its own local
+runtime prerequisites. The Palace page documents a handoff; the AEDT page
+documents its backend-specific candidate contract.
+
+These pages target the SCGSim source checkpoint
+[`131f7ccf2447f592b0c477387f680368d28468e2`](https://github.com/OrPenStrike/scgsim/tree/131f7ccf2447f592b0c477387f680368d28468e2).
+The published `1.0.0.dev28` version string does not identify or guarantee the
+APIs at that source checkpoint; use a matching SCGSim checkout together with
+the OrPen revision above. Quarto leaves code execution disabled. The pages
+document handoff and result workflows; they do not report native solver runs
+or numerical validation.
+
+## Find a workflow by task
 
 | If you want to… | Start here |
 |---|---|
-| Choose a backend and see the implementation state, exercised evidence, and limits | [Backend Support Matrix](backend-support.qmd) |
-| Follow a complete public component-simulation workflow | Use the canonical OrPen SC PDK notebooks listed below; SCGSim does not duplicate them. |
-| Configure or reanalyze Eigenmode EPR results offline | [Eigenmode and Offline EPR](eigenmode-epr.qmd) |
-| Place controls beside the notebook stage that uses them | [Notebook UX Contracts](notebook-ux.qmd) |
-| Prepare a local or Slurm handoff | [Execution Profiles and Handoff](execution-profiles.qmd) |
+| Build the public Xmon geometry inputs | [Shared Xmon inputs](tutorial-xmon-input.qmd) |
+| Prepare a Palace Route B Eigenmode handoff | [Palace tutorial](tutorial-xmon-palace.qmd) |
+| Prepare an AEDT Route B surface, bulk, and junction EPR handoff | [AEDT tutorial](tutorial-xmon-aedt.qmd) |
+| Load an existing result, inspect EPR, or update loss assumptions | [Eigenmode methods and offline EPR](eigenmode-epr.qmd) |
+| Compare package capabilities and exercised evidence | [Backend support matrix](backend-support.qmd) |
+| Place controls beside the notebook stage that uses them | [Notebook UX contracts](notebook-ux.qmd) |
+| Prepare a local or Slurm handoff | [Execution profiles and handoff](execution-profiles.qmd) |
 
-## Canonical notebook groups
+## Canonical OrPen notebook groups
 
-These links use the same public OrPen SC PDK revision as the static Xmon
-examples. That revision provides source attribution; it does not validate a
-SCGSim native solve.
+The following links point to the same pinned OrPen source revision used by the
+static Xmon tutorials. They are the canonical notebook source; the links do not
+claim that SCGSim has executed or validated a native solve.
 
-| Workflow | OrPen SC PDK notebook group |
+| Workflow | OrPen SC PDK source |
 |---|---|
-| Palace Route A/B Electrostatic and Eigenmode | [`notebooks/src/ComponentSimulation/Kosen2024_Xmon/`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/notebooks/src/ComponentSimulation/Kosen2024_Xmon) |
-| HFSS Driven Terminal/Modal and Eigenmode | [`notebooks/src/ComponentSimulation/CpwFiniteGround/`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/notebooks/src/ComponentSimulation/CpwFiniteGround) |
-| Q3D | [`notebooks/src/ComponentSimulation/CpwFiniteGround/`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/notebooks/src/ComponentSimulation/CpwFiniteGround) |
-| Q2D | [`notebooks/src/CrossSectionSimulation/CpwFiniteGround/`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/50b59e6e44953a5c6b5d760c3c496cb4c2f31264/notebooks/src/CrossSectionSimulation/CpwFiniteGround) |
+| Palace Route A/B Electrostatic and Eigenmode | [`notebooks/src/ComponentSimulation/Kosen2024_Xmon/`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/src/ComponentSimulation/Kosen2024_Xmon) |
+| HFSS Driven Terminal/Modal and Eigenmode | [`notebooks/src/ComponentSimulation/CpwFiniteGround/`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/src/ComponentSimulation/CpwFiniteGround) |
+| Q3D | [`notebooks/src/ComponentSimulation/CpwFiniteGround/`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/src/ComponentSimulation/CpwFiniteGround) |
+| Q2D | [`notebooks/src/CrossSectionSimulation/CpwFiniteGround/`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/src/CrossSectionSimulation/CpwFiniteGround) |
 
-The package-owned [Eigenmode and Offline EPR](eigenmode-epr.qmd) page records
-the method-level interpretation, loss assumptions, and static snippets using
-the public OrPen Xmon component. The backend specs own exact API and data
-contracts. The public PDK notebooks remain the canonical source for complete
-component-simulation workflows.
-
-The [AEDT runtime contracts](specs/aedt-runtime.qmd) and
-[Palace + SGB contracts](specs/palace-electrostatic-sgb.qmd) document exact
-backend behavior. Report availability and result presentation belong to the
-[Unified Report Model](report-model.qmd).
-
-## Evidence boundary
-
-A public example may link its source notebook, exact source revision, run
-receipt, artifacts, physical results, convergence diagnostics, cost, and
-provenance only when each item has publication authority. Private
-consumer names, paths, dimensions, screenshots, meshes, configs, receipts,
-artifacts, and unpublished results never belong on this site.
+Exact backend contracts live in the [AEDT runtime reference](specs/aedt-runtime.qmd)
+and [Palace + SGB reference](specs/palace-electrostatic-sgb.qmd). Result and
+plot contents are described in the [Unified Report Model](report-model.qmd).

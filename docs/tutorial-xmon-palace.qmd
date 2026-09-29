@@ -1,0 +1,159 @@
+---
+title: "Public Xmon: Palace Route B Eigenmode"
+execute:
+  enabled: false
+---
+
+Run the [shared Xmon input tutorial](tutorial-xmon-input.qmd) first in the
+same Python session. It defines `snapshot`, `port_name`, `gds_path`, and
+`stack_path` from public component and coupon inputs. This page follows the
+OrPen Palace Route B workflow linked from [Examples](examples.qmd). It prepares
+a manual handoff; the documentation build does not mesh or run Palace.
+
+## Configure Eigenmode and EPR outputs
+
+The immutable snapshot already contains the GDS, prepared stack, final Net
+map, and shared outer vacuum envelope. Palace uses that envelope as supplied.
+This coupon already contains eight authored ground shorts, so this example
+does not add a second fill lattice. The source port is the prepared
+`chip/device/o_junction_lumped` sheet; its qualified name and target layer come
+from the component annotation.
+
+```python
+from pathlib import Path
+
+from orpen_sc_pdk import (
+    get_interface_preset_records,
+    validate_interface_preset_records,
+)
+from scgsim.palace import EigenmodeSim
+
+palace_run_dir = Path.cwd() / ".artifacts" / "public-xmon-palace-route-b"
+port_inductance_h = 11.78e-9  # Public OrPen model input; not a measured value.
+records = validate_interface_preset_records(get_interface_preset_records())
+preset_names = {
+    kind: f"LiteratureCentral_{kind}" for kind in ("MA", "MS", "SA")
+}
+interface_presets = {kind: records[name] for kind, name in preset_names.items()}
+for kind, record in interface_presets.items():
+    if record["interface_type"] != kind:
+        raise ValueError(f"{preset_names[kind]} is not an {kind} preset")
+
+sim = EigenmodeSim()
+sim.set_plan(snapshot)
+sim.set_output_dir(palace_run_dir)
+sim.set_surface_epr(
+    representation="B",
+    specs={
+        kind: {
+            "thickness": record["thickness"],
+            "permittivity": record["permittivity"],
+            "loss_tangent": record["loss_tangent"],
+            "source": record["source"],
+            "preset": preset_names[kind],
+            "inset_margins_um": (0.0, 0.01, 0.05, 0.1),
+        }
+        for kind, record in interface_presets.items()
+    },
+)
+sim.add_port(
+    port_name,
+    layer="D1_BOTTOM_M1",
+    layout_sheet=True,
+    inductance=port_inductance_h,
+)
+sim.set_epr_request(
+    surface_interfaces=("MA", "MS", "SA"),
+    bulk_domain_ids=None,
+    port_names=(port_name,),
+)
+sim.set_eigenmode(num_modes=2, target=2e9, tolerance=1e-6, save=0)
+sim.set_mesh(refined_mesh_size=5.0, max_mesh_size=300.0)
+sim.set_numerical(
+    order=2,
+    tolerance=1e-6,
+    max_iterations=2000,
+    solver_type="Default",
+    preconditioner="Default",
+    device="CPU",
+    amr_max_passes=20,
+    amr_nonconformal=False,
+    amr_tolerance=2e-2,
+    amr_update_fraction=0.15,
+    save_adapt_iterations=True,
+    estimator_mg=False,
+    output_paraview=False,
+    output_grid_function=False,
+)
+```
+
+The MA/MS/SA records are the OrPen `LiteratureCentral` modeling presets, not
+material measurements. Replace them only with source-attributed records for
+your study. The four requested margins are separate alternatives to the
+unmasked baseline. `bulk_domain_ids=None` selects all configured bulk energy
+entries, and the selection does not remove physical domains or change the
+normalization. Palace's external Region surface remains natural PMC when left
+unspecified; see the [EPR methods guide](eigenmode-epr.qmd#workflow-and-state-contract)
+for the boundary comparison and interpretation limits.
+
+## Prepare a manual handoff
+
+The following calls build a local mesh, write Palace configuration, and create
+a run handoff. They do not execute Palace.
+
+```python
+mesh_path = sim.mesh()
+config_path = sim.write_config()
+handoff = sim.prepare_handoff(
+    profile="direct-local",
+    executable="palace",
+    resources={"processes": 32, "threads": 2, "command_style": "wrapper"},
+    setup_commands=("module load palace",),
+)
+print(mesh_path, config_path, handoff.run_dir, handoff.script_path)
+```
+
+On a machine with the declared Palace executable and resources, inspect the
+generated script, then run it manually from the handoff directory:
+
+```bash
+cd /path/to/public-xmon-palace-route-b
+bash run_palace.sh
+```
+
+That command runs Palace on the user's host. Quarto does not run it. Keep the
+handoff ID with the returned run directory.
+
+## Resolve a returned run
+
+Use this block only after the real Palace run and its return artifacts are
+available. In a new Python session, set `expected_handoff_id` to the exact ID
+from the preparation receipt.
+
+```python
+import json
+from pathlib import Path
+
+from scgsim.palace import resolve_palace_result
+
+returned_run_dir = Path(".artifacts/public-xmon-palace-route-b")
+expected_handoff_id = input("Handoff ID from the prepared run: ").strip()
+if not expected_handoff_id:
+    raise ValueError("the returned run must be matched to its prepared handoff ID")
+resolved = resolve_palace_result(
+    returned_run_dir,
+    expected_handoff_id=expected_handoff_id,
+)
+resolved.show_all_results()
+epr_result = resolved.epr_result()
+epr_json = returned_run_dir / "results" / "palace-epr-result.json"
+epr_json.write_text(
+    json.dumps(epr_result.to_payload(), indent=2),
+    encoding="utf-8",
+)
+```
+
+The detached `PalaceEprResult` can be saved with the run or moved for later
+offline analysis. See the [offline EPR workflow](eigenmode-epr.qmd#offline-palace-result-example)
+to select a mode, change loss assumptions, compare the owner-labeled views,
+and export Plotly HTML without reopening Palace.

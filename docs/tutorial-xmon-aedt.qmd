@@ -1,0 +1,238 @@
+---
+title: "Public Xmon: AEDT Route B Eigenmode"
+execute:
+  enabled: false
+---
+
+Run the [shared Xmon input tutorial](tutorial-xmon-input.qmd) first in the
+same Python session. This page uses its immutable `snapshot`, `port_name`, and
+`coupon` to prepare a portable HFSS Eigenmode handoff with surface, bulk, and
+junction EPR outputs. The candidate requires AEDT 2024.2 and PyAEDT 1.3.0; the
+local Python environment needs the SCGSim `aedt-epr` dependencies described in
+the [installation guide](../README.md). Quarto does not open AEDT, create native
+geometry, or solve this model.
+
+## Configure surface and junction EPR
+
+The shared snapshot keeps authored `D0_TO_D1_GAP` separate from the generated
+outer vacuum domain. The AEDT candidate records HFSS's default Perfect E
+policy for background-exposed surfaces; Palace uses its natural PMC boundary.
+These backend choices are intentional and are not auto-converted. The
+[AEDT runtime reference](specs/aedt-runtime.qmd#public-epr-candidate-surface)
+describes the native Region representation. This static page claims no native
+HFSS geometry check. When comparing results, note the outer boundary, Region
+size, and backend settings.
+
+Build each valid MA/MS/SA contribution from the catalogue created from the
+same snapshot. The code requires exactly one source polygon for each catalogue
+row; it does not choose a polygon by list order. Film thickness, permittivity,
+loss tangent, and provenance come from OrPen's validated synthetic
+`LiteratureCentral` presets. Their values are modeling assumptions, not
+measured process properties. Each requested margin is an alternative to the
+automatically recorded unmasked baseline.
+
+```python
+from orpen_sc_pdk.materials import validate_interface_preset_records
+from scgsim.aedt import SurfaceEprSpec, prepare_planar_geometry_input
+
+catalogue = prepare_planar_geometry_input(
+    snapshot.geometry_input,
+    prepared_stack=snapshot.stack,
+    route="B",
+).contribution_catalog
+presets = validate_interface_preset_records()
+margins_um = (0.01, 0.05, 0.1)
+surface_specs = []
+
+for record in catalogue:
+    kind = record["interface_kind"]
+    if kind not in {"MA", "MS", "SA"}:
+        continue
+    preset_name = f"LiteratureCentral_{kind}"
+    preset = presets[preset_name]
+    if preset["interface_type"] != kind:
+        raise ValueError(f"{preset_name} is not a {kind} preset")
+    source_polygons = record["source_polygon_ids"]
+    if len(source_polygons) != 1:
+        raise ValueError(
+            f"{record['contribution_id']} needs an explicit source-polygon choice"
+        )
+    surface_specs.append(
+        SurfaceEprSpec(
+            contribution_id=record["contribution_id"],
+            source_polygon_id=source_polygons[0],
+            interface_kind=kind,
+            field_side=record["field_side"],
+            margins_um=margins_um,
+            film_thickness_m=preset["thickness"] * 1e-6,
+            film_relative_permittivity=preset["permittivity"],
+            loss_tangent=preset["loss_tangent"],
+            source=preset["source"],
+            preset=preset_name,
+        )
+    )
+
+if not {"MA", "MS", "SA"}.issubset(
+    {item.interface_kind for item in surface_specs}
+):
+    raise ValueError("the prepared Xmon catalogue must include MA, MS, and SA")
+```
+
+The port sheet and terminal nets come from the actual annotated component
+source. Its perpendicular sheet width is derived from the prepared polygon,
+and its direction is the source port's in-plane direction. The public Palace
+example models the port as inductive with $L=11.78\,\mathrm{nH}$. This AEDT
+example sets $C=0$ as an explicit inductive-only circuit-model assumption; it
+does not claim that the physical device has zero capacitance or that a
+capacitance was measured.
+
+```python
+from scgsim.aedt import PlanarJunction
+
+source_ports = [
+    item
+    for item in snapshot.geometry_input.port_sheet_regions
+    if item.metadata.get("source_name") == port_name
+]
+if len(source_ports) != 1:
+    raise ValueError(f"expected one prepared source sheet for {port_name!r}")
+port_sheet = source_ports[0]
+if port_sheet.holes:
+    raise ValueError("the Xmon junction source sheet must not contain holes")
+
+entity_nets = {
+    item.semantic_id: item.net_id for item in snapshot.geometry_input.entities
+}
+overlap_nets = {
+    entity_nets[item.host_semantic_id] for item in port_sheet.overlaps
+}
+if overlap_nets != {"Ground", "xmon_pad"}:
+    raise ValueError("the prepared source sheet must overlap the Xmon and ground nets")
+
+direction_x, direction_y = port_sheet.metadata["direction"][:2]
+across = [
+    -direction_y * x + direction_x * y
+    for x, y in port_sheet.exterior
+]
+junction_width_um = max(across) - min(across)
+if junction_width_um <= 0:
+    raise ValueError("the prepared junction sheet must have positive width")
+
+junction = PlanarJunction(
+    junction_id="jj",
+    source_polygon_id=port_sheet.source_polygon_id,
+    terminal_a_net="Ground",
+    terminal_b_net="xmon_pad",
+    direction_xy=(direction_x, direction_y),
+    width_um=junction_width_um,
+    inductance_h=11.78e-9,
+    capacitance_f=0.0,  # Explicit inductive-only modeling assumption.
+    metadata={"source_port_name": port_name},
+)
+```
+
+## Select reported rows and prepare a handoff
+
+The selection below requests mode 1, every catalogue-derived surface
+contribution, the declared junction, and the configured bulk domains. The
+`Region` bulk selector names AEDT's single native Region for the outer-vacuum
+envelope; it does not replace the snapshot's separate authored vacuum gap.
+For AEDT requests, `None` selects all configured entries, `()` selects none,
+and an explicit tuple selects those IDs. These selections filter reported
+rows; they do not remove physical domains, junctions, or the surface model and
+do not change the normalization. See the [EPR quantity and selection
+contract](eigenmode-epr.qmd#workflow-and-state-contract).
+
+```python
+from pathlib import Path
+
+from scgsim.aedt import EprAnalysisRequest, EigenmodeRunControl, EigenmodeSim
+
+aedt_run_dir = Path.cwd() / ".artifacts" / "public-xmon-aedt-route-b"
+bulk_domain_ids = (
+    "D0_SUBSTRATE",
+    "D0_TO_D1_GAP",
+    "D1_SUBSTRATE",
+    "Region",
+)
+
+sim = EigenmodeSim()
+sim.set_plan(snapshot)
+sim.set_output_dir(aedt_run_dir)
+sim.set_eigenmode(
+    project_name="public_xmon_route_b_eigenmode",
+    design_name="Xmon",
+    route="B",
+    run_control=EigenmodeRunControl(
+        setup_name="Setup1",
+        minimum_frequency_ghz=3.0,
+        num_modes=1,
+        maximum_passes=20,
+        maximum_delta_frequency_percent=0.1,
+        minimum_passes=1,
+        minimum_converged_passes=1,
+    ),
+)
+sim.set_surface_epr(contributions=surface_specs)
+sim.add_junction(junction)
+sim.set_epr_request(
+    EprAnalysisRequest(
+        mode_indices=(1,),
+        surface_contribution_ids=tuple(
+            item.contribution_id for item in surface_specs
+        ),
+        junction_ids=(junction.junction_id,),
+        bulk_domain_ids=bulk_domain_ids,
+    )
+)
+handoff = sim.prepare_handoff()
+print(handoff.run_dir, handoff.script_path, handoff.archive_path)
+```
+
+The run controls are preparation inputs, not convergence evidence or accuracy
+criteria. Use a new output directory for each preparation; SCGSim rejects an
+existing path. `prepare_handoff()` writes the portable package but does not
+open AEDT, create native geometry, or run the solver.
+
+## Run only on the AEDT host
+
+Review the generated script and transfer the complete handoff directory to a
+machine with the required AEDT and PyAEDT versions. Running this command is a
+separate user action; it is not part of the documentation build:
+
+```bash
+cd /path/to/public-xmon-aedt-route-b
+bash run_aedt.sh
+```
+
+This page includes no returned native project or numerical result. Native
+geometry and solver behavior must be checked on the AEDT host before treating
+the prepared input as a completed simulation.
+
+## Load and plot a returned EPR record
+
+After a real run has completed and its result file has been returned, resolve
+that file directly. Mode selection, plotting, and loss reanalysis operate
+offline on the recorded evidence.
+
+```python
+from pathlib import Path
+
+from scgsim.aedt import resolve_epr_result, show_epr
+
+returned_run_dir = Path(".artifacts/public-xmon-aedt-route-b")
+epr_path = returned_run_dir / "results" / "epr" / "epr-result.json"
+result = resolve_epr_result(epr_path)
+mode = min(row["mode"] for row in result.rows)
+figure = show_epr(result, mode=mode)
+figure.write_html("aedt-xmon-epr.html")
+```
+
+For a complete saved-field row, the selected view shows the requested surface,
+bulk, and junction partitions with owner and coverage information. A valid
+partial row retains its status. Use the
+[offline AEDT workflow](eigenmode-epr.qmd#offline-aedt-result-example) to
+compare the recorded and updated loss assumptions while keeping the mode
+fixed. Adaptive-pass history is a separate result from saved-field analysis;
+the [AEDT history example](eigenmode-epr.qmd#select-an-adaptive-mode-and-pass)
+loads and selects that record independently.
