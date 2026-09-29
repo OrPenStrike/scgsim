@@ -211,28 +211,31 @@ the prepared input as a completed simulation.
 
 ## Load and plot a returned EPR record
 
-After a real run has completed and its result file has been returned, resolve
-that file directly. Mode selection, plotting, and loss reanalysis operate
-offline on the recorded evidence.
+An ordinary Eigenmode run writes its adaptive history to
+`results/epr/adaptive-epr-result.json`. Load that record to plot mode 1 and its
+convergence history. This projection reads the saved result and does not
+reopen AEDT.
 
 ```python
 from pathlib import Path
 
-from scgsim.aedt import resolve_epr_result, show_epr
+from scgsim.aedt import plot_epr_result, resolve_epr_result
 
 returned_run_dir = Path(".artifacts/public-xmon-aedt-route-b")
-epr_path = returned_run_dir / "results" / "epr" / "epr-result.json"
-result = resolve_epr_result(epr_path)
-mode = min(row["mode"] for row in result.rows)
-figure = show_epr(result, mode=mode)
-figure.write_html("aedt-xmon-epr.html")
+result = resolve_epr_result(
+    returned_run_dir / "results" / "epr" / "adaptive-epr-result.json"
+)
+figure = plot_epr_result(result, mode=1, show_convergence=True)
+figure.write_html("aedt-xmon-adaptive-epr.html")
 ```
 
-For a complete saved-field row, the selected view shows the requested surface,
-bulk, and junction partitions with owner and coverage information. A valid
-partial row retains its status. Use the
-[offline AEDT workflow](eigenmode-epr.qmd#offline-aedt-result-example) to
-compare the recorded and updated loss assumptions while keeping the mode
-fixed. Adaptive-pass history is a separate result from saved-field analysis;
-the [AEDT history example](eigenmode-epr.qmd#select-an-adaptive-mode-and-pass)
-loads and selects that record independently.
+When `native_pass` is omitted, the plot selects the recorded
+`solver_last_completed_pass`. A partial row or a missing mode at that pass
+remains unavailable, and convergence traces retain gaps. The plot does not
+fall back to an earlier complete pass. For owner views and loss reanalysis at
+an explicitly selected pass, continue with the
+[adaptive-pass example](eigenmode-epr.qmd#select-an-adaptive-mode-and-pass),
+which supplies `native_pass` to `show_epr`. The separate saved-field analysis
+writes `results/epr/epr-result.json`; see the
+[offline AEDT example](eigenmode-epr.qmd#offline-aedt-result-example) for that
+analysis result. This page does not run saved-field analysis.
