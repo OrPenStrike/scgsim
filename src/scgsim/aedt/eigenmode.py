@@ -10,7 +10,11 @@ from tempfile import TemporaryDirectory
 from typing import Any, Literal
 
 from scgsim.semantics.epr import film_assumptions
-from scgsim.sgb import GeometryBuildInput, build_gds_stack_geometry_input
+from scgsim.sgb import (
+    GeometryBuildInput,
+    GeometryPlanSnapshot,
+    build_gds_stack_geometry_input,
+)
 
 from ._epr_geometry import prepare_planar_geometry_input, validate_geometry_workers
 from ._epr_models import (
@@ -47,12 +51,15 @@ class EigenmodeSim:
     epr_request: EprAnalysisRequest | None = None
     prepared_geometry: PreparedPlanarGeometry | None = field(default=None, init=False)
     handoff_plan: HandoffPlan | None = field(default=None, init=False)
+    _plan_snapshot: GeometryPlanSnapshot | None = field(default=None, init=False, repr=False)
 
     def _invalidate_model(self) -> None:
         self.prepared_geometry = None
         self.handoff_plan = None
 
     def set_geometry(self, component: Any | GeometryBuildInput) -> None:
+        if self._plan_snapshot is not None:
+            raise ValueError("GeometryPlan owns the paired source; use set_plan(new_snapshot) or a new Sim")
         if isinstance(component, GeometryBuildInput):
             self.build_input, self.component = component, None
         elif callable(getattr(component, "write_gds", None)):
@@ -61,9 +68,25 @@ class EigenmodeSim:
             raise TypeError(
                 "geometry must be a Component with write_gds or GeometryBuildInput"
             )
+        self._plan_snapshot = None
+        self._invalidate_model()
+
+    def set_plan(self, snapshot: GeometryPlanSnapshot) -> None:
+        """Consume one immutable normalized source and its paired stack."""
+        if not isinstance(snapshot, GeometryPlanSnapshot):
+            raise TypeError("set_plan requires a GeometryPlanSnapshot")
+        trial = EigenmodeSim()
+        trial.set_stack(snapshot.stack)
+        build_input = snapshot.geometry_input
+        self.component = None
+        self.build_input = build_input
+        self.stack = trial.stack
+        self._plan_snapshot = snapshot
         self._invalidate_model()
 
     def set_stack(self, stack: Mapping[str, Any] | str | Path) -> None:
+        if self._plan_snapshot is not None:
+            raise ValueError("GeometryPlan owns the paired source; use set_plan(new_snapshot) or a new Sim")
         if isinstance(stack, Mapping):
             payload = dict(stack)
         elif isinstance(stack, (str, Path)):
@@ -102,6 +125,7 @@ class EigenmodeSim:
             raise ValueError("stack layer references an unknown material")
         detached = json.loads(json.dumps(payload, allow_nan=False))
         self.stack = detached
+        self._plan_snapshot = None
         self._invalidate_model()
 
     def set_output_dir(self, path: str | Path) -> None:
@@ -211,6 +235,8 @@ class EigenmodeSim:
         self.handoff_plan = None
 
     def _source_input(self) -> GeometryBuildInput:
+        if self._plan_snapshot is not None:
+            return self._plan_snapshot.geometry_input
         if self.build_input is not None:
             return self.build_input
         if self.component is None or self.stack is None:
@@ -235,8 +261,9 @@ class EigenmodeSim:
         return replace(prepared, metadata=metadata)
 
     def prepare_handoff(self) -> HandoffPlan:
+        source_stack = self._plan_snapshot.stack if self._plan_snapshot is not None else self.stack
         if (
-            self.stack is None
+            source_stack is None
             or self.output_dir is None
             or self.project_name is None
             or self.design_name is None
@@ -250,7 +277,7 @@ class EigenmodeSim:
             source = self._source_input()
             geometry = prepare_planar_geometry_input(
                 source,
-                prepared_stack=self.stack,
+                prepared_stack=source_stack,
                 route=self.route,
                 route_a_profile=self.route_a_profile,
                 junctions=self.junctions,

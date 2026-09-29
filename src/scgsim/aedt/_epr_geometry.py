@@ -63,6 +63,27 @@ def _native_name(kind: str, *identity: Any) -> str:
     return f"scgsim_{kind}_{digest}"
 
 
+def _native_entity_name(source: Mapping[str, Any], kind: str, *identity: Any) -> str:
+    """Keep historical hash names while giving new Plan entities readable names."""
+
+    policy = source.get("native_entity_name_policy", "hash.v1")
+    if policy == "hash.v1":
+        return _native_name(kind, *identity)
+    if policy != "readable.v1":
+        raise ValueError("unknown native entity name policy")
+    raw = "__".join(str(value) for value in identity)
+    label = "".join(
+        character if character.isascii() and character.isalnum() else "_"
+        for character in raw
+    ).strip("_")
+    if not label:
+        raise ValueError("native entity name has no readable identity")
+    digest = canonical_sha256({"kind": kind, "identity": list(identity)})[:10]
+    prefix = f"SCGSim_{kind}_"
+    label = label[: 60 - len(prefix) - len(digest) - 1].rstrip("_")
+    return f"{prefix}{label}_{digest}"
+
+
 def _sheet_member(binding: Mapping[str, Any], margin_label: str) -> tuple[str, ...]:
     contribution = binding["contribution"]
     return (
@@ -228,7 +249,13 @@ def _source_payload(
     for item in build_input.entities:
         if item.material_kind != "conductor":
             continue
-        source_id = str(item.metadata.get("semantic_group_id", item.semantic_id))
+        source_id = str(
+            item.metadata.get("source_semantic_id", item.semantic_id)
+            if "split_polygon_index" in item.metadata
+            else item.semantic_id
+        )
+        if "split_polygon_index" in item.metadata and "source_semantic_id" not in item.metadata:
+            source_id = str(item.metadata.get("semantic_group_id", item.semantic_id))
         if source_id not in source_layers:
             raise ValueError(
                 f"geometry conductor {item.semantic_id!r} has no prepared-stack source record"
@@ -254,6 +281,9 @@ def _source_payload(
                     key: _plain(item.metadata[key])
                     for key in (
                         "semantic_group_id",
+                        "source_semantic_id",
+                        "source_occurrence_path",
+                        "source_local_entity_id",
                         "split_polygon_index",
                         "ground_bump_id",
                     )
@@ -300,18 +330,18 @@ def _source_payload(
     vacuum_regions = [
         item for item in normalized_regions if item["material_kind"] == "vacuum"
     ]
-    if not vacuum_regions or any(
-        not item["metadata"].get("is_auto_vacuum_region")
-        for item in vacuum_regions
-    ):
-        raise ValueError("EPR Region requires only planner-owned auto vacuum components")
-    vacuum_material_ids = {item["material_id"] for item in vacuum_regions}
+    auto_vacuum_regions = [
+        item for item in vacuum_regions if item["metadata"].get("is_auto_vacuum_region")
+    ]
+    if not auto_vacuum_regions:
+        raise ValueError("EPR Region requires planner-owned auto vacuum components")
+    vacuum_material_ids = {item["material_id"] for item in auto_vacuum_regions}
     vacuum_groups = {
-        item["metadata"].get("auto_vacuum_group_id") for item in vacuum_regions
+        item["metadata"].get("auto_vacuum_group_id") for item in auto_vacuum_regions
     }
     padding_records = {
         canonical_sha256(item["metadata"].get("vacuum_region_padding_um"))
-        for item in vacuum_regions
+        for item in auto_vacuum_regions
     }
     if (
         len(vacuum_material_ids) != 1
@@ -320,7 +350,7 @@ def _source_payload(
         or len(padding_records) != 1
     ):
         raise ValueError("EPR auto vacuum components disagree on Region identity")
-    padding = vacuum_regions[0]["metadata"].get("vacuum_region_padding_um")
+    padding = auto_vacuum_regions[0]["metadata"].get("vacuum_region_padding_um")
     if not isinstance(padding, Mapping) or set(padding) != {
         "x_plus_um", "x_minus_um", "y_plus_um", "y_minus_um",
         "z_plus_um", "z_minus_um",
@@ -336,25 +366,25 @@ def _source_payload(
         raise ValueError("EPR Region padding must be finite and nonnegative")
     loops = {
         canonical_sha256(item["metadata"].get("auto_vacuum_envelope_outer_loop"))
-        for item in vacuum_regions
+        for item in auto_vacuum_regions
     }
     if len(loops) != 1:
         raise ValueError("EPR auto vacuum components disagree on envelope")
-    envelope_loop = vacuum_regions[0]["metadata"].get(
+    envelope_loop = auto_vacuum_regions[0]["metadata"].get(
         "auto_vacuum_envelope_outer_loop"
     )
     if not isinstance(envelope_loop, Sequence) or len(envelope_loop) < 3:
         raise ValueError("EPR Region requires an auto vacuum envelope loop")
     z_ranges = [
         geometry_z_range(item["geometry"], item["semantic_id"])
-        for item in vacuum_regions
+        for item in auto_vacuum_regions
     ]
     native_region = {
         "method": "single_region_absolute_offset.v1",
         "outer_boundary_policy": "hfss_default.v1",
         "name": "Region",
         "material_id": next(iter(vacuum_material_ids)),
-        "logical_vacuum_ids": sorted(item["semantic_id"] for item in vacuum_regions),
+        "logical_vacuum_ids": sorted(item["semantic_id"] for item in auto_vacuum_regions),
         "padding_um": padding_um,
         "envelope_outer_loop_um": _plain(envelope_loop),
         "z_range_um": [min(item[0] for item in z_ranges), max(item[1] for item in z_ranges)],
@@ -369,6 +399,11 @@ def _source_payload(
         "materials": material_catalog,
         "solution_regions": normalized_regions,
         "native_region": native_region,
+        "native_entity_name_policy": (
+            "readable.v1"
+            if metadata.get("component_semantics_schema_version") == 2
+            else "hash.v1"
+        ),
         "surface_evaluation_policy": "unmasked_plus_requested.v1",
         "conductors": conductors,
         "route_a_thin_film": _plain(profile) if profile is not None else None,
@@ -427,7 +462,13 @@ def _profiled_geometry_input(
         if entity.material_kind in {"vacuum", "dielectric"}:
             record = regions.get(entity.semantic_id)
         else:
-            source_id = str(entity.metadata.get("semantic_group_id", entity.semantic_id))
+            source_id = str(
+                entity.metadata.get("source_semantic_id", entity.semantic_id)
+                if "split_polygon_index" in entity.metadata
+                else entity.semantic_id
+            )
+            if "split_polygon_index" in entity.metadata and "source_semantic_id" not in entity.metadata:
+                source_id = str(entity.metadata.get("semantic_group_id", entity.semantic_id))
             record = layers.get(source_id)
         if not isinstance(record, Mapping):
             raise ValueError(
@@ -1457,7 +1498,7 @@ def _domain_center(source: Mapping[str, Any], semantic_id: str) -> tuple[float, 
     return x_center, y_center, (z_min + z_max) / 2.0
 
 
-def _bounds_box(app: Any, entity: Mapping[str, Any]) -> Any:
+def _bounds_box(app: Any, entity: Mapping[str, Any], source: Mapping[str, Any]) -> Any:
     geometry = entity["geometry"]
     bounds = geometry.get("domain_bounds_um")
     if not isinstance(bounds, Mapping):
@@ -1489,7 +1530,7 @@ def _bounds_box(app: Any, entity: Mapping[str, Any]) -> Any:
     value = app.modeler.create_box(
         origin,
         size,
-        name=_native_name("domain", entity["semantic_id"]),
+        name=_native_entity_name(source, "domain", entity["semantic_id"]),
         material=native_material,
     )
     if value is False or value is None:
@@ -1497,10 +1538,10 @@ def _bounds_box(app: Any, entity: Mapping[str, Any]) -> Any:
     return value
 
 
-def _solution_body(app: Any, entity: Mapping[str, Any]) -> Any:
+def _solution_body(app: Any, entity: Mapping[str, Any], source: Mapping[str, Any]) -> Any:
     geometry = entity["geometry"]
     if "outer_loop" not in geometry:
-        return _bounds_box(app, entity)
+        return _bounds_box(app, entity, source)
     z_min, z_max = geometry_z_range(geometry, entity["semantic_id"])
     if z_max <= z_min:
         raise ValueError(
@@ -1510,7 +1551,7 @@ def _solution_body(app: Any, entity: Mapping[str, Any]) -> Any:
         "exterior": geometry["outer_loop"],
         "holes": geometry.get("hole_loops", ()),
     }
-    name = _native_name("domain", entity["semantic_id"])
+    name = _native_entity_name(source, "domain", entity["semantic_id"])
     body = _swept_z_solid(
         app, polygon, name=name, z_min_um=z_min, z_max_um=z_max
     )
@@ -1534,6 +1575,20 @@ def _material_readback(app: Any, materials: Mapping[str, Any]) -> dict[str, Any]
             "relative_permeability": float(material.permeability.value),
         }
     return observed
+
+
+def _native_solution_materials(source: Mapping[str, Any]) -> dict[str, Any]:
+    """Install only materials carried by native solution-domain bodies."""
+
+    catalog = source["materials"]
+    material_ids = {
+        str(item["material_id"]) for item in source["solution_regions"]
+    }
+    material_ids.add(str(source["native_region"]["material_id"]))
+    missing = material_ids - set(catalog)
+    if missing:
+        raise ValueError(f"native solution materials are missing: {sorted(missing)!r}")
+    return {material_id: catalog[material_id] for material_id in sorted(material_ids)}
 
 
 def _install_material_catalog(app: Any, materials: Mapping[str, Any]) -> dict[str, Any]:
@@ -1702,6 +1757,8 @@ def _create_epr_region(app: Any, source: Mapping[str, Any]) -> dict[str, Any]:
     )
     if region is False or region is None or region.name != "Region":
         raise RuntimeError("native EPR Region creation failed")
+    # HFSS partitions overlapping interior bodies from Region in solver and
+    # Calculator volume support; its special Region object rejects CAD subtract.
     region.material_name = str(plan["material_id"])
     observed_material = native_object_property(region, "Material").strip('"')
     if observed_material.casefold() != str(plan["material_id"]).casefold():
@@ -1837,14 +1894,14 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
     phase_seconds: dict[str, float] = {}
 
     started = time.perf_counter()
-    material_readback = _install_material_catalog(app, source["materials"])
+    material_readback = _install_material_catalog(app, _native_solution_materials(source))
     phase_seconds["materials_seconds"] = time.perf_counter() - started
 
     started = time.perf_counter()
     for entity in source["solution_regions"]:
-        if entity["material_kind"] == "vacuum":
+        if entity["metadata"].get("is_auto_vacuum_region"):
             continue
-        obj = _solution_body(app, entity)
+        obj = _solution_body(app, entity, source)
         evidence = _native_object_evidence(app, obj.name)
         if evidence["native_object_type"] != "Solid":
             raise RuntimeError(f"solution domain {entity['semantic_id']!r} is not solid")
@@ -1857,7 +1914,7 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
                 **evidence,
             }
         )
-    phase_seconds["dielectric_bodies_seconds"] = time.perf_counter() - started
+    phase_seconds["interior_solution_bodies_seconds"] = time.perf_counter() - started
 
     junction_polygons = {item.source_polygon_id for item in prepared.junctions}
     started = time.perf_counter()
@@ -1869,7 +1926,7 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
         for polygon_id in entity["polygon_ids"]:
             if polygon_id in junction_polygons:
                 continue
-            name = _native_name("conductor", entity["semantic_id"], polygon_id)
+            name = _native_entity_name(source, "conductor", entity["semantic_id"], polygon_id)
             boundary_name: str | None = None
             if is_route_a_sheet:
                 obj = _polygon_sheet(app, polygons[polygon_id], name=name, z_um=z_um)
@@ -2093,9 +2150,9 @@ def bind_saved_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -> di
         raise ValueError("saved EPR geometry predates single Region; reprepare")
     objects: list[dict[str, Any]] = []
     for domain in source["solution_regions"]:
-        if domain["material_kind"] == "vacuum":
+        if domain["metadata"].get("is_auto_vacuum_region"):
             continue
-        name = _native_name("domain", domain["semantic_id"])
+        name = _native_entity_name(source, "domain", domain["semantic_id"])
         evidence = _native_object_evidence(app, name)
         if evidence["native_object_type"] != "Solid":
             raise RuntimeError(f"saved solution domain {name!r} is not solid")
@@ -2138,6 +2195,67 @@ def bind_saved_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -> di
             **region_evidence,
         },
     )
+
+    junction_polygon_ids = {item.source_polygon_id for item in prepared.junctions}
+    for entity in source["conductors"]:
+        is_sheet = entity["representation"] == "surface_sheet"
+        for polygon_id in entity["polygon_ids"]:
+            if polygon_id in junction_polygon_ids:
+                continue
+            name = _native_entity_name(
+                source, "conductor", entity["semantic_id"], polygon_id
+            )
+            evidence = _native_object_evidence(app, name)
+            expected_type = "Sheet" if is_sheet else "Solid"
+            if evidence["native_object_type"] != expected_type:
+                raise RuntimeError(f"saved conductor {name!r} has wrong object type")
+            boundary_name: str | None = None
+            observed: dict[str, Any] = {}
+            if is_sheet:
+                boundary_name = _native_name(
+                    "pec_boundary", entity["semantic_id"], polygon_id
+                )
+                if _native_boundary_type(app, boundary_name) != "Perfect E":
+                    raise RuntimeError(f"saved conductor {name!r} lacks Perfect E")
+                assigned = app.oboundary.GetBoundaryAssignment(boundary_name)
+                if assigned is None:
+                    raise RuntimeError(f"saved conductor {name!r} lacks PEC assignment")
+                try:
+                    raw_ids = [int(value) for value in assigned]
+                except (TypeError, ValueError) as exc:
+                    raise RuntimeError(f"saved conductor {name!r} has invalid PEC IDs") from exc
+                if not raw_ids or len(raw_ids) != len(set(raw_ids)):
+                    raise RuntimeError(f"saved conductor {name!r} has invalid PEC IDs")
+                _, _, assigned_objects = _resolve_native_assignment(app, raw_ids)
+                if assigned_objects != {name}:
+                    raise RuntimeError(f"saved conductor {name!r} PEC target differs")
+            else:
+                obj = app.modeler.get_object_from_name(name)
+                if obj is None:
+                    raise RuntimeError(f"saved conductor {name!r} is unavailable")
+                observed = {
+                    "native_material_name": native_object_property(
+                        obj, "Material"
+                    ).strip('"'),
+                    "native_solve_inside": _native_object_boolean_property(
+                        obj, "Solve Inside"
+                    ),
+                }
+                if (
+                    observed["native_material_name"].casefold() != "pec"
+                    or observed["native_solve_inside"] is not False
+                ):
+                    raise RuntimeError(f"saved conductor {name!r} PEC readback differs")
+            objects.append({
+                "kind": "conductor",
+                "semantic_id": entity["semantic_id"],
+                "source_polygon_id": polygon_id,
+                "route": prepared.route,
+                "object_name": name,
+                "boundary_name": boundary_name,
+                "observed": observed,
+                **evidence,
+            })
 
     junctions: list[dict[str, Any]] = []
     for junction in prepared.junctions:
@@ -2223,7 +2341,7 @@ def bind_saved_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -> di
         "objects": objects,
         "junctions": junctions,
         "surface_selections": selections,
-        "material_readback": _material_readback(app, source["materials"]),
+        "material_readback": _material_readback(app, _native_solution_materials(source)),
         "closed_enclosure": enclosure,
         "binding_stage": "saved_project_readback_without_cad_creation",
     }

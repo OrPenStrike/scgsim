@@ -72,6 +72,8 @@ Hard invariants for this registry:
 from __future__ import annotations
 
 import time
+import hashlib
+import json
 from bisect import bisect_left, bisect_right
 from collections import Counter
 from collections.abc import Mapping, Sequence
@@ -225,6 +227,7 @@ def verified_route_a_substrate_support(
             for entity in build_input.entities
             if entity.semantic_id == source_id
             or entity.metadata.get("semantic_group_id") == source_id
+            or entity.metadata.get("source_semantic_id") == source_id
         )
         face_regions: list[Any] = []
         for entity in face_entities:
@@ -717,7 +720,10 @@ def _auto_vacuum_sheet_z(
     sheet_positions = provenance.get("effective_sheet_z_um")
     if not isinstance(ranges, Mapping) or not isinstance(sheet_positions, Mapping):
         raise ValueError("auto VACUUM_REGION Route-A sheet provenance is incomplete")
-    source_id = entity.metadata.get("semantic_group_id", entity.semantic_id)
+    source_id = entity.metadata.get(
+        "source_semantic_id",
+        entity.metadata.get("semantic_group_id", entity.semantic_id),
+    )
     matches = (
         side
         for side, record in ranges.items()
@@ -2682,8 +2688,6 @@ def _conductor_face_solution_pieces(
             shell_part,
         )
         return tuple((adjacent_id, dict(geometry_ref)) for geometry_ref in geometry_refs)
-
-    import gdstk
 
     z_min_um, z_max_um = _entity_z_range_um(entity)
     plane_z_um = z_min_um if shell_part == "bottom" else z_max_um
@@ -5786,6 +5790,19 @@ def _entity_physical_group_id(entity: SemanticEntitySpec) -> str:
         value = entity.metadata.get(key)
         if isinstance(value, str) and value:
             return value
+    # Plan v2 keeps each occurrence as an Entity. Only explicitly net-bound,
+    # same-family local conductors share a computational physical group.
+    occurrence = entity.metadata.get("source_occurrence_path")
+    local_id = entity.metadata.get("source_local_entity_id")
+    if (
+        isinstance(occurrence, str) and occurrence
+        and isinstance(local_id, str) and local_id
+        and isinstance(entity.net_id, str) and entity.net_id
+    ):
+        parent = occurrence.rpartition("/")[0]
+        key = (parent, local_id, entity.part_role, entity.material_id, entity.net_id)
+        digest = hashlib.sha256(json.dumps(key, separators=(",", ":")).encode()).hexdigest()[:16]
+        return f"{local_id}__{digest}"
     return entity.semantic_id
 
 

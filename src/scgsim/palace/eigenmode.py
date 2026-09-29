@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from scgsim._mesh_quality import MeshQualityReport, check_mesh_quality
-from scgsim.sgb import VacuumRegionSpec
+from scgsim.sgb import GeometryPlanSnapshot, VacuumRegionSpec
 from ._config import (
     _MODEL_L0_M,
     LayoutPortBinding,
@@ -69,6 +69,7 @@ class EigenmodeSim:
     _mesh_result: MeshBuildResult | None = field(default=None, init=False)
     config_path: Path | None = field(default=None, init=False)
     handoff_plan: HandoffPlan | None = field(default=None, init=False)
+    _plan_snapshot: GeometryPlanSnapshot | None = field(default=None, init=False, repr=False)
 
     @staticmethod
     def reanalyze_epr(
@@ -94,12 +95,33 @@ class EigenmodeSim:
         self.handoff_plan = None
 
     def set_geometry(self, component: Any) -> None:
+        if self._plan_snapshot is not None:
+            raise ValueError("GeometryPlan owns the paired source; use set_plan(new_snapshot) or a new Sim")
         if component is None or not callable(getattr(component, "write_gds", None)):
             raise TypeError("component must provide write_gds(path).")
         self.component = component
+        self._plan_snapshot = None
+        self._invalidate_mesh()
+
+    def set_plan(self, snapshot: GeometryPlanSnapshot) -> None:
+        """Consume one detached source/stack pair from a notebook GeometryPlan."""
+        if not isinstance(snapshot, GeometryPlanSnapshot):
+            raise TypeError("set_plan requires a GeometryPlanSnapshot")
+        if "VACUUM_REGION" in snapshot.stack["solution_regions"] and (
+            self.vacuum_region is not None or self.airbox
+        ):
+            raise ValueError("GeometryPlan owns the outer vacuum envelope")
+        trial = EigenmodeSim()
+        trial.set_stack(snapshot.stack)
+        self.component = None
+        self.stack = trial.stack
+        self._materials = trial._materials
+        self._plan_snapshot = snapshot
         self._invalidate_mesh()
 
     def set_stack(self, stack: Mapping[str, Any] | str | Path) -> None:
+        if self._plan_snapshot is not None:
+            raise ValueError("GeometryPlan owns the paired source; use set_plan(new_snapshot) or a new Sim")
         payload = _load_stack(stack)
         materials = payload.get("materials")
         if not isinstance(materials, Mapping) or not materials:
@@ -116,6 +138,7 @@ class EigenmodeSim:
         _validate_stack_material_kinds(payload, resolved)
         self.stack = payload
         self._materials = resolved
+        self._plan_snapshot = None
         self._invalidate_mesh()
 
     def set_output_dir(self, path: str | Path) -> None:
@@ -132,6 +155,8 @@ class EigenmodeSim:
         z_above: float | None = None,
         z_below: float | None = None,
     ) -> None:
+        if self._plan_snapshot is not None and "VACUUM_REGION" in self._plan_snapshot.stack["solution_regions"]:
+            raise ValueError("GeometryPlan owns the outer vacuum envelope")
         if self.vacuum_region is not None:
             raise ValueError(
                 "set_airbox is mutually exclusive with set_vacuum_region()."
@@ -152,6 +177,8 @@ class EigenmodeSim:
         padding: float | list[float] | tuple[float, ...] | Mapping[str, Any] = 0.0,
     ) -> None:
         """Set six-direction padding for a route-aware generated vacuum region."""
+        if self._plan_snapshot is not None and "VACUUM_REGION" in self._plan_snapshot.stack["solution_regions"]:
+            raise ValueError("GeometryPlan owns the outer vacuum envelope")
         if self.airbox:
             raise ValueError(
                 "set_vacuum_region is mutually exclusive with set_airbox()."
@@ -362,10 +389,60 @@ class EigenmodeSim:
 
     def mesh(self) -> Path:
         self._invalidate_mesh()
-        if self.component is None or self.stack is None or self.output_dir is None:
+        if (self.component is None and self._plan_snapshot is None) or self.stack is None or self.output_dir is None:
             raise ValueError(
                 "set_geometry(), set_stack(), and set_output_dir() must run before mesh()."
             )
+        if self._plan_snapshot is not None:
+            if self.indium_ground_bumps is not None and self.indium_ground_bumps["fill"]:
+                raise ValueError("GeometryPlan source already owns its geometry; add authored bumps before prepare()")
+            available_records = self._plan_snapshot.stack["metadata"].get(
+                "port_sheet_source_layers", ()
+            )
+            available = {record["name"]: record for record in available_records}
+            if len(available) != len(available_records):
+                raise ValueError("GeometryPlan port names must be unique")
+            resolved, source_records = [], []
+            for requested in self.ports:
+                record = available.get(requested.name)
+                if record is None or record["target_layer"] != requested.layer:
+                    raise ValueError(f"GeometryPlan has no matching authored port {requested.name!r}")
+                resolved.append(LayoutPortBinding(
+                    index=len(resolved) + 1, name=requested.name,
+                    target_layer=requested.layer,
+                    source_layer=f"{record['layer']}/{record['datatype']}",
+                    direction=tuple(record["direction"]),
+                    inductance=requested.inductance,
+                ))
+                source_records.append({**record, "port_index": len(resolved)})
+            source_stack = self._plan_snapshot.stack
+            source_stack["metadata"].pop("port_sheet_source_layers", None)
+            prepared = prepare_mesh_input(
+                component=None,
+                stack=source_stack,
+                route=self.route,
+                route_a_thin_film=self.route_a_thin_film,
+                vacuum_region=(
+                    None if "VACUUM_REGION" in source_stack["solution_regions"]
+                    else self.vacuum_region
+                ),
+                indium_ground_bumps=None,
+                build_input=self._plan_snapshot.geometry_input,
+            )
+            if prepared.materials is not None:
+                self._materials = prepared.materials
+            self._mesh_result = build_route_mesh(
+                component=None,
+                stack=apply_airbox_to_stack(prepared.stack, self.airbox),
+                route=self.route,
+                output_dir=self.output_dir,
+                refined_mesh_size=self.numerical["refined_mesh_size"],
+                max_mesh_size=self.numerical["max_mesh_size"],
+                port_sheet_source_layers=source_records,
+                source_gds_bytes=self._plan_snapshot.gds_bytes,
+            )
+            self._resolved_ports = resolved
+            return self._mesh_result.mesh_path
         resolved, source_records = (
             _resolve_layout_ports(self.component, self.ports)
             if self.ports else ([], [])

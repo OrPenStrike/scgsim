@@ -20,7 +20,8 @@ SOURCE_SCHEMA_V1 = "scgsim.aedt.runtime-source.v1"
 SOURCE_SCHEMA_V2 = "scgsim.aedt.runtime-source.v2"
 SOURCE_SCHEMA_V3 = "scgsim.aedt.runtime-source.v3"
 SOURCE_SCHEMA_V4 = "scgsim.aedt.runtime-source.v4"
-SOURCE_SCHEMA = SOURCE_SCHEMA_V4
+SOURCE_SCHEMA_V5 = "scgsim.aedt.runtime-source.v5"
+SOURCE_SCHEMA = SOURCE_SCHEMA_V5
 
 # Frozen membership of the public runtime-source.v1 evidence format. Changing
 # producer structure must not silently change what historical readers mean.
@@ -68,6 +69,14 @@ _RUNTIME_SOURCE_V4_PATHS = tuple(
     sorted((*_RUNTIME_SOURCE_V3_PATHS, "scgsim/aedt/_presentation.py"))
 )
 
+# GeometryPlan is now imported by the execution-facing package surface. The
+# earlier inventories remain exact readers for their original evidence.
+_RUNTIME_SOURCE_V5_PATHS = tuple(sorted((
+    *_RUNTIME_SOURCE_V4_PATHS,
+    "scgsim/sgb/geometry_plan.py",
+    "scgsim/sgb/__init__.py",
+)))
+
 def _module_manifest() -> list[dict[str, str]]:
     package_root = Path(__file__).resolve().parents[1]
     return [
@@ -76,7 +85,7 @@ def _module_manifest() -> list[dict[str, str]]:
             "path": path,
             "sha256": file_sha256(package_root.parent / path),
         }
-        for path in _RUNTIME_SOURCE_V4_PATHS
+        for path in _RUNTIME_SOURCE_V5_PATHS
     ]
 
 
@@ -176,6 +185,7 @@ def validate_runtime_source(
         SOURCE_SCHEMA_V2: _RUNTIME_SOURCE_V2_PATHS,
         SOURCE_SCHEMA_V3: _RUNTIME_SOURCE_V3_PATHS,
         SOURCE_SCHEMA_V4: _RUNTIME_SOURCE_V4_PATHS,
+        SOURCE_SCHEMA_V5: _RUNTIME_SOURCE_V5_PATHS,
     }.get(schema)
     if (
         expected_paths is None

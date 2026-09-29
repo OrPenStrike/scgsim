@@ -73,6 +73,7 @@ from scgsim.sgb.pipeline import (
 )
 from scgsim.sgb.stack import build_component_stack
 from scgsim.sgb.vacuum import apply_vacuum_region_to_stack
+from scgsim.sgb.geometry_plan import GeometryPlan, GeometryPlanSnapshot
 
 __all__ = [
     "RUN_METADATA_DIR",
@@ -89,6 +90,8 @@ __all__ = [
     "DimensionLiteral",
     "FinalPhysicalGroupRecord",
     "GeometryBuildInput",
+    "GeometryPlan",
+    "GeometryPlanSnapshot",
     "GmshDimTag",
     "InnerPecVoidShellRecord",
     "InterfaceKindLiteral",

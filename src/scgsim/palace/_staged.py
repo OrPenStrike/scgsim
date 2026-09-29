@@ -26,7 +26,7 @@ from scgsim.semantics.route_a import (
     single_face_thin_film_facts,
     validate_single_face_metal_records,
 )
-from scgsim.sgb.vacuum import apply_vacuum_region_to_stack
+from scgsim.sgb.models import GeometryBuildInput
 
 SCHEMA_VERSION = "v0.16.0"
 
@@ -90,6 +90,7 @@ def apply_route_a_thin_film_to_stack(
     source_stack: Mapping[str, Any],
     variant: str | None,
     component: Any | None = None,
+    build_input: GeometryBuildInput | None = None,
 ) -> Mapping[str, Any]:
     """Return a Route-A stack with one explicit thin-film coordinate contract.
 
@@ -104,9 +105,16 @@ def apply_route_a_thin_film_to_stack(
     layers = stack.get("layers", ())
     if isinstance(layers, str | bytes) or not isinstance(layers, Sequence):
         raise TypeError("Route-A thin-film lowering requires structured layers.")
-    substrate_support = (
-        _normalized_route_a_support(component, stack) if component is not None else None
-    )
+    if component is not None and build_input is not None:
+        raise ValueError("Route A accepts either a component or normalized geometry input")
+    if build_input is not None:
+        from scgsim.sgb.planning import verified_route_a_substrate_support
+
+        substrate_support = verified_route_a_substrate_support(build_input, stack)
+    else:
+        substrate_support = (
+            _normalized_route_a_support(component, stack) if component is not None else None
+        )
     facts = _route_a_thin_film_facts(
         stack,
         allow_single_face=normalized == "substrate_face",
