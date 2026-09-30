@@ -1,18 +1,44 @@
 """AEDT-driven workflow contracts and manual handoff/runtime utilities.
 
 Ownership: SCGSim Development.
-Failure intent: all public entrypoints are fail-closed and reject incomplete
-state without silently changing behavior.
+Failure intent: public entrypoints preserve explicit partial adaptive-history
+records, but reject corrupt or identity-inconsistent state without fallback.
 """
 
-from .handoff import HandoffPlan, prepare_handoff
+from ._epr_geometry import planar_junction_from_port, prepare_planar_geometry_input
+from ._epr_models import (
+    EprAnalysisRequest,
+    EprResult,
+    PlanarJunction,
+    PreparedPlanarGeometry,
+    SavedSolution,
+    SurfaceEprSpec,
+)
+from ._epr_results import (
+    combine_epr_mode,
+    plot_epr_result,
+    reanalyze_epr,
+    resolve_epr_result,
+    resolve_saved_solution,
+    show_epr,
+)
+from .eigenmode import EigenmodeSim
+from .handoff import (
+    analyze_epr,
+    HandoffPlan,
+    prepare_handoff,
+    prepare_hfss_eigenmode_from_geometry,
+)
 from .resolve import ResolvedRun, resolve_results
 from .spec import (
+    AedtResources,
     AedtSpec,
     EigenmodeRunControl,
     FrequencySweepSpec,
     HfssDrivenMode,
     HfssDrivenSpec,
+    HfssEprSpec,
+    HfssEprAnalysisSpec,
     HfssEigenmodeSpec,
     HfssRunControl,
     HfssSpec,
@@ -32,12 +58,18 @@ from .spec import (
 )
 
 __all__ = [
+    "AedtResources",
     "AedtSpec",
     "EigenmodeRunControl",
     "FrequencySweepSpec",
+    "EprResult",
+    "EprAnalysisRequest",
+    "EigenmodeSim",
     "HandoffPlan",
     "HfssDrivenMode",
     "HfssDrivenSpec",
+    "HfssEprSpec",
+    "HfssEprAnalysisSpec",
     "HfssEigenmodeSpec",
     "HfssRunControl",
     "HfssSpec",
@@ -47,14 +79,28 @@ __all__ = [
     "ModalPort",
     "ObjectBinding",
     "PdkMaterial",
+    "PlanarJunction",
+    "PreparedPlanarGeometry",
     "Q2dConductorSpec",
     "Q2dRectangleSpec",
     "Q2dSpec",
     "Q3dNetSpec",
     "Q3dSpec",
     "ResolvedRun",
+    "SavedSolution",
+    "SurfaceEprSpec",
     "TerminalPort",
+    "analyze_epr",
+    "combine_epr_mode",
     "parse_aedt_spec",
+    "planar_junction_from_port",
+    "plot_epr_result",
+    "reanalyze_epr",
     "prepare_handoff",
+    "prepare_hfss_eigenmode_from_geometry",
+    "prepare_planar_geometry_input",
+    "resolve_epr_result",
     "resolve_results",
+    "resolve_saved_solution",
+    "show_epr",
 ]

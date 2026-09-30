@@ -16,7 +16,14 @@ from .util import file_sha256
 RECEIPT_V1 = "scgsim.aedt.receipt.v1"
 RECEIPT_V2 = "scgsim.aedt.receipt.v2"
 RECEIPT_V3 = "scgsim.aedt.receipt.v3"
-SOURCE_SCHEMA = "scgsim.aedt.runtime-source.v1"
+SOURCE_SCHEMA_V1 = "scgsim.aedt.runtime-source.v1"
+SOURCE_SCHEMA_V2 = "scgsim.aedt.runtime-source.v2"
+SOURCE_SCHEMA_V3 = "scgsim.aedt.runtime-source.v3"
+SOURCE_SCHEMA_V4 = "scgsim.aedt.runtime-source.v4"
+SOURCE_SCHEMA_V5 = "scgsim.aedt.runtime-source.v5"
+SOURCE_SCHEMA_V6 = "scgsim.aedt.runtime-source.v6"
+SOURCE_SCHEMA_V7 = "scgsim.aedt.runtime-source.v7"
+SOURCE_SCHEMA = SOURCE_SCHEMA_V7
 
 # Frozen membership of the public runtime-source.v1 evidence format. Changing
 # producer structure must not silently change what historical readers mean.
@@ -39,41 +46,60 @@ _RUNTIME_SOURCE_V1_PATHS = tuple(
     f"scgsim/aedt/{name}" for name in sorted(_RUNTIME_SOURCE_V1_MODULES)
 )
 
-# Current producer inventory is intentionally declared separately from the
-# frozen v1 contract. A writer may claim v1 only while these inventories agree.
-_CURRENT_PRODUCER_MODULES = (
-    "_hfss_convergence.py",
-    "_hfss_runtime.py",
-    "_matrix_export.py",
-    "_native_common.py",
-    "_q2d_convergence.py",
-    "_q2d_runtime.py",
-    "_q3d_runtime.py",
-    "_runtime_provenance.py",
-    "handoff.py",
-    "resolve.py",
-    "run.py",
-    "spec.py",
-    "util.py",
+_RUNTIME_SOURCE_V2_PATHS = tuple(
+    sorted(
+        (
+            *_RUNTIME_SOURCE_V1_PATHS,
+            "scgsim/aedt/_epr_eigenmode.py",
+            "scgsim/aedt/_epr_fields.py",
+            "scgsim/aedt/_epr_geometry.py",
+            "scgsim/aedt/_epr_models.py",
+            "scgsim/aedt/_epr_results.py",
+            "scgsim/semantics/route_a.py",
+            "scgsim/sgb/planning.py",
+        )
+    )
 )
 
+_RUNTIME_SOURCE_V3_PATHS = tuple(
+    sorted((*_RUNTIME_SOURCE_V2_PATHS, "scgsim/aedt/_benchmark.py"))
+)
+
+# Presentation moved out of V3-owned result/resolver modules. Keep those old
+# inventories frozen and bind the new producer's rendering code explicitly.
+_RUNTIME_SOURCE_V4_PATHS = tuple(
+    sorted((*_RUNTIME_SOURCE_V3_PATHS, "scgsim/aedt/_presentation.py"))
+)
+
+# GeometryPlan is now imported by the execution-facing package surface. The
+# earlier inventories remain exact readers for their original evidence.
+_RUNTIME_SOURCE_V5_PATHS = tuple(sorted((
+    *_RUNTIME_SOURCE_V4_PATHS,
+    "scgsim/sgb/geometry_plan.py",
+    "scgsim/sgb/__init__.py",
+)))
+
+# Public input summaries are imported by both execution-facing Eigenmode facades.
+_RUNTIME_SOURCE_V6_PATHS = tuple(sorted((
+    *_RUNTIME_SOURCE_V5_PATHS,
+    "scgsim/sgb/summary.py",
+)))
+
+# Notebook presentation is imported by current summary and AEDT report paths.
+_RUNTIME_SOURCE_V7_PATHS = tuple(sorted((
+    *_RUNTIME_SOURCE_V6_PATHS,
+    "scgsim/_notebook_presentation.py",
+)))
 
 def _module_manifest() -> list[dict[str, str]]:
-    producer_paths = tuple(
-        f"scgsim/aedt/{name}" for name in sorted(_CURRENT_PRODUCER_MODULES)
-    )
-    if producer_paths != _RUNTIME_SOURCE_V1_PATHS:
-        raise RuntimeError(
-            "current AEDT runtime producer inventory does not match runtime-source.v1"
-        )
-    root = Path(__file__).resolve().parent
+    package_root = Path(__file__).resolve().parents[1]
     return [
         {
-            "module": f"scgsim.aedt.{name.removesuffix('.py')}",
-            "path": f"scgsim/aedt/{name}",
-            "sha256": file_sha256(root / name),
+            "module": path.removesuffix(".py").replace("/", "."),
+            "path": path,
+            "sha256": file_sha256(package_root.parent / path),
         }
-        for name in sorted(_CURRENT_PRODUCER_MODULES)
+        for path in _RUNTIME_SOURCE_V7_PATHS
     ]
 
 
@@ -167,17 +193,27 @@ def validate_runtime_source(
     if not isinstance(value, dict):
         raise RuntimeError(f"{stage} runtime source provenance is invalid")
     modules = value.get("modules")
+    schema = value.get("schema_version")
+    expected_paths = {
+        SOURCE_SCHEMA_V1: _RUNTIME_SOURCE_V1_PATHS,
+        SOURCE_SCHEMA_V2: _RUNTIME_SOURCE_V2_PATHS,
+        SOURCE_SCHEMA_V3: _RUNTIME_SOURCE_V3_PATHS,
+        SOURCE_SCHEMA_V4: _RUNTIME_SOURCE_V4_PATHS,
+        SOURCE_SCHEMA_V5: _RUNTIME_SOURCE_V5_PATHS,
+        SOURCE_SCHEMA_V6: _RUNTIME_SOURCE_V6_PATHS,
+        SOURCE_SCHEMA_V7: _RUNTIME_SOURCE_V7_PATHS,
+    }.get(schema)
     if (
-        value.get("schema_version") != SOURCE_SCHEMA
+        expected_paths is None
         or value.get("stage") != stage
         or not isinstance(modules, list)
-        or len(modules) != len(_RUNTIME_SOURCE_V1_PATHS)
+        or len(modules) != len(expected_paths)
     ):
         raise RuntimeError(f"{stage} runtime source provenance is invalid")
     paths: list[str] = []
     for item in modules:
         expected_module = (
-            f"scgsim.aedt.{Path(item['path']).name.removesuffix('.py')}"
+            item["path"].removesuffix(".py").replace("/", ".")
             if isinstance(item, dict) and isinstance(item.get("path"), str)
             else None
         )
@@ -186,13 +222,13 @@ def validate_runtime_source(
             or set(item) != {"module", "path", "sha256"}
             or item["module"] != expected_module
             or not isinstance(item["path"], str)
-            or not item["path"].startswith("scgsim/aedt/")
+            or not item["path"].startswith("scgsim/")
             or Path(item["path"]).is_absolute()
             or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])
         ):
             raise RuntimeError(f"{stage} runtime source module manifest is invalid")
         paths.append(item["path"])
-    if tuple(paths) != _RUNTIME_SOURCE_V1_PATHS:
+    if tuple(paths) != expected_paths:
         raise RuntimeError(f"{stage} runtime source module manifest is invalid")
     if value.get("content_sha256") != _content_digest(modules):
         raise RuntimeError(f"{stage} runtime source content digest is invalid")

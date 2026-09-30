@@ -131,6 +131,7 @@ def _semantic_layer_records(
     levels: Mapping[str, Any],
     materials: Mapping[str, Mapping[str, Any]],
     solution_region_ids: Mapping[str, Any],
+    require_net: bool = True,
 ) -> list[dict[str, Any]]:
     result = []
     semantic_ids: set[str] = set()
@@ -150,7 +151,9 @@ def _semantic_layer_records(
                 "component conductor region contains PDK-owned or unsupported fields "
                 f"{sorted(unknown)!r}."
             )
-        required = ("semantic_id", "level", "gds_layer", "net_id")
+        required = ("semantic_id", "level", "gds_layer", "net_id") if require_net else (
+            "semantic_id", "level", "gds_layer"
+        )
         missing = [field for field in required if field not in declaration]
         if missing:
             raise ValueError(f"component conductor region lacks fields {missing!r}.")
@@ -235,7 +238,10 @@ def _semantic_layer_records(
                 **component_metadata,
                 **({"host_reference_origin": "generated_background"} if auto_host else {}),
             },
-            "net_id": _identifier(declaration["net_id"], f"{semantic_id!r} net_id"),
+            "net_id": (
+                _identifier(declaration["net_id"], f"{semantic_id!r} net_id")
+                if require_net or declaration.get("net_id") is not None else None
+            ),
         }
         if "ground_bump_fill_spec" in level_info:
             record["metadata"]["ground_bump_fill_spec"] = _mapping(

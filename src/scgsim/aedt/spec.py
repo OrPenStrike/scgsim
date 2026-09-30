@@ -15,6 +15,10 @@ Side = Literal["+X", "-X", "+Y", "-Y", "+Z", "-Z"]
 
 SCHEMA_VERSION = "scgsim.aedt.hfss-driven.v1"
 EIGENMODE_SCHEMA_VERSION = "scgsim.aedt.hfss-eigenmode.v1"
+EPR_EIGENMODE_SCHEMA_VERSION = "scgsim.aedt.hfss-eigenmode-epr.v1"
+EPR_ANALYSIS_SCHEMA_VERSION = "scgsim.aedt.hfss-eigenmode-epr-analysis.v1"
+EPR_EIGENMODE_SCHEMA_VERSION_V2 = "scgsim.aedt.hfss-eigenmode-epr.v2"
+EPR_ANALYSIS_SCHEMA_VERSION_V2 = "scgsim.aedt.hfss-eigenmode-epr-analysis.v2"
 Q3D_SCHEMA_VERSION = "scgsim.aedt.q3d.v1"
 Q2D_SCHEMA_VERSION = "scgsim.aedt.q2d.v1"
 OFFICIAL_PYAEDT_SOURCE_URL = "https://github.com/ansys/pyaedt/tree/v1.3.0"
@@ -22,6 +26,27 @@ LOCKED_PYAEDT = "1.3.0"
 REQUIRED_AEDT_VERSION = "2024.2"
 POINT_COUNT = 20_000
 SURFACE_APPROXIMATION_LEVEL = 9
+
+
+@dataclass(frozen=True)
+class AedtResources:
+    """Explicit local AEDT solve resources, independent of model geometry."""
+
+    cores: int
+    ram_limit_percent: int
+
+    def __post_init__(self) -> None:
+        if isinstance(self.cores, bool) or not isinstance(self.cores, int) or self.cores <= 0:
+            raise ValueError("cores must be a positive integer")
+        if (
+            isinstance(self.ram_limit_percent, bool)
+            or not isinstance(self.ram_limit_percent, int)
+            or not 1 <= self.ram_limit_percent <= 100
+        ):
+            raise ValueError("ram_limit_percent must be an integer from 1 to 100")
+
+    def to_payload(self) -> dict[str, int]:
+        return {"cores": self.cores, "ram_limit_percent": self.ram_limit_percent}
 
 
 def _text(value: Any, field: str) -> str:
@@ -793,7 +818,276 @@ class HfssEigenmodeSpec:
         )
 
 
-HfssSpec = HfssDrivenSpec | HfssEigenmodeSpec
+@dataclass(frozen=True)
+class HfssEprSpec:
+    """One body-first HFSS Eigenmode request with embedded planar authority."""
+
+    project_name: str
+    design_name: str
+    geometry: Any
+    run_control: EigenmodeRunControl
+    epr_request: Any = None
+    aedt_version: str = REQUIRED_AEDT_VERSION
+    pyaedt_version: str = LOCKED_PYAEDT
+    _legacy_payload: bool = False
+
+    @property
+    def mode(self) -> Literal["eigenmode"]:
+        return "eigenmode"
+
+    def __post_init__(self) -> None:
+        from ._epr_models import EprAnalysisRequest, PreparedPlanarGeometry
+
+        if (
+            str(self.aedt_version) != REQUIRED_AEDT_VERSION
+            or str(self.pyaedt_version) != LOCKED_PYAEDT
+        ):
+            raise ValueError("EPR V1 requires AEDT 2024.2 and PyAEDT 1.3.0")
+        project = _project_filename(self.project_name, "project_name")
+        object.__setattr__(self, "project_name", project.stem)
+        object.__setattr__(self, "design_name", _text(self.design_name, "design_name"))
+        if not isinstance(self.geometry, PreparedPlanarGeometry):
+            raise TypeError("geometry must be PreparedPlanarGeometry")
+        if not isinstance(self.run_control, EigenmodeRunControl):
+            raise TypeError("run_control must be EigenmodeRunControl")
+        if self.epr_request is not None and not isinstance(
+            self.epr_request, EprAnalysisRequest
+        ):
+            raise TypeError("epr_request must be EprAnalysisRequest or None")
+        _validate_epr_selection(self)
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": (
+                EPR_EIGENMODE_SCHEMA_VERSION
+                if self._legacy_payload else EPR_EIGENMODE_SCHEMA_VERSION_V2
+            ),
+            "mode": self.mode,
+            "aedt": {"requested_version": self.aedt_version},
+            "pyaedt": {
+                "locked_version": self.pyaedt_version,
+                "official_source": OFFICIAL_PYAEDT_SOURCE_URL,
+            },
+            "project": {"name": self.project_name, "design": self.design_name},
+            "run_control": self.run_control.to_payload(),
+            "geometry": self.geometry.to_payload(),
+            "epr": (
+                None if self.epr_request is None else self.epr_request.to_payload()
+            ),
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> HfssEprSpec:
+        from ._epr_models import EprAnalysisRequest, PreparedPlanarGeometry
+
+        schema = payload.get("schema_version")
+        if schema not in {EPR_EIGENMODE_SCHEMA_VERSION, EPR_EIGENMODE_SCHEMA_VERSION_V2}:
+            raise ValueError("unsupported HFSS EPR schema")
+        if set(payload) != {
+            "schema_version",
+            "mode",
+            "aedt",
+            "pyaedt",
+            "project",
+            "run_control",
+            "geometry",
+            "epr",
+        } or payload.get("mode") != "eigenmode":
+            raise ValueError("HFSS EPR payload members are not canonical")
+        run = payload.get("run_control")
+        if not isinstance(run, dict):
+            raise TypeError("run_control must be a JSON object")
+        project = payload.get("project")
+        if not isinstance(project, dict):
+            raise TypeError("project must be a JSON object")
+        return cls(
+            project_name=_project_name_from_payload(project.get("name")),
+            design_name=_text(project.get("design"), "project.design"),
+            geometry=PreparedPlanarGeometry.from_payload(payload.get("geometry")),
+            run_control=EigenmodeRunControl(**run),
+            epr_request=(
+                None
+                if payload.get("epr") is None
+                else EprAnalysisRequest.from_payload(payload.get("epr"))
+            ),
+            aedt_version=_text(
+                payload.get("aedt", {}).get("requested_version"),
+                "aedt.requested_version",
+            ),
+            pyaedt_version=_text(
+                payload.get("pyaedt", {}).get("locked_version"),
+                "pyaedt.locked_version",
+            ),
+            _legacy_payload=schema == EPR_EIGENMODE_SCHEMA_VERSION,
+        )
+
+
+@dataclass(frozen=True)
+class HfssEprAnalysisSpec:
+    """One saved-copy-only Eigenmode EPR analysis request."""
+
+    project_name: str
+    design_name: str
+    geometry: Any
+    run_control: EigenmodeRunControl
+    epr_request: Any
+    saved_solution: Any
+    aedt_version: str = REQUIRED_AEDT_VERSION
+    pyaedt_version: str = LOCKED_PYAEDT
+    _legacy_payload: bool = False
+
+    @property
+    def mode(self) -> Literal["eigenmode"]:
+        return "eigenmode"
+
+    def __post_init__(self) -> None:
+        from ._epr_models import EprAnalysisRequest, PreparedPlanarGeometry, SavedSolution
+
+        if (
+            str(self.aedt_version) != REQUIRED_AEDT_VERSION
+            or str(self.pyaedt_version) != LOCKED_PYAEDT
+        ):
+            raise ValueError("EPR V1 requires AEDT 2024.2 and PyAEDT 1.3.0")
+        project = _project_filename(self.project_name, "project_name")
+        object.__setattr__(self, "project_name", project.stem)
+        object.__setattr__(self, "design_name", _text(self.design_name, "design_name"))
+        if not isinstance(self.geometry, PreparedPlanarGeometry):
+            raise TypeError("geometry must be PreparedPlanarGeometry")
+        if not isinstance(self.run_control, EigenmodeRunControl):
+            raise TypeError("run_control must be EigenmodeRunControl")
+        if not isinstance(self.saved_solution, SavedSolution):
+            raise TypeError("saved_solution must be SavedSolution")
+        if not isinstance(self.epr_request, EprAnalysisRequest):
+            raise TypeError("epr_request must be EprAnalysisRequest")
+        _validate_epr_selection(self)
+        if self.saved_solution.project_path.stem != self.project_name:
+            raise ValueError("saved solution project does not match project_name")
+        identity = self.saved_solution.identity
+        expected = {
+            "model_source_sha256": self.geometry.model_sha256,
+            "project_name": self.project_name,
+            "design_name": self.design_name,
+            "setup_name": self.run_control.setup_name,
+        }
+        if any(identity.get(name) != value for name, value in expected.items()):
+            raise ValueError("saved solution identity does not match the analysis model")
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": (
+                EPR_ANALYSIS_SCHEMA_VERSION
+                if self._legacy_payload else EPR_ANALYSIS_SCHEMA_VERSION_V2
+            ),
+            "mode": self.mode,
+            "aedt": {"requested_version": self.aedt_version},
+            "pyaedt": {
+                "locked_version": self.pyaedt_version,
+                "official_source": OFFICIAL_PYAEDT_SOURCE_URL,
+            },
+            "project": {"name": self.project_name, "design": self.design_name},
+            "run_control": self.run_control.to_payload(),
+            "geometry": self.geometry.to_payload(),
+            "epr": self.epr_request.to_payload(),
+            "saved_solution": self.saved_solution.to_payload(),
+        }
+
+    @classmethod
+    def from_payload(
+        cls, payload: dict[str, Any], *, base_dir: Path | None
+    ) -> HfssEprAnalysisSpec:
+        from ._epr_models import EprAnalysisRequest, PreparedPlanarGeometry, SavedSolution
+
+        schema = payload.get("schema_version")
+        if schema not in {EPR_ANALYSIS_SCHEMA_VERSION, EPR_ANALYSIS_SCHEMA_VERSION_V2}:
+            raise ValueError("unsupported HFSS EPR analysis schema")
+        if base_dir is None:
+            raise ValueError("HFSS EPR analysis requires a bound base directory")
+        expected = {
+            "schema_version",
+            "mode",
+            "aedt",
+            "pyaedt",
+            "project",
+            "run_control",
+            "geometry",
+            "epr",
+            "saved_solution",
+        }
+        if set(payload) != expected or payload.get("mode") != "eigenmode":
+            raise ValueError("HFSS EPR analysis payload members are not canonical")
+        project = payload.get("project")
+        run = payload.get("run_control")
+        if not isinstance(project, dict) or not isinstance(run, dict):
+            raise TypeError("project and run_control must be JSON objects")
+        return cls(
+            project_name=_project_name_from_payload(project.get("name")),
+            design_name=_text(project.get("design"), "project.design"),
+            geometry=PreparedPlanarGeometry.from_payload(payload.get("geometry")),
+            run_control=EigenmodeRunControl(**run),
+            epr_request=EprAnalysisRequest.from_payload(payload.get("epr")),
+            saved_solution=SavedSolution.from_payload(
+                base_dir / "saved", payload.get("saved_solution")
+            ),
+            aedt_version=_text(
+                payload.get("aedt", {}).get("requested_version"),
+                "aedt.requested_version",
+            ),
+            pyaedt_version=_text(
+                payload.get("pyaedt", {}).get("locked_version"),
+                "pyaedt.locked_version",
+            ),
+            _legacy_payload=schema == EPR_ANALYSIS_SCHEMA_VERSION,
+        )
+
+
+def _validate_epr_selection(spec: HfssEprSpec | HfssEprAnalysisSpec) -> None:
+    from ._epr_results import surface_integral_groups
+
+    request = spec.epr_request
+    if request is None:
+        return
+    if any(item.field_side == "sidewall" for item in spec.geometry.contributions) or any(
+        item["contribution"]["side"] == "sidewall"
+        for item in spec.geometry.surface_bindings
+    ):
+        raise ValueError(
+            "sidewall Surface-EPR is excluded; reprepare a horizontal-only "
+            "handoff before EPR execution"
+        )
+    modes = (
+        tuple(range(1, spec.run_control.num_modes + 1))
+        if request.mode_indices is None
+        else request.mode_indices
+    )
+    if not modes or any(mode > spec.run_control.num_modes for mode in modes):
+        raise ValueError("EPR mode_indices must select configured Eigenmodes")
+    surface_ids = {item.contribution_id for item in spec.geometry.contributions}
+    selected_surfaces = (
+        surface_ids
+        if request.surface_contribution_ids is None
+        else set(request.surface_contribution_ids)
+    )
+    if not selected_surfaces <= surface_ids:
+        raise ValueError("EPR request selects an unknown surface contribution")
+    junction_ids = {item.junction_id for item in spec.geometry.junctions}
+    selected_junctions = (
+        junction_ids if request.junction_ids is None else set(request.junction_ids)
+    )
+    if not selected_junctions <= junction_ids:
+        raise ValueError("EPR request selects an unknown junction")
+    source_domains = {
+        item["semantic_id"] for item in spec.geometry.source["solution_regions"]
+    }
+    native_region = spec.geometry.source.get("native_region")
+    if native_region is not None:
+        source_domains.difference_update(native_region["logical_vacuum_ids"])
+        source_domains.add("Region")
+    if request.bulk_domain_ids is not None and not set(request.bulk_domain_ids) <= source_domains:
+        raise ValueError("EPR request selects an unknown bulk domain")
+    surface_integral_groups(spec.geometry, request)
+
+
+HfssSpec = HfssDrivenSpec | HfssEigenmodeSpec | HfssEprSpec | HfssEprAnalysisSpec
 
 
 @dataclass(frozen=True)
@@ -1255,6 +1549,10 @@ def parse_aedt_spec(
         return HfssDrivenSpec.from_payload(payload, base_dir=base_dir)
     if payload.get("schema_version") == EIGENMODE_SCHEMA_VERSION:
         return HfssEigenmodeSpec.from_payload(payload, base_dir=base_dir)
+    if payload.get("schema_version") in {EPR_EIGENMODE_SCHEMA_VERSION, EPR_EIGENMODE_SCHEMA_VERSION_V2}:
+        return HfssEprSpec.from_payload(payload)
+    if payload.get("schema_version") in {EPR_ANALYSIS_SCHEMA_VERSION, EPR_ANALYSIS_SCHEMA_VERSION_V2}:
+        return HfssEprAnalysisSpec.from_payload(payload, base_dir=base_dir)
     if payload.get("schema_version") == Q3D_SCHEMA_VERSION:
         return Q3dSpec.from_payload(payload, base_dir=base_dir)
     if payload.get("schema_version") == Q2D_SCHEMA_VERSION:

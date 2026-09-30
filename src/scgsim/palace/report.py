@@ -1845,6 +1845,8 @@ def _read_surface_bindings(
             loss_tangent = (
                 epr_spec.get("loss_tangent") if isinstance(epr_spec, dict) else None
             )
+            if isinstance(epr_spec, dict) and epr_spec.get("schema_version") != "scgsim.palace.surface-film.v2" and loss_tangent == 0:
+                loss_tangent = None
             if loss_tangent is not None and (
                 isinstance(loss_tangent, bool)
                 or not isinstance(loss_tangent, (int, float))
@@ -1910,6 +1912,8 @@ def _read_surface_mask_bindings(
             loss_tangent = (
                 epr_spec.get("loss_tangent") if isinstance(epr_spec, dict) else None
             )
+            if isinstance(epr_spec, dict) and epr_spec.get("schema_version") != "scgsim.palace.surface-film.v2" and loss_tangent == 0:
+                loss_tangent = None
             if loss_tangent is not None and (
                 isinstance(loss_tangent, bool)
                 or not isinstance(loss_tangent, (int, float))

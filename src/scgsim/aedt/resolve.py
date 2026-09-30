@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from ._epr_models import EprResult
+from ._benchmark import BENCHMARK_RELATIVE, read_simulation_benchmark
 from ._hfss_convergence import read_hfss_convergence
 from ._matrix_export import parse_matrix_export, read_q2d_rlgc_matrix
 from ._q2d_convergence import read_q2d_convergence, read_q3d_convergence
@@ -21,6 +23,7 @@ from ._runtime_provenance import (
 )
 from .spec import (
     HfssDrivenSpec,
+    HfssEprSpec,
     HfssEigenmodeSpec,
     ModalPort,
     Q2dSpec,
@@ -51,13 +54,57 @@ class ResolvedRun:
     provenance_path: Path | None
     receipt_path: Path
     convergence: dict[str, Any] | None = None
+    benchmark_path: Path | None = None
+    _output_hashes: tuple[tuple[str, str], ...] = ()
+    _spec_sha256: str | None = None
+    _execution_seconds: float | None = None
+    _setup_name: str | None = None
+    _epr_requested: bool = False
+    _epr_result: EprResult | None = None
+
+    def _verified_output(self, path: Path) -> Path:
+        root = self.receipt_path.parent.parent
+        try:
+            relative = path.relative_to(root).as_posix()
+        except ValueError as exc:
+            raise RuntimeError("resolved output escapes the run directory") from exc
+        return _verified(root, relative, dict(self._output_hashes))
+
+    def _verified_spec(self) -> Path:
+        root = self.receipt_path.parent.parent
+        return _verified(
+            root, "aedt_spec.json", {"spec_sha256": self._spec_sha256}, "spec_sha256"
+        )
+
+    def epr_result(self) -> EprResult | None:
+        """Return the immutable, receipt-bound adaptive EPR record, if requested."""
+
+        if not self._epr_requested:
+            return None
+        if self._epr_result is None:
+            raise RuntimeError("requested EPR result was not resolved")
+        return self._epr_result
+
+    def show_all_results(self, *, show_details: bool = False, theme: str = "light") -> None:
+        """Display verified primary, benchmark, and requested EPR evidence."""
+
+        if type(show_details) is not bool:
+            raise TypeError("show_details must be a bool")
+        from scgsim._notebook_presentation import checked_theme
+
+        checked_theme(theme)
+        from ._presentation import display_resolved_run
+
+        display_resolved_run(self, show_details=show_details, theme=theme)
 
     def physics_results(self) -> tuple[dict[str, str], ...]:
         """Return the verified primary result as string-valued rows."""
 
+        self._verified_output(self.primary_csv)
+
         if self.mode == "q2d":
             root = self.receipt_path.parent.parent
-            spec = parse_aedt_spec(read_json(root / "aedt_spec.json"), base_dir=root)
+            spec = parse_aedt_spec(read_json(self._verified_spec()), base_dir=root)
             if not isinstance(spec, Q2dSpec):
                 raise RuntimeError("resolved Q2D result has a non-Q2D spec")
             rows, _ = read_q2d_rlgc_matrix(self.primary_csv, spec)
@@ -67,7 +114,7 @@ class ResolvedRun:
 
         if self.mode == "q3d":
             root = self.receipt_path.parent.parent
-            spec = parse_aedt_spec(read_json(root / "aedt_spec.json"), base_dir=root)
+            spec = parse_aedt_spec(read_json(self._verified_spec()), base_dir=root)
             if not isinstance(spec, Q3dSpec):
                 raise RuntimeError("resolved Q3D result has a non-Q3D spec")
             if not spec.solve_ac_rl:
@@ -88,13 +135,92 @@ class ResolvedRun:
     def simulation_benchmark(self) -> dict[str, Any]:
         """Return the receipt-bound execution summary for notebook display."""
 
-        receipt = read_json(self.receipt_path)
+        self._verified_output(self.project_path)
+        self._verified_output(self.primary_csv)
+        if self._execution_seconds is None:
+            raise RuntimeError("resolved execution duration is unavailable")
         return {
             "mode": self.mode,
-            "execution_seconds": receipt["execution_seconds"],
+            "execution_seconds": self._execution_seconds,
             "project_bytes": self.project_path.stat().st_size,
             "primary_csv_bytes": self.primary_csv.stat().st_size,
+            "benchmark": (
+                {"status": "not_recorded"}
+                if self.benchmark_path is None
+                else read_simulation_benchmark(
+                    self._verified_output(self.benchmark_path),
+                    self._setup_name,
+                )
+            ),
         }
+
+    def show_simulation_benchmark(
+        self, *, show_details: bool = False, theme: str = "light"
+    ) -> AedtBenchmarkReport:
+        """Return a notebook-displayable, offline view of native profile evidence."""
+        from scgsim._notebook_presentation import checked_theme
+
+        checked_theme(theme)
+        return AedtBenchmarkReport(self.simulation_benchmark(), show_details, theme)
+
+
+@dataclass(frozen=True)
+class AedtBenchmarkReport:
+    """Offline native benchmark view; ``data`` retains the complete profile tree."""
+
+    data: dict[str, Any]
+    show_details: bool = False
+    theme: str = "light"
+
+    def _ipython_display_(self) -> None:
+        from ._presentation import display_benchmark
+
+        display_benchmark(self.data, show_details=self.show_details, theme=self.theme)
+
+
+def _captured_fields(
+    receipt: dict[str, Any], outputs: dict[str, Any], spec: Any,
+    *, epr_result: EprResult | None = None,
+) -> dict[str, Any]:
+    """Keep the identities needed by later report reads without replaying a run."""
+
+    return {
+        "_output_hashes": tuple(sorted(outputs.items())),
+        "_spec_sha256": receipt["source"]["spec_sha256"],
+        "_execution_seconds": receipt.get("execution_seconds"),
+        "_setup_name": spec.run_control.setup_name,
+        "_epr_requested": isinstance(spec, HfssEprSpec) and spec.epr_request is not None,
+        "_epr_result": epr_result,
+    }
+
+
+def _resolved_adaptive_epr(
+    path: Path, spec: HfssEprSpec, convergence: dict[str, Any]
+) -> EprResult:
+    from ._epr_results import resolve_epr_result
+
+    result = resolve_epr_result(path)
+    requested_modes = (
+        tuple(range(1, spec.run_control.num_modes + 1))
+        if spec.epr_request is None or spec.epr_request.mode_indices is None
+        else spec.epr_request.mode_indices
+    )
+    if (
+        result.result_kind != "adaptive_history"
+        or result.setup_name != spec.run_control.setup_name
+        or result.provenance.get("model_source_sha256") != spec.geometry.model_sha256
+        or result.provenance.get("analysis_source_sha256") != spec.geometry.source_sha256
+        or tuple(result.provenance.get("requested_modes", ())) != requested_modes
+        or result.provenance.get("solver_last_completed_pass") != convergence["final_pass"]
+    ):
+        raise RuntimeError("adaptive EPR result differs from the completed source and setup")
+    if any(
+        row["mode"] not in requested_modes
+        or row["native_pass"] > convergence["final_pass"]
+        for row in result.rows
+    ):
+        raise RuntimeError("adaptive EPR rows exceed the requested modes or observed passes")
+    return result
 
 
 def resolve_results(run_dir: str | Path) -> ResolvedRun:
@@ -115,10 +241,6 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
     receipt_schema = receipt["schema_version"]
     if receipt_schema == RECEIPT_V1:
         _reject_legacy_v2_markers(root, receipt)
-    elif receipt_schema == RECEIPT_V2:
-        _validate_completion_cohort(root, receipt)
-    else:
-        _validate_completion_cohort(root, receipt)
     save = receipt.get("save")
     if (
         not isinstance(save, dict)
@@ -133,20 +255,44 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
     if not isinstance(source, dict) or source.get("spec") != "aedt_spec.json":
         raise RuntimeError("receipt source paths are not canonical")
     spec_path = _verified(root, "aedt_spec.json", source, "spec_sha256")
-    if mode == "q2d":
+    spec = parse_aedt_spec(read_json(spec_path), base_dir=root)
+    if receipt_schema in {RECEIPT_V2, RECEIPT_V3}:
+        _validate_completion_cohort(root, receipt, spec)
+    if isinstance(spec, HfssEprSpec):
+        expected_source = {
+            "spec",
+            "spec_sha256",
+            "planar_source_sha256",
+            "planar_model_sha256",
+        }
+        if set(source) != expected_source:
+            raise RuntimeError("body-first Eigenmode source members are not canonical")
+        if (
+            source["planar_source_sha256"] != spec.geometry.source_sha256
+            or source["planar_model_sha256"] != spec.geometry.model_sha256
+        ):
+            raise RuntimeError("body-first Eigenmode source identity differs")
+    elif mode == "q2d":
         if set(source) != {"spec", "spec_sha256"}:
             raise RuntimeError("Q2D receipt must not contain a GDS source")
     else:
         if source.get("gds") != "geometry/design.gds":
             raise RuntimeError("receipt GDS path is not canonical")
         _verified(root, "geometry/design.gds", source, "gds_sha256")
-    spec = parse_aedt_spec(read_json(spec_path), base_dir=root)
     if (
         mode not in {"terminal", "modal", "eigenmode", "q3d", "q2d"}
         or spec.mode != mode
     ):
         raise RuntimeError("AEDT receipt mode is invalid")
-    _validate_readback(root, receipt, spec)
+    if isinstance(spec, HfssEprSpec):
+        if receipt.get("workflow_status") != "completed":
+            raise RuntimeError("body-first Eigenmode receipt is not a completed solve")
+        if not isinstance(receipt.get("geometry"), dict) or not isinstance(
+            receipt.get("setup"), dict
+        ):
+            raise RuntimeError("body-first Eigenmode native readback is incomplete")
+    else:
+        _validate_readback(root, receipt, spec)
     if receipt_schema == RECEIPT_V3 and isinstance(
         spec, (HfssDrivenSpec, HfssEigenmodeSpec)
     ):
@@ -154,6 +300,7 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
     outputs = receipt.get("outputs")
     if not isinstance(outputs, dict):
         raise TypeError("completed receipt has no output hash manifest")
+    benchmark_path = _resolved_benchmark(root, receipt, outputs, spec.run_control.setup_name)
     project_relative = f"{spec.project_name}.aedt"
     if receipt.get("project") != project_relative:
         raise RuntimeError("completed receipt project path is not canonical")
@@ -172,6 +319,8 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
             project_relative,
             "results/q2d/rlgc_matrix.csv",
         }
+        if benchmark_path is not None:
+            expected.add(BENCHMARK_RELATIVE)
         if set(outputs) != expected:
             raise RuntimeError("Q2D output manifest is not canonical")
         return ResolvedRun(
@@ -182,9 +331,13 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
             None,
             receipt_path,
             convergence=receipt["convergence"],
+            benchmark_path=benchmark_path,
+            **_captured_fields(receipt, outputs, spec),
         )
     if mode == "q3d":
         expected = {project_relative, "results/q3d/c_matrix.csv"}
+        if benchmark_path is not None:
+            expected.add(BENCHMARK_RELATIVE)
         primary = "results/q3d/c_matrix.csv"
         if spec.solve_ac_rl:
             expected.update(
@@ -206,15 +359,99 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
             None,
             receipt_path,
             convergence=receipt["convergence"],
+            benchmark_path=benchmark_path,
+            **_captured_fields(receipt, outputs, spec),
         )
     if mode == "eigenmode":
+        if isinstance(spec, HfssEprSpec):
+            saved_manifest = "saved-solution-manifest.json"
+            saved_receipt = "metadata/saved-solution-receipt.json"
+            expected = {
+                project_relative,
+                "results/epr/eigenmodes.csv",
+                "results/epr/eigenmodes.eig",
+                "results/epr/adaptive-convergence.prop",
+                "results/epr/adaptive-mode-history.json",
+            }
+            if benchmark_path is not None:
+                expected.add(BENCHMARK_RELATIVE)
+            if spec.epr_request is not None:
+                expected.add("results/epr/adaptive-epr-result.json")
+                saved_summary = receipt.get("saved_solution")
+                if isinstance(saved_summary, dict) and saved_summary.get(
+                    "status"
+                ) == "complete":
+                    from ._epr_results import resolve_saved_solution
+
+                    saved = resolve_saved_solution(root / saved_manifest)
+                    expected_saved_summary = {
+                        "status": "complete",
+                        "manifest": saved_manifest,
+                        "manifest_sha256": file_sha256(root / saved_manifest),
+                        "receipt": saved_receipt,
+                        "receipt_sha256": file_sha256(root / saved_receipt),
+                        "content_sha256": saved.content_sha256,
+                        "identity": dict(saved.identity),
+                        "member_count": len(saved.members),
+                    }
+                    if saved_summary != expected_saved_summary:
+                        raise RuntimeError(
+                            "completed EPR saved-solution binding is invalid"
+                        )
+                    expected.update({saved_manifest, saved_receipt})
+                elif not (
+                    isinstance(saved_summary, dict)
+                    and saved_summary.get("status") == "unavailable"
+                    and isinstance(saved_summary.get("error"), str)
+                    and saved_summary["error"]
+                ):
+                    raise RuntimeError(
+                        "completed EPR run lacks an explicit saved-solution status"
+                    )
+            if set(outputs) != expected:
+                raise RuntimeError(
+                    "body-first Eigenmode output manifest is not canonical"
+                )
+            _verified(root, "results/epr/adaptive-convergence.prop", outputs)
+            _verified(root, "results/epr/adaptive-mode-history.json", outputs)
+            if receipt.get("convergence") != read_hfss_convergence(
+                root,
+                spec,
+                historical_profile=_eigenmode_convergence_source(receipt)
+                == "profile",
+            ):
+                raise RuntimeError("body-first Eigenmode convergence evidence is invalid")
+            adaptive_result = (
+                None if spec.epr_request is None else _resolved_adaptive_epr(
+                    _verified(root, "results/epr/adaptive-epr-result.json", outputs),
+                    spec,
+                    receipt["convergence"],
+                )
+            )
+            return ResolvedRun(
+                "eigenmode",
+                project,
+                _verified(root, "results/epr/eigenmodes.csv", outputs),
+                None,
+                _verified(root, "results/epr/eigenmodes.eig", outputs),
+                receipt_path,
+                convergence=receipt["convergence"],
+                benchmark_path=benchmark_path,
+                **_captured_fields(receipt, outputs, spec, epr_result=adaptive_result),
+            )
         expected = {
             project_relative,
             "results/eigenmode/eigenmodes.csv",
             "results/eigenmode/eigenmodes.eig",
         }
+        if benchmark_path is not None:
+            expected.add(BENCHMARK_RELATIVE)
+        if _eigenmode_convergence_source(receipt) == "export_convergence":
+            expected.add("results/eigenmode/adaptive-convergence.prop")
         if set(outputs) != expected:
             raise RuntimeError("Eigenmode output manifest is not canonical")
+        if "results/eigenmode/adaptive-convergence.prop" in expected:
+            _verified(root, "results/eigenmode/adaptive-convergence.prop", outputs)
         return ResolvedRun(
             "eigenmode",
             project,
@@ -223,6 +460,8 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
             _verified(root, "results/eigenmode/eigenmodes.eig", outputs),
             receipt_path,
             convergence=receipt["convergence"],
+            benchmark_path=benchmark_path,
+            **_captured_fields(receipt, outputs, spec),
         )
     result_stem = "terminal_st" if mode == "terminal" else "modal_s"
     expected = {
@@ -230,6 +469,8 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
         f"results/{mode}/{result_stem}.csv",
         f"results/{mode}/{mode}.s2p",
     }
+    if benchmark_path is not None:
+        expected.add(BENCHMARK_RELATIVE)
     if set(outputs) != expected:
         raise RuntimeError("terminal output manifest is not canonical")
     return ResolvedRun(
@@ -240,7 +481,26 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
         None,
         receipt_path,
         convergence=receipt["convergence"],
+        benchmark_path=benchmark_path,
+        **_captured_fields(receipt, outputs, spec),
     )
+
+
+def _resolved_benchmark(
+    root: Path, receipt: dict[str, Any], outputs: dict[str, Any], setup_name: str
+) -> Path | None:
+    marker = receipt.get("benchmark")
+    if marker is None:
+        if BENCHMARK_RELATIVE in outputs:
+            raise RuntimeError("benchmark output lacks a receipt binding")
+        return None
+    if not isinstance(marker, dict) or set(marker) != {"status", "path"} or marker["path"] != BENCHMARK_RELATIVE:
+        raise RuntimeError("benchmark receipt binding is invalid")
+    path = _verified(root, BENCHMARK_RELATIVE, outputs)
+    payload = read_simulation_benchmark(path, setup_name)
+    if marker["status"] != payload["status"]:
+        raise RuntimeError("benchmark receipt status differs from its artifact")
+    return path
 
 
 def _contained(root: Path, relative: str) -> Path:
@@ -273,7 +533,9 @@ def _reject_legacy_v2_markers(root: Path, receipt: dict[str, Any]) -> None:
             raise RuntimeError("legacy receipt conflicts with v2 expectation markers")
 
 
-def _validate_completion_cohort(root: Path, receipt: dict[str, Any]) -> None:
+def _validate_completion_cohort(
+    root: Path, receipt: dict[str, Any], spec: Any
+) -> None:
     """Verify the immutable preparation cohort and complete execution provenance."""
     receipt_schema = receipt.get("schema_version")
     if receipt_schema not in {RECEIPT_V2, RECEIPT_V3}:
@@ -293,13 +555,20 @@ def _validate_completion_cohort(root: Path, receipt: dict[str, Any]) -> None:
         )
     metadata = read_json(metadata_path)
     manifest = read_json(manifest_path)
+    epr = isinstance(spec, HfssEprSpec)
+    expected_manifest_schema = (
+        "scgsim.aedt.handoff-manifest.v2"
+        if epr
+        else "scgsim.aedt.handoff-manifest.v1"
+    )
     if (
         not isinstance(metadata, dict)
-        or metadata.get("schema_version") != "scgsim.aedt.handoff.v1"
+        or metadata.get("schema_version")
+        != ("scgsim.aedt.handoff.v2" if epr else "scgsim.aedt.handoff.v1")
         or metadata.get("status") != "prepared"
         or metadata.get("mode") != mode
         or not isinstance(manifest, dict)
-        or manifest.get("schema_version") != "scgsim.aedt.handoff-manifest.v1"
+        or manifest.get("schema_version") != expected_manifest_schema
     ):
         raise RuntimeError(f"completed {version} preparation cohort is invalid")
 
@@ -307,8 +576,10 @@ def _validate_completion_cohort(root: Path, receipt: dict[str, Any]) -> None:
         "spec": "aedt_spec.json",
         "receipt": "metadata/aedt_run_receipt.json",
     }
-    if mode != "q2d":
+    if mode != "q2d" and not epr:
         expected_files["gds"] = "geometry/design.gds"
+    if epr and metadata.get("workflow") not in {"body_first_eigenmode", "epr"}:
+        raise RuntimeError("body-first Eigenmode preparation workflow is invalid")
     if metadata.get("files") != expected_files:
         raise RuntimeError(f"completed {version} preparation file map is not canonical")
 
@@ -354,7 +625,7 @@ def _validate_completion_cohort(root: Path, receipt: dict[str, Any]) -> None:
         raise RuntimeError(f"completed {version} preparation hash bindings are invalid")
 
     expected_paths = ["run_aedt.sh", "aedt_spec.json"]
-    if mode != "q2d":
+    if mode != "q2d" and not epr:
         expected_paths.append("geometry/design.gds")
     expected_paths += [
         "metadata/aedt_handoff_metadata.json",
@@ -732,8 +1003,27 @@ def _validate_hfss_setup_and_convergence(
         }
     if receipt.get("setup") != {"name": spec.run_control.setup_name, "native": native}:
         raise RuntimeError("HFSS native setup evidence is invalid")
-    if receipt.get("convergence") != read_hfss_convergence(root, spec):
+    historical_profile = (
+        _eigenmode_convergence_source(receipt) == "profile"
+        if isinstance(spec, HfssEigenmodeSpec)
+        else False
+    )
+    if receipt.get("convergence") != read_hfss_convergence(
+        root, spec, historical_profile=historical_profile
+    ):
         raise RuntimeError("HFSS native convergence evidence is invalid")
+
+
+def _eigenmode_convergence_source(receipt: dict[str, Any]) -> str:
+    convergence = receipt.get("convergence")
+    sources = convergence.get("sources") if isinstance(convergence, dict) else None
+    if not isinstance(sources, dict):
+        raise RuntimeError("Eigenmode convergence sources are invalid")
+    if set(sources) == {"export_convergence"}:
+        return "export_convergence"
+    if set(sources) == {"asol", "profile"}:
+        return "profile"
+    raise RuntimeError("Eigenmode convergence sources are not canonical")
 
 
 def _validate_q2d_readback(root: Path, receipt: dict[str, Any], spec: Q2dSpec) -> None:

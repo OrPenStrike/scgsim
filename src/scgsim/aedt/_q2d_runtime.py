@@ -10,16 +10,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ._benchmark import attach_simulation_benchmark
 from ._matrix_export import read_q2d_rlgc_matrix
 from ._native_common import (
     BoundAedtRequest,
+    analyze_with_resources,
     detached_data,
     native_object_property as _native_object_property,
     pyaedt_version as _pyaedt_version,
     saved_setup_properties as _saved_setup_properties,
 )
 from ._q2d_convergence import read_q2d_convergence
-from .spec import REQUIRED_AEDT_VERSION, Q2dSpec
+from .spec import AedtResources, REQUIRED_AEDT_VERSION, Q2dSpec
 from .util import file_sha256
 
 
@@ -42,11 +44,18 @@ class PreparedQ2d:
             object.__setattr__(self, name, detached_data(getattr(self, name)))
 
 
-def run_q2d(Q2d: Any, run_dir: Path, spec: Q2dSpec) -> dict[str, Any]:
+def run_q2d(
+    Q2d: Any, run_dir: Path, spec: Q2dSpec,
+    resources: AedtResources | None = None,
+    resource_evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Use the same preparation stage as diagnostics, then solve and export."""
     prepared = prepare_q2d(Q2d, run_dir, spec)
-    solve_q2d(prepared)
-    return export_q2d(prepared)
+    solve_q2d(prepared, resources, resource_evidence)
+    result = export_q2d(prepared)
+    return attach_simulation_benchmark(
+        result, prepared.app, run_dir, spec.run_control.setup_name
+    )
 
 
 def prepare_q2d(Q2d: Any, run_dir: Path, spec: Q2dSpec) -> PreparedQ2d:
@@ -85,12 +94,18 @@ def prepare_q2d(Q2d: Any, run_dir: Path, spec: Q2dSpec) -> PreparedQ2d:
     )
 
 
-def solve_q2d(prepared: PreparedQ2d) -> None:
+def solve_q2d(
+    prepared: PreparedQ2d, resources: AedtResources | None = None,
+    resource_evidence: dict[str, Any] | None = None,
+) -> None:
     """Run the one explicit Q2D setup solve."""
     spec = prepared.request.parse()
     if not isinstance(spec, Q2dSpec):
         raise TypeError("bound Q2D request did not retain a Q2D spec")
-    if not prepared.app.analyze_setup(name=spec.run_control.setup_name, blocking=True):
+    if not analyze_with_resources(
+        prepared.app, spec.run_control.setup_name, prepared.request.workspace,
+        resources, resource_evidence if resource_evidence is not None else {},
+    ):
         raise RuntimeError(
             f"Q2D failed to analyze setup {spec.run_control.setup_name!r}"
         )

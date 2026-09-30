@@ -46,6 +46,31 @@ _REQUIRED_OUTPUT_FAMILIES = {
 }
 
 
+def _output_families(problem: str, config: dict[str, Any]) -> tuple[str, ...]:
+    families = _REQUIRED_OUTPUT_FAMILIES.get(problem)
+    if families is None:
+        raise ValueError("unsupported problem")
+    if problem != "Eigenmode":
+        return families
+    boundaries = config.get("Boundaries")
+    if not isinstance(boundaries, dict):
+        raise TypeError("Eigenmode config Boundaries must be a JSON object")
+    ports = boundaries.get("LumpedPort", [])
+    postprocessing = boundaries.get("Postprocessing", {})
+    if not isinstance(ports, list) or not isinstance(postprocessing, dict):
+        raise TypeError("Eigenmode boundaries have invalid postprocessing or ports")
+    surfaces = postprocessing.get("Dielectric", [])
+    if not isinstance(surfaces, list):
+        raise TypeError("Eigenmode dielectric postprocessing must be a list")
+    return (
+        "eig",
+        *(("port-EPR", "port-I", "port-V") if ports else ()),
+        "domain-E",
+        *(("surface-Q",) if surfaces else ()),
+        "error-indicators",
+    )
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -77,11 +102,9 @@ def _mask_outputs_configured(root: Path) -> bool:
 
 
 def _required_output_paths(
-    problem: str, log_path: str | None, *, masks_configured: bool = False
+    problem: str, log_path: str | None, *, config: dict[str, Any], masks_configured: bool = False
 ) -> list[str]:
-    families = _REQUIRED_OUTPUT_FAMILIES.get(problem)
-    if not families:
-        raise ValueError("unsupported problem")
+    families = _output_families(problem, config)
     paths = [f"results/palace/{family}.csv" for family in families]
     if masks_configured:
         paths.extend(
@@ -97,11 +120,13 @@ def _required_output_paths(
 
 
 def _iteration_output_paths(
-    root: Path, problem: str, *, masks_configured: bool = False
+    root: Path, problem: str, *, config: dict[str, Any] | None = None, masks_configured: bool = False
 ) -> list[str]:
-    families = _REQUIRED_OUTPUT_FAMILIES.get(problem)
-    if not families:
-        raise ValueError("unsupported problem")
+    families = (
+        _output_families(problem, config)
+        if config is not None
+        else _REQUIRED_OUTPUT_FAMILIES[problem]
+    )
     results = root / "results" / "palace"
     if not results.is_dir():
         return []
@@ -300,11 +325,12 @@ def main() -> int:
     runtime_compatibility = _runtime_compatibility(root, handoff_metadata)
     compatibility_required = _compatibility_required(handoff_metadata)
     masks_configured = _mask_outputs_configured(root)
+    config = _read_json(root / "config.json")
     output_paths = [
         *_required_output_paths(
-            problem, args.log_path, masks_configured=masks_configured
+            problem, args.log_path, config=config, masks_configured=masks_configured
         ),
-        *_iteration_output_paths(root, problem, masks_configured=masks_configured),
+        *_iteration_output_paths(root, problem, config=config, masks_configured=masks_configured),
         *(
             [RUNTIME_COMPATIBILITY_PATH]
             if compatibility_required is not None

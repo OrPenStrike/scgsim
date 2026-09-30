@@ -13,13 +13,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from scgsim.sgb import VacuumRegionSpec
+from scgsim.sgb import VacuumRegionSpec, apply_vacuum_region_to_stack
+from scgsim.sgb.models import GeometryBuildInput
 from scgsim.sgb.ground_bumps import _prepare_indium_ground_bump_fill
 
 from ._staged import (
     RouteAThinFilm,
     apply_route_a_thin_film_to_stack,
-    apply_vacuum_region_to_stack,
 )
 
 
@@ -41,6 +41,7 @@ def prepare_mesh_input(
     route_a_thin_film: RouteAThinFilm | None,
     vacuum_region: VacuumRegionSpec | None,
     indium_ground_bumps: Mapping[str, Any] | None,
+    build_input: GeometryBuildInput | None = None,
 ) -> PreparedMeshInput:
     """Apply the common transforms while preserving their established order."""
     prepared_stack = stack
@@ -52,6 +53,7 @@ def prepare_mesh_input(
             source_stack=stack,
             variant=route_a_thin_film,
             component=component,
+            build_input=build_input,
         )
     indium_fill = None
     prepared_component = component

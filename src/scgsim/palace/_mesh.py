@@ -79,6 +79,7 @@ def build_route_mesh(
     max_mesh_size: float = 300.0,
     port_sheet_source_layers: Sequence[Mapping[str, Any]] = (),
     indium_ground_bump_fill: Mapping[str, Any] | None = None,
+    source_gds_bytes: bytes | None = None,
 ) -> MeshBuildResult:
     """Lower Route-A/Route-B SGB geometry, mesh it, and emit artifacts."""
 
@@ -119,8 +120,22 @@ def build_route_mesh(
     manifest_path = run_dir / "metadata" / "mesh_manifest.json"
     provenance_path = run_dir / "metadata" / f"route_{route.lower()}_provenance.json"
 
-    _write_component_gds(component=component, path=gds_path)
-    top_cell = _component_gds_top_cell_name(component=component, gds_path=gds_path)
+    if source_gds_bytes is None:
+        if component is None:
+            raise ValueError("component or immutable plan GDS source is required")
+        _write_component_gds(component=component, path=gds_path)
+        top_cell = _component_gds_top_cell_name(component=component, gds_path=gds_path)
+    else:
+        if component is not None or not isinstance(source_gds_bytes, bytes):
+            raise TypeError("plan GDS bytes cannot be mixed with a live component")
+        wanted = stack.get("metadata", {}).get("gds_sha256")
+        observed = hashlib.sha256(source_gds_bytes).hexdigest()
+        if wanted != observed:
+            raise ValueError("plan GDS bytes differ from paired stack source")
+        top_cell = stack.get("metadata", {}).get("top_cell_name")
+        if not isinstance(top_cell, str) or not top_cell:
+            raise ValueError("plan stack requires top_cell_name")
+        gds_path.write_bytes(source_gds_bytes)
     stack_path.write_text(json.dumps(dict(stack), indent=2) + "\n", encoding="utf-8")
     from scgsim.sgb import SemanticGeometryBuilder, build_gds_stack_geometry_input
 
@@ -1551,12 +1566,13 @@ def _with_port_sheet_metadata(
     existing = metadata.get("port_sheet_source_layers")
     if existing not in (None, [], ()) and records:
         raise ValueError("stack already defines port_sheet_source_layers.")
-    if records:
+    effective_records = records if records else existing or ()
+    if effective_records:
         layers = payload.get("layers")
         if not isinstance(layers, list):
             raise TypeError("stack layers must be a list for authored port sheets.")
         rewritten_layers = list(layers)
-        for record in records:
+        for record in effective_records:
             if not isinstance(record, Mapping):
                 raise TypeError("port-sheet source records must be mappings.")
             target_layer = record.get("target_layer")
@@ -1600,7 +1616,7 @@ def _with_port_sheet_metadata(
                 rewritten["geometry"] = rewritten_geometry
                 rewritten_layers[index] = rewritten
         payload["layers"] = rewritten_layers
-        metadata["port_sheet_source_layers"] = copy.deepcopy(list(records))
+        metadata["port_sheet_source_layers"] = copy.deepcopy(list(effective_records))
     payload["metadata"] = metadata
     return payload
 

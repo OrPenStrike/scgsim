@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from numbers import Real
 from pathlib import Path
 from typing import Any, Literal
 
 from scgsim._mesh_quality import MeshQualityReport, check_mesh_quality
-from scgsim.sgb import VacuumRegionSpec
+from scgsim.sgb import (
+    GeometryPlanSnapshot, InputSummary, VacuumRegionSpec,
+    summarize_geometry_input,
+)
 from ._config import (
     _MODEL_L0_M,
     LayoutPortBinding,
@@ -34,6 +37,7 @@ from ._inputs import (
 )
 from ._workflow import persist_problem_files, prepare_mesh_input
 from .handoff import HandoffPlan, prepare_handoff
+from ._epr_results import PalaceEprResult, reanalyze_epr, show_epr
 
 
 @dataclass(frozen=True)
@@ -55,6 +59,7 @@ class EigenmodeSim:
     route_a_thin_film: RouteAThinFilm | None = None
     ports: list[_RequestedPort] = field(default_factory=list)
     surface_epr_specs: dict[str, dict[str, Any]] | None = None
+    epr_request: dict[str, tuple[str, ...] | None] | None = None
     num_modes: int = 10
     target_hz: float | None = None
     eigenmode_tolerance: float = 1e-6
@@ -67,6 +72,20 @@ class EigenmodeSim:
     _mesh_result: MeshBuildResult | None = field(default=None, init=False)
     config_path: Path | None = field(default=None, init=False)
     handoff_plan: HandoffPlan | None = field(default=None, init=False)
+    _plan_snapshot: GeometryPlanSnapshot | None = field(default=None, init=False, repr=False)
+
+    @staticmethod
+    def reanalyze_epr(
+        result: PalaceEprResult,
+        *,
+        surface_defaults: Mapping[str, Mapping[str, Any]] | None = None,
+        group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> PalaceEprResult:
+        return reanalyze_epr(result, surface_defaults=surface_defaults, group_overrides=group_overrides)
+
+    @staticmethod
+    def show_epr(result: PalaceEprResult, *, mode: int | None = None) -> Any:
+        return show_epr(result, mode=mode)
 
     def _invalidate_mesh(self) -> None:
         self._mesh_result = None
@@ -79,12 +98,66 @@ class EigenmodeSim:
         self.handoff_plan = None
 
     def set_geometry(self, component: Any) -> None:
+        if self._plan_snapshot is not None:
+            raise ValueError("GeometryPlan owns the paired source; use set_plan(new_snapshot) or a new Sim")
         if component is None or not callable(getattr(component, "write_gds", None)):
             raise TypeError("component must provide write_gds(path).")
         self.component = component
+        self._plan_snapshot = None
         self._invalidate_mesh()
 
+    def set_plan(self, snapshot: GeometryPlanSnapshot) -> None:
+        """Consume one detached source/stack pair from a notebook GeometryPlan."""
+        if not isinstance(snapshot, GeometryPlanSnapshot):
+            raise TypeError("set_plan requires a GeometryPlanSnapshot")
+        if "VACUUM_REGION" in snapshot.stack["solution_regions"] and (
+            self.vacuum_region is not None or self.airbox
+        ):
+            raise ValueError("GeometryPlan owns the outer vacuum envelope")
+        trial = EigenmodeSim()
+        trial.set_stack(snapshot.stack)
+        self.component = None
+        self.stack = trial.stack
+        self._materials = trial._materials
+        self._plan_snapshot = snapshot
+        self._invalidate_mesh()
+
+    def input_summary(self) -> InputSummary:
+        """Show the bound Plan source and Palace settings before mesh work."""
+
+        if self._plan_snapshot is None:
+            raise ValueError(
+                "input_summary requires a bound GeometryPlan snapshot; normalize "
+                "a raw Component explicitly first"
+            )
+        data = summarize_geometry_input(
+            self._plan_snapshot.geometry_input,
+            prepared_stack=self._plan_snapshot.stack,
+        ).data
+        data["backend"] = {
+            "name": "palace",
+            "route": self.route,
+            "route_a_thin_film": self.route_a_thin_film,
+            "airbox": self.airbox,
+            "ports": [
+                {"name": item.name, "layer": item.layer,
+                 "inductance_h": item.inductance}
+                for item in self.ports
+            ],
+            "surface_epr_specs": self.surface_epr_specs,
+            "epr_request": self.epr_request,
+            "num_modes": self.num_modes,
+            "target_hz": self.target_hz,
+            "eigenmode_tolerance": self.eigenmode_tolerance,
+            "save_fields": self.save_fields,
+            "numerical": self.numerical,
+            "indium_ground_bumps": self.indium_ground_bumps,
+        }
+        return InputSummary(data)
+
     def set_stack(self, stack: Mapping[str, Any] | str | Path) -> None:
+        if self._plan_snapshot is not None:
+            raise ValueError("GeometryPlan owns the paired source; use set_plan(new_snapshot) or a new Sim")
         payload = _load_stack(stack)
         materials = payload.get("materials")
         if not isinstance(materials, Mapping) or not materials:
@@ -101,6 +174,7 @@ class EigenmodeSim:
         _validate_stack_material_kinds(payload, resolved)
         self.stack = payload
         self._materials = resolved
+        self._plan_snapshot = None
         self._invalidate_mesh()
 
     def set_output_dir(self, path: str | Path) -> None:
@@ -117,6 +191,8 @@ class EigenmodeSim:
         z_above: float | None = None,
         z_below: float | None = None,
     ) -> None:
+        if self._plan_snapshot is not None and "VACUUM_REGION" in self._plan_snapshot.stack["solution_regions"]:
+            raise ValueError("GeometryPlan owns the outer vacuum envelope")
         if self.vacuum_region is not None:
             raise ValueError(
                 "set_airbox is mutually exclusive with set_vacuum_region()."
@@ -137,6 +213,8 @@ class EigenmodeSim:
         padding: float | list[float] | tuple[float, ...] | Mapping[str, Any] = 0.0,
     ) -> None:
         """Set six-direction padding for a route-aware generated vacuum region."""
+        if self._plan_snapshot is not None and "VACUUM_REGION" in self._plan_snapshot.stack["solution_regions"]:
+            raise ValueError("GeometryPlan owns the outer vacuum envelope")
         if self.airbox:
             raise ValueError(
                 "set_vacuum_region is mutually exclusive with set_airbox()."
@@ -204,6 +282,38 @@ class EigenmodeSim:
             )
         )
         self._invalidate_mesh()
+
+    def set_epr_request(
+        self,
+        *,
+        surface_interfaces: Sequence[str] | None = None,
+        bulk_domain_ids: Sequence[str] | None = None,
+        port_names: Sequence[str] | None = None,
+    ) -> None:
+        """Select reported EPR quantities without changing the physical solve."""
+
+        def selected(values: Sequence[str] | None, name: str) -> tuple[str, ...] | None:
+            if values is None:
+                return None
+            if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
+                raise TypeError(f"{name} must be a sequence of IDs or None")
+            normalized = tuple(values)
+            if any(not isinstance(value, str) or not value for value in normalized):
+                raise ValueError(f"{name} must contain non-empty text IDs")
+            if len(normalized) != len(set(normalized)):
+                raise ValueError(f"{name} must not repeat IDs")
+            return normalized
+
+        surfaces = selected(surface_interfaces, "surface_interfaces")
+        if surfaces is not None and set(surfaces) - {"MA", "MS", "SA"}:
+            raise ValueError("surface_interfaces supports only MA, MS, and SA")
+        request = {
+            "surface_interfaces": surfaces,
+            "bulk_domain_ids": selected(bulk_domain_ids, "bulk_domain_ids"),
+            "port_names": selected(port_names, "port_names"),
+        }
+        self.epr_request = request
+        self._invalidate_config()
 
     def set_eigenmode(
         self,
@@ -315,15 +425,64 @@ class EigenmodeSim:
 
     def mesh(self) -> Path:
         self._invalidate_mesh()
-        if self.component is None or self.stack is None or self.output_dir is None:
+        if (self.component is None and self._plan_snapshot is None) or self.stack is None or self.output_dir is None:
             raise ValueError(
                 "set_geometry(), set_stack(), and set_output_dir() must run before mesh()."
             )
-        if self.surface_epr_specs is None:
-            raise ValueError("set_surface_epr() must run before mesh().")
-        if not self.ports:
-            raise ValueError("add_port(..., layout_sheet=True) must run before mesh().")
-        resolved, source_records = _resolve_layout_ports(self.component, self.ports)
+        if self._plan_snapshot is not None:
+            if self.indium_ground_bumps is not None and self.indium_ground_bumps["fill"]:
+                raise ValueError("GeometryPlan source already owns its geometry; add authored bumps before prepare()")
+            available_records = self._plan_snapshot.stack["metadata"].get(
+                "port_sheet_source_layers", ()
+            )
+            available = {record["name"]: record for record in available_records}
+            if len(available) != len(available_records):
+                raise ValueError("GeometryPlan port names must be unique")
+            resolved, source_records = [], []
+            for requested in self.ports:
+                record = available.get(requested.name)
+                if record is None or record["target_layer"] != requested.layer:
+                    raise ValueError(f"GeometryPlan has no matching authored port {requested.name!r}")
+                resolved.append(LayoutPortBinding(
+                    index=len(resolved) + 1, name=requested.name,
+                    target_layer=requested.layer,
+                    source_layer=f"{record['layer']}/{record['datatype']}",
+                    direction=tuple(record["direction"]),
+                    inductance=requested.inductance,
+                ))
+                source_records.append({**record, "port_index": len(resolved)})
+            source_stack = self._plan_snapshot.stack
+            source_stack["metadata"].pop("port_sheet_source_layers", None)
+            prepared = prepare_mesh_input(
+                component=None,
+                stack=source_stack,
+                route=self.route,
+                route_a_thin_film=self.route_a_thin_film,
+                vacuum_region=(
+                    None if "VACUUM_REGION" in source_stack["solution_regions"]
+                    else self.vacuum_region
+                ),
+                indium_ground_bumps=None,
+                build_input=self._plan_snapshot.geometry_input,
+            )
+            if prepared.materials is not None:
+                self._materials = prepared.materials
+            self._mesh_result = build_route_mesh(
+                component=None,
+                stack=apply_airbox_to_stack(prepared.stack, self.airbox),
+                route=self.route,
+                output_dir=self.output_dir,
+                refined_mesh_size=self.numerical["refined_mesh_size"],
+                max_mesh_size=self.numerical["max_mesh_size"],
+                port_sheet_source_layers=source_records,
+                source_gds_bytes=self._plan_snapshot.gds_bytes,
+            )
+            self._resolved_ports = resolved
+            return self._mesh_result.mesh_path
+        resolved, source_records = (
+            _resolve_layout_ports(self.component, self.ports)
+            if self.ports else ([], [])
+        )
         prepared = prepare_mesh_input(
             component=self.component,
             stack=self.stack,
@@ -361,12 +520,8 @@ class EigenmodeSim:
         if (
             self._mesh_result is None
             or self._materials is None
-            or self.surface_epr_specs is None
-            or not self._resolved_ports
         ):
-            raise ValueError(
-                "set_stack(), set_surface_epr(), add_port(), and mesh() are required."
-            )
+            raise ValueError("set_stack() and mesh() are required.")
         if not self._mesh_result.mesh_path.is_file():
             raise FileNotFoundError(
                 "current palace.msh is missing; mesh() must be rerun."
@@ -375,7 +530,7 @@ class EigenmodeSim:
             groups=self._mesh_result.groups,
             ports=self._resolved_ports,
             materials=self._materials,
-            surface_epr_specs=self.surface_epr_specs,
+            surface_epr_specs=self.surface_epr_specs or {},
             numerical=self.numerical,
             num_modes=self.num_modes,
             target_hz=self.target_hz,
@@ -383,13 +538,42 @@ class EigenmodeSim:
             save_fields=self.save_fields,
             mesh_path=self._mesh_result.mesh_path,
         )
+        request = self.epr_request
+        if request is not None:
+            available = {
+                "surface_interfaces": {
+                    item["metadata"]["interface_type"] for item in result.index_entries
+                    if item["section"] == "Boundaries.Postprocessing.Dielectric"
+                },
+                "bulk_domain_ids": {
+                    item["entry_name"] for item in result.index_entries
+                    if item["section"] == "Domains.Postprocessing.Energy"
+                },
+                "port_names": {
+                    item["port_name"] for item in result.index_entries
+                    if item["section"] == "Boundaries.LumpedPort"
+                },
+            }
+            for name, configured in available.items():
+                chosen = request[name]
+                if chosen is not None and set(chosen) - configured:
+                    raise ValueError(f"EPR request selects an unknown {name} binding")
+        index_payload = {"schema_version": 1, "entries": result.index_entries}
+        if request is not None:
+            index_payload["epr_request"] = {
+                "schema_version": "scgsim.palace.epr-selection.v1",
+                **{
+                    name: None if values is None else list(values)
+                    for name, values in request.items()
+                },
+            }
         metadata = self._mesh_result.output_dir / "metadata"
         config_path = self._mesh_result.output_dir / "config.json"
         self.config_path = persist_problem_files(
             metadata_files=(
                 (
                     metadata / "palace_index_map.json",
-                    {"schema_version": 1, "entries": result.index_entries},
+                    index_payload,
                 ),
                 (
                     metadata / "palace_material_resolution.json",

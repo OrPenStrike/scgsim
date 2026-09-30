@@ -487,6 +487,89 @@ def apply_thin_film_profile(
     return work
 
 
+def apply_thin_film_profile_with_provenance(
+    stack: Mapping[str, Any],
+    *,
+    profile: str,
+    facts: Mapping[str, Any],
+    source_revision: str,
+) -> Mapping[str, Any]:
+    """Apply one Route-A profile and record its effective physical coordinates."""
+
+    normalized = normalize_optional_profile(profile)
+    if normalized is None:
+        raise ValueError("Route A profile is required")
+    if not isinstance(source_revision, str) or not source_revision.startswith("sha256:"):
+        raise ValueError("Route A source revision must be a sha256 identity")
+    work = dict(apply_thin_film_profile(stack, profile=normalized, facts=facts))
+    metadata = work.get("metadata", {})
+    if not isinstance(metadata, Mapping):
+        raise TypeError("stack metadata must be a mapping")
+    if "route_a_thin_film" in metadata:
+        raise ValueError("stack already defines route_a_thin_film provenance")
+    face_ranges = facts["physical_face_metal_z_ranges_um"]
+    if len(face_ranges) == 1:
+        side = next(iter(face_ranges))
+        provenance = {
+            "schema_version": 1,
+            "variant": normalized,
+            "source_stack": {
+                "revision": source_revision,
+                "sha256": source_revision.removeprefix("sha256:"),
+            },
+            "host_solution_volume_id": facts["host_solution_volume_id"],
+            **(
+                {"host_reference_origin": facts["host_reference_origin"]}
+                if "host_reference_origin" in facts
+                else {}
+            ),
+            "physical_substrate_z_ranges_um": facts[
+                "physical_substrate_z_ranges_um"
+            ],
+            "physical_face_metal_z_ranges_um": face_ranges,
+            "effective_sheet_z_um": {side: facts["physical_face_z_um"]},
+            "collapsed_thickness_um": 0.0,
+        }
+    else:
+        collapsed = (
+            facts["lower_metal_thickness_um"]
+            + facts["upper_metal_thickness_um"]
+            if normalized == "metal_gap_equivalent"
+            else 0.0
+        )
+        effective_gap = facts["physical_substrate_face_gap_um"] - collapsed
+        provenance = {
+            "schema_version": 1,
+            "variant": normalized,
+            "source_stack": {
+                "revision": source_revision,
+                "sha256": source_revision.removeprefix("sha256:"),
+            },
+            "host_solution_volume_id": facts["host_solution_volume_id"],
+            **(
+                {"host_reference_origin": facts["host_reference_origin"]}
+                if "host_reference_origin" in facts
+                else {}
+            ),
+            "physical_substrate_z_ranges_um": facts[
+                "physical_substrate_z_ranges_um"
+            ],
+            "physical_face_metal_z_ranges_um": face_ranges,
+            "physical_substrate_face_gap_um": facts[
+                "physical_substrate_face_gap_um"
+            ],
+            "physical_metal_gap_um": facts["physical_metal_gap_um"],
+            "effective_sheet_z_um": {
+                "lower": facts["lower_substrate_face_z_um"],
+                "upper": facts["lower_substrate_face_z_um"] + effective_gap,
+            },
+            "effective_gap_um": effective_gap,
+            "collapsed_thickness_um": collapsed,
+        }
+    work["metadata"] = {**dict(metadata), "route_a_thin_film": provenance}
+    return work
+
+
 def map_stack_z_ranges(stack: dict[str, Any], facts: Mapping[str, Any]) -> None:
     for section in ("solution_regions", "layers"):
         records = stack.get(section)

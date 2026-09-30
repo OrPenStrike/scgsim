@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from collections.abc import Mapping, Sequence
-from math import isfinite, sqrt
+from dataclasses import replace
+from math import cos, isfinite, sin, sqrt
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any
@@ -17,7 +19,7 @@ from scgsim.sgb.models import (
     PortSheetRegionRecord,
     SemanticEntitySpec,
 )
-from scgsim.sgb.stack import build_component_stack
+from scgsim.sgb.stack import build_component_stack, _gds_layer
 
 if TYPE_CHECKING:
     from gdsfactory import Component
@@ -113,6 +115,115 @@ def build_gds_stack_geometry_input(
     )
     cell_bounds = _cell_bounds_um(cell)
     polygons_by_layer = _polygons_by_layer(cell)
+    if stack_metadata.get("component_semantics_schema_version") == 2:
+        if stack_metadata.get("gds_sha256") != hashlib.sha256(gds_path.read_bytes()).hexdigest():
+            raise ValueError("GeometryPlan GDS identity differs from its paired stack")
+        source_cells = {source_cell.name: source_cell for source_cell in library.cells}
+        occurrences = stack_metadata.get("source_occurrences")
+        if not _is_record_sequence(occurrences):
+            raise ValueError("GeometryPlan stack needs source occurrences")
+        by_path = {row.get("path"): row for row in occurrences if isinstance(row, Mapping)}
+        if len(by_path) != len(occurrences):
+            raise ValueError("GeometryPlan source occurrence paths must be unique")
+        root_path = next(
+            path for path, row in by_path.items() if row.get("parent_path") is None
+        ) if sum(row.get("parent_path") is None for row in by_path.values()) == 1 else None
+        _validate_plan_occurrences(
+            by_path, top_cell=cell, source_cells=source_cells,
+            source_dbu_um=float(library.precision) * 1e6,
+        )
+        child_reference_indexes = {
+            path: tuple(
+                child["reference_index"] for child in occurrences
+                if child["parent_path"] == path
+            ) for path in by_path
+        }
+        contribution_ids: set[tuple[str, str]] = set()
+        physical_planes: set[str] = set()
+        planes = {}
+        for record in raw_layers:
+            if not isinstance(record, Mapping):
+                raise ValueError("GeometryPlan layers must be mappings")
+            geometry = record.get("geometry", {})
+            if geometry.get("geometry_source") == "die_face_minus_ground_mask":
+                metadata = record.get("metadata", {})
+                if metadata.get("source_occurrence_path") != root_path:
+                    raise ValueError("GeometryPlan derived ground plane must belong to root")
+                level = metadata.get("logical_layer_id")
+                if level in physical_planes:
+                    raise ValueError(f"multiple ground planes claim physical level {level!r}")
+                physical_planes.add(level)
+                planes[record.get("semantic_id")] = record
+        for record in raw_layers:
+            if not isinstance(record, Mapping) or not isinstance(record.get("metadata"), Mapping):
+                raise ValueError("GeometryPlan layers need source occurrence metadata")
+            path = record["metadata"].get("source_occurrence_path")
+            occurrence = by_path.get(path)
+            if occurrence is None or occurrence.get("cell_name") not in source_cells:
+                raise ValueError("GeometryPlan layer has no recorded source occurrence")
+            geometry = record.get("geometry", {})
+            source_summaries = []
+            for contribution in geometry.get("source_occurrence_includes", ()):
+                if not isinstance(contribution, Mapping) or set(contribution) != {
+                    "source_occurrence_path", "source_local_id", "level", "layer",
+                    "selector_point_um", "polygon",
+                }:
+                    raise ValueError("GeometryPlan ground contribution has invalid fields")
+                if record.get("semantic_id") not in planes:
+                    raise ValueError("GeometryPlan ground contribution targets no root derived plane")
+                if contribution["level"] != record["metadata"].get("logical_layer_id"):
+                    raise ValueError("GeometryPlan ground contribution level differs from target plane")
+                if (
+                    not isinstance(contribution["source_local_id"], str)
+                    or not contribution["source_local_id"]
+                    or "/" in contribution["source_local_id"]
+                ):
+                    raise ValueError("GeometryPlan ground contribution local ID is invalid")
+                source_path = contribution.get("source_occurrence_path")
+                source_occurrence = by_path.get(source_path)
+                if source_occurrence is None or source_occurrence.get("cell_name") not in source_cells:
+                    raise ValueError("GeometryPlan ground contribution has no source occurrence")
+                key = (source_path, contribution["source_local_id"])
+                if key in contribution_ids:
+                    raise ValueError("GeometryPlan ground contribution local ID is duplicated")
+                contribution_ids.add(key)
+                expected = _occurrence_include_polygon(
+                    contribution, cell=source_cells[source_occurrence["cell_name"]],
+                    transform=source_occurrence["transform"],
+                    excluded_reference_indexes=child_reference_indexes[source_path],
+                )
+                if contribution.get("polygon") != expected:
+                    raise ValueError("GeometryPlan ground contribution differs from GDS source")
+                source_summaries.append({
+                    key: contribution[key] for key in (
+                        "source_occurrence_path", "source_local_id", "level", "layer"
+                    )
+                })
+            if record["metadata"].get("ground_plane_contribution_sources", []) != source_summaries:
+                raise ValueError("GeometryPlan ground contribution lineage metadata differs")
+            if geometry.get("geometry_source", "gds_polygon") != "gds_polygon":
+                continue
+            expected = _occurrence_polygons_for_entity(
+                _entity_from_layer_record(record, materials=materials),
+                cell=source_cells[occurrence["cell_name"]],
+                transform=occurrence["transform"],
+                excluded_reference_indexes=child_reference_indexes[path],
+            )
+            if record["geometry"].get("source_occurrence_polygons_um") != expected:
+                raise ValueError(f"GeometryPlan polygon source differs for {record['semantic_id']!r}")
+        for record in stack_metadata.get("port_sheet_source_layers", ()):
+            path = record.get("source_occurrence_path") if isinstance(record, Mapping) else None
+            occurrence = by_path.get(path)
+            if occurrence is None or occurrence.get("cell_name") not in source_cells:
+                raise ValueError("GeometryPlan port has no recorded source occurrence")
+            expected = _occurrence_port_polygon(
+                record, cell=source_cells[occurrence["cell_name"]],
+                transform=occurrence["transform"],
+                excluded_reference_indexes=child_reference_indexes[path],
+            )
+            if record.get("source_occurrence_polygon_um") != expected:
+                raise ValueError(f"GeometryPlan port source differs for {record.get('name')!r}")
+        _validate_plan_ground_contribution_ownership(raw_layers)
 
     polygons: list[LayoutPolygonSpec] = []
     entities: list[SemanticEntitySpec] = [
@@ -149,6 +260,7 @@ def build_gds_stack_geometry_input(
         "stack_file": str(stack_path),
         "selected_cell_name": cell.name,
         "cell_bounds_um": cell_bounds,
+        "source_dbu_um": float(library.precision) * 1e6,
     }
     combined_metadata["interface_intents_2d"] = _route_a_sheet_interfaces(
         entities,
@@ -395,17 +507,104 @@ def _cell_bounds_um(cell: Any) -> dict[str, float]:
     }
 
 
-def _polygons_by_layer(cell: Any) -> dict[tuple[int, int], tuple[Any, ...]]:
+def _polygons_by_layer(
+    cell: Any, *, excluded_reference_indexes: Sequence[int] = ()
+) -> dict[tuple[int, int], tuple[Any, ...]]:
     result: dict[tuple[int, int], list[Any]] = {}
     # Canonical public PDK cells use hierarchy.  SGB's Level-0 contract is
     # flattened layout polygons, so preserve every referenced source polygon
     # rather than silently lowering only the top cell's direct shapes.
-    for polygon in cell.get_polygons(apply_repetitions=True, depth=None):
+    if excluded_reference_indexes:
+        polygons = list(cell.get_polygons(apply_repetitions=True, depth=0))
+        excluded = set(excluded_reference_indexes)
+        for index, reference in enumerate(cell.references):
+            if index not in excluded:
+                polygons.extend(reference.get_polygons(apply_repetitions=True, depth=None))
+    else:
+        polygons = cell.get_polygons(apply_repetitions=True, depth=None)
+    for polygon in polygons:
         result.setdefault(
             (int(polygon.layer), int(polygon.datatype)),
             [],
         ).append(polygon)
     return {key: tuple(value) for key, value in result.items()}
+
+
+def _validate_plan_occurrences(
+    by_path: Mapping[str, Mapping[str, Any]], *, top_cell: Any,
+    source_cells: Mapping[str, Any], source_dbu_um: float,
+) -> None:
+    """Bind every qualified path to one reference in the paired written GDS."""
+    roots = [path for path, row in by_path.items() if row.get("parent_path") is None]
+    if len(roots) != 1:
+        raise ValueError("GeometryPlan GDS needs exactly one recorded root occurrence")
+    root = roots[0]
+    claimed: set[tuple[str, int]] = set()
+    for path, row in by_path.items():
+        if not isinstance(path, str) or not path or not isinstance(row, Mapping):
+            raise ValueError("GeometryPlan occurrence path is invalid")
+        raw_transform = row.get("transform")
+        if (
+            not _is_record_sequence(raw_transform)
+            or len(raw_transform) != 6
+            or any(isinstance(value, bool) or not isinstance(value, (int, float))
+                   or not isfinite(float(value)) for value in raw_transform)
+        ):
+            raise ValueError(f"GeometryPlan occurrence {path!r} has invalid transform")
+        transform = tuple(float(value) for value in raw_transform)
+        if path == root:
+            if (
+                row.get("cell_name") != top_cell.name
+                or row.get("reference_index") is not None
+                or any(abs(actual - expected) > 1e-9 for actual, expected in zip(
+                    transform, (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+                ))
+            ):
+                raise ValueError("GeometryPlan root differs from selected GDS top cell")
+            continue
+        parent_path = path.rpartition("/")[0]
+        parent = by_path.get(parent_path)
+        index = row.get("reference_index")
+        if (
+            not parent_path.startswith(root)
+            or row.get("parent_path") != parent_path
+            or parent is None
+            or parent.get("cell_name") not in source_cells
+            or row.get("cell_name") not in source_cells
+            or isinstance(index, bool)
+            or not isinstance(index, int)
+            or index < 0
+        ):
+            raise ValueError(f"GeometryPlan occurrence {path!r} has no GDS parent reference")
+        references = source_cells[parent["cell_name"]].references
+        if index >= len(references) or (parent_path, index) in claimed:
+            raise ValueError(f"GeometryPlan occurrence {path!r} has duplicate or missing GDS reference")
+        claimed.add((parent_path, index))
+        reference = references[index]
+        target = getattr(reference.cell, "name", reference.cell)
+        if target != row["cell_name"] or len(reference.repetition.get_offsets()) != 0:
+            raise ValueError(f"GeometryPlan occurrence {path!r} differs from its GDS reference")
+        angle = float(reference.rotation or 0.0)
+        scale = float(reference.magnification or 1.0)
+        reflection = -1.0 if reference.x_reflection else 1.0
+        local = (
+            scale * cos(angle), -scale * sin(angle) * reflection,
+            scale * sin(angle), scale * cos(angle) * reflection,
+            float(reference.origin[0]), float(reference.origin[1]),
+        )
+        pa, pb, pc, pd, px, py = (float(value) for value in parent["transform"])
+        a, b, c, d, x, y = local
+        expected = (
+            pa * a + pb * c, pa * b + pb * d,
+            pc * a + pd * c, pc * b + pd * d,
+            pa * x + pb * y + px, pc * x + pd * y + py,
+        )
+        if (
+            any(abs(transform[i] - expected[i]) > 1e-9 for i in range(4))
+            or any(abs(transform[i] - expected[i]) > source_dbu_um / 2 + 1e-9
+                   for i in (4, 5))
+        ):
+            raise ValueError(f"GeometryPlan occurrence {path!r} transform differs from GDS")
 
 
 def _solution_region_entity_from_record(
@@ -529,7 +728,11 @@ def _split_polygon_entity(
     geometry.pop("exclude_selector_points_um", None)
     metadata = {
         **dict(entity.metadata),
-        "semantic_group_id": entity.semantic_id,
+        **(
+            {"source_semantic_id": entity.semantic_id}
+            if "source_occurrence_path" in entity.metadata
+            else {"semantic_group_id": entity.semantic_id}
+        ),
         "split_polygon_index": index,
     }
     return (
@@ -627,6 +830,20 @@ def _gds_polygons_for_entity(
     *,
     polygons_by_layer: Mapping[tuple[int, int], tuple[Any, ...]],
 ) -> tuple[LayoutPolygonSpec, ...]:
+    occurrence_polygons = entity.geometry.get("source_occurrence_polygons_um")
+    if occurrence_polygons is not None:
+        if not _is_record_sequence(occurrence_polygons):
+            raise TypeError(f"{entity.semantic_id} occurrence polygons must be a sequence")
+        return tuple(
+            LayoutPolygonSpec(
+                polygon_id=f"{entity.semantic_id}__P{index:04d}",
+                layer=f"{entity.geometry['gds_layer']}/{entity.geometry['gds_datatype']}",
+                exterior=record["exterior"], holes=record["holes"],
+                object_name=entity.semantic_id, net_name=entity.net_id,
+                metadata={"source": "gds_source_occurrence", "source_polygon_index": index},
+            )
+            for index, record in enumerate(occurrence_polygons)
+        )
     def selector_point(name: str, value: Any) -> tuple[float, float]:
         if (
             not isinstance(value, Sequence)
@@ -749,6 +966,135 @@ def _gds_polygons_for_entity(
     )
 
 
+def _occurrence_point(transform: Sequence[float], point: Sequence[float]) -> list[float]:
+    a, b, c, d, x, y = (float(value) for value in transform)
+    px, py = float(point[0]), float(point[1])
+    return [a * px + b * py + x, c * px + d * py + y]
+
+
+def _occurrence_inverse_point(transform: Sequence[float], point: Sequence[float]) -> list[float]:
+    a, b, c, d, x, y = (float(value) for value in transform)
+    determinant = a * d - b * c
+    if not isfinite(determinant) or abs(determinant) < 1e-12:
+        raise ValueError("GeometryPlan occurrence transform is singular")
+    px, py = float(point[0]) - x, float(point[1]) - y
+    return [(d * px - b * py) / determinant, (-c * px + a * py) / determinant]
+
+
+def _occurrence_polygon_record(
+    polygon: LayoutPolygonSpec, transform: Sequence[float]
+) -> dict[str, Any]:
+    return {
+        "exterior": [_occurrence_point(transform, point) for point in polygon.exterior],
+        "holes": [
+            [_occurrence_point(transform, point) for point in hole]
+            for hole in polygon.holes
+        ],
+    }
+
+
+def _occurrence_polygons_for_entity(
+    entity: SemanticEntitySpec, *, cell: Any, transform: Sequence[float],
+    excluded_reference_indexes: Sequence[int] = (),
+) -> list[dict[str, Any]]:
+    geometry = dict(entity.geometry)
+    geometry.pop("source_occurrence_polygons_um", None)
+    for key in ("selector_point_um",):
+        if key in geometry:
+            geometry[key] = _occurrence_inverse_point(transform, geometry[key])
+    for key in ("include_selector_points_um", "exclude_selector_points_um"):
+        if key in geometry:
+            geometry[key] = [
+                _occurrence_inverse_point(transform, point) for point in geometry[key]
+            ]
+    local_entity = replace(entity, geometry=geometry)
+    selected = _gds_polygons_for_entity(
+        local_entity, polygons_by_layer=_polygons_by_layer(
+            cell, excluded_reference_indexes=excluded_reference_indexes
+        )
+    )
+    return [_occurrence_polygon_record(polygon, transform) for polygon in selected]
+
+
+def _occurrence_port_polygon(
+    record: Mapping[str, Any], *, cell: Any, transform: Sequence[float],
+    excluded_reference_indexes: Sequence[int] = (),
+) -> dict[str, Any]:
+    layer = (record["layer"], record["datatype"])
+    point = _occurrence_inverse_point(transform, record["selector_point_um"])
+    selected = [
+        polygon for polygon in _polygons_by_layer(
+            cell, excluded_reference_indexes=excluded_reference_indexes
+        ).get(layer, ())
+        if _point_in_ring(point, _ring_from_gdstk_polygon(polygon))
+    ]
+    if len(selected) != 1:
+        raise ValueError(
+            f"GeometryPlan port {record['name']!r} matched {len(selected)} local sheet polygons"
+        )
+    local = LayoutPolygonSpec(
+        polygon_id="source_port_sheet", layer=f"{layer[0]}/{layer[1]}",
+        exterior=_ring_from_gdstk_polygon(selected[0]),
+    )
+    return _occurrence_polygon_record(local, transform)
+
+
+def _occurrence_include_polygon(
+    record: Mapping[str, Any], *, cell: Any, transform: Sequence[float],
+    excluded_reference_indexes: Sequence[int] = (),
+) -> dict[str, Any]:
+    """Select one connected local metal region, including its authored pieces."""
+    layer = _gds_layer(record.get("layer"), str(record.get("source_local_id", "ground contribution")))
+    point = _occurrence_inverse_point(transform, record["selector_point_um"])
+    components = _fused_gdstk_components(_polygons_by_layer(
+        cell, excluded_reference_indexes=excluded_reference_indexes
+    ).get(layer, ()))
+    selected = [
+        polygon for polygon, _, _ in components
+        if _point_in_layout_polygon((point[0], point[1]), polygon)
+    ]
+    if len(selected) != 1:
+        raise ValueError(
+            f"ground contribution {record.get('source_local_id')!r} matched "
+            f"{len(selected)} local source polygons"
+        )
+    return _occurrence_polygon_record(selected[0], transform)
+
+
+def _validate_plan_ground_contribution_ownership(
+    raw_layers: Sequence[Mapping[str, Any]],
+) -> None:
+    """A ground include cannot consume a separately named local conductor."""
+    import gdstk
+
+    for plane in raw_layers:
+        for contribution in plane.get("geometry", {}).get("source_occurrence_includes", ()):
+            region = contribution["polygon"]
+            included = _layout_polygon_region(gdstk, LayoutPolygonSpec(
+                polygon_id="source_ground_contribution", layer="0/0",
+                exterior=region["exterior"], holes=region["holes"],
+            ))
+            for other in raw_layers:
+                if (
+                    other.get("metadata", {}).get("source_occurrence_path")
+                    != contribution["source_occurrence_path"]
+                    or other["metadata"].get("logical_layer_id") != contribution["level"]
+                    or other.get("geometry", {}).get("geometry_source", "gds_polygon")
+                    != "gds_polygon"
+                ):
+                    continue
+                for polygon in other["geometry"]["source_occurrence_polygons_um"]:
+                    claimed = _layout_polygon_region(gdstk, LayoutPolygonSpec(
+                        polygon_id="named_local_conductor", layer="0/0",
+                        exterior=polygon["exterior"], holes=polygon["holes"],
+                    ))
+                    if gdstk.boolean(included, claimed, "and", precision=1e-9):
+                        raise ValueError(
+                            f"ground contribution {contribution['source_local_id']!r} "
+                            f"also contains local Entity {other['semantic_id']!r}"
+                        )
+
+
 def _fused_gdstk_components(
     candidates: Sequence[Any],
 ) -> tuple[tuple[LayoutPolygonSpec, tuple[int, ...], float], ...]:
@@ -860,6 +1206,20 @@ def _derived_ground_polygons(
             f"{entity.semantic_id} include_selector_points_um requires include_layer"
         )
     included: list[Any] = []
+    source_includes = entity.geometry.get("source_occurrence_includes", ())
+    if source_includes and (include_layer is not None or include_points):
+        raise ValueError(f"{entity.semantic_id} mixes source contributions with global includes")
+    for contribution in source_includes:
+        polygon = contribution.get("polygon") if isinstance(contribution, Mapping) else None
+        if not isinstance(polygon, Mapping):
+            raise ValueError(f"{entity.semantic_id} has an incomplete source contribution")
+        included.extend(_layout_polygon_region(
+            gdstk, LayoutPolygonSpec(
+                polygon_id=f"{entity.semantic_id}__INCLUDE__{len(included):04d}",
+                layer=f"{mask_key[0]}/{mask_key[1]}",
+                exterior=polygon["exterior"], holes=polygon["holes"],
+            ),
+        ))
     if include_layer is not None:
         if (
             not isinstance(include_layer, Sequence)
@@ -1074,29 +1434,79 @@ def _port_sheet_regions_from_stack_metadata(
             )
         layer = int(record["layer"])
         datatype = int(record["datatype"])
-        source_polygons = polygons_by_layer.get((layer, datatype), ())
+        occurrence_polygon = record.get("source_occurrence_polygon_um")
+        if occurrence_polygon is not None:
+            source_polygons = ((0, LayoutPolygonSpec(
+                polygon_id=f"PORT_SHEET__{source_name}__SOURCE__P0000",
+                layer=f"{layer}/{datatype}",
+                exterior=occurrence_polygon["exterior"],
+                holes=occurrence_polygon["holes"],
+                metadata={"gds_layer": layer, "gds_datatype": datatype,
+                          "source": "palace_lumped_port_sheet", "source_name": source_name},
+            )),)
+        else:
+            all_source_polygons = polygons_by_layer.get((layer, datatype), ())
+            selector = record.get("selector_point_um")
+            if selector is None:
+                selected_polygons = tuple(enumerate(all_source_polygons))
+            else:
+                if (
+                    isinstance(selector, (str, bytes))
+                    or not isinstance(selector, Sequence)
+                    or len(selector) != 2
+                ):
+                    raise ValueError("port sheet selector_point_um must be a 2D point")
+                point = (float(selector[0]), float(selector[1]))
+                selected_polygons = tuple(
+                    (index, polygon)
+                    for index, polygon in enumerate(all_source_polygons)
+                    if _point_in_ring(point, _ring_from_gdstk_polygon(polygon))
+                )
+                if len(selected_polygons) != 1:
+                    raise ValueError(
+                        f"port sheet {source_name!r} selector matched "
+                        f"{len(selected_polygons)} polygons"
+                    )
+            source_polygons = tuple(
+                (index, LayoutPolygonSpec(
+                    polygon_id=f"PORT_SHEET_{layer}_{datatype}__P{index:04d}",
+                    layer=f"{layer}/{datatype}",
+                    exterior=_ring_from_gdstk_polygon(polygon),
+                    metadata={"gds_layer": layer, "gds_datatype": datatype,
+                              "source": "palace_lumped_port_sheet", "source_name": source_name},
+                ))
+                for index, polygon in selected_polygons
+            )
         if not source_polygons:
             raise ValueError(
                 f"port_sheet_source_layers entry {layer}/{datatype} has no polygons"
             )
-        for polygon_index, polygon in enumerate(source_polygons):
-            source_polygon = LayoutPolygonSpec(
-                polygon_id=f"PORT_SHEET_{layer}_{datatype}__P{polygon_index:04d}",
-                layer=f"{layer}/{datatype}",
-                exterior=_ring_from_gdstk_polygon(polygon),
-                metadata={
-                    "gds_layer": layer,
-                    "gds_datatype": datatype,
-                    "source": "palace_lumped_port_sheet",
-                    "source_name": source_name,
-                },
-            )
+        for polygon_index, source_polygon in source_polygons:
             port_sheet_id = f"PORT_SHEET__{source_name}__{polygon_index:04d}"
+            scoped_hosts = host_entity_by_polygon_id
+            if occurrence_polygon is not None:
+                occurrence_path = record["source_occurrence_path"]
+                scoped_hosts = {
+                    polygon_id: entity
+                    for polygon_id, entity in host_entity_by_polygon_id.items()
+                    if entity.metadata.get("source_occurrence_path") == occurrence_path
+                    or str(entity.metadata.get("source_occurrence_path", "")).startswith(
+                        f"{occurrence_path}/"
+                    )
+                    or (
+                        entity.geometry.get("geometry_source") == "die_face_minus_ground_mask"
+                        and entity.metadata.get("logical_layer_id") == target_layer
+                        and any(
+                            source.get("source_occurrence_path") == occurrence_path
+                            for source in entity.metadata.get("ground_plane_contribution_sources", ())
+                        )
+                    )
+                }
             overlaps = _port_sheet_overlaps(
                 port_sheet_id=port_sheet_id,
                 port_polygon=source_polygon,
                 target_layer=target_layer,
-                host_entity_by_polygon_id=host_entity_by_polygon_id,
+                host_entity_by_polygon_id=scoped_hosts,
                 host_polygons_by_id=host_polygons_by_id,
             )
             port_regions.append(
@@ -1116,6 +1526,8 @@ def _port_sheet_regions_from_stack_metadata(
                         "direction_raw": direction,
                         "direction_sign_convention": sign_convention,
                         "source": "palace_lumped_port_sheet",
+                        **({"source_occurrence_path": record["source_occurrence_path"]}
+                           if "source_occurrence_path" in record else {}),
                     },
                 )
             )

@@ -9,14 +9,14 @@ identity, or common provenance.
 
 ```{mermaid}
 flowchart LR
-  PDK["PDK material, layer, fabrication, and 3D-integration semantics"] --> COMPILER["SCGSim semantic compiler"]
-  COMPONENT["Component net, port, and topology semantics"] --> COMPILER
-  COMPILER --> CORE["Immutable stdlib semantic facts"]
-  CORE --> SGB
-  SGB["SGB geometry, topology, and physical groups"]
+  PDK["PDK material, layer, fabrication, and host semantics"] --> PLAN["Notebook GeometryPlan"]
+  COMPONENT["Local component entities, polygons, ports, selectors"] --> PLAN
+  NOTEBOOK["Named occurrences and final Net → Entity map"] --> PLAN
+  PLAN --> SNAPSHOT["Immutable source snapshot"]
+  SNAPSHOT --> INPUT["Normalized GeometryBuildInput"]
+  INPUT --> SGB["SGB geometry and topology"]
+  INPUT --> AEDT["AEDT native geometry and bindings"]
   SGB --> PALACE["Palace backend preparation"]
-  PDK --> AEDT["Declared AEDT spec and native family preparation"]
-  COMPONENT --> AEDT
   PALACE --> HANDOFF["Run-and-handoff contracts"]
   AEDT --> HANDOFF
   HANDOFF --> PROFILE["Selected machine profile"]
@@ -25,20 +25,39 @@ flowchart LR
   RESULTS --> REPORT["Unified Plotly report envelope"]
 ```
 
-The SGB path shown here is the current Palace geometry path. AEDT consumes its
-existing declared portable GDS or Q2D inputs and family-specific specs; it does
-not yet consume the semantic-core/SGB geometry flow. A future AEDT semantic
-binding is excluded from this refactor rather than represented as a placeholder.
+The current geometry candidate starts from component-local source facts and
+named occurrences. A `GeometryPlan` holds the expanded entity inventory and
+the Notebook's final `Net -> Entity` map, then prepares one immutable source
+snapshot for the normalized `GeometryBuildInput` boundary. Palace and AEDT
+consume that same snapshot through their existing preparation paths. The
+backends may create different native geometry, but native observations do not
+replace source entity identity or establish connectivity. AEDT binding
+evidence retains source members and coverage through native aggregation.
+
+## Maintainer responsibility map
+
+This table records the current private boundaries for the CONVERGING
+maintainability work. The candidate implementation is under review; these
+changes do not alter a public API.
+
+| Area | Responsibility | Behavior to preserve |
+|---|---|---|
+| AEDT transaction | `scgsim.aedt.run._execute()` retains transaction ownership and release/seal eligibility. `_record_result_before_release`, `_record_epr_project_after_release`, and `_record_ordinary_result_after_release` isolate bounded result-recording steps. | Same phase order and exception boundaries; original dispatch/export error outranks release failure; release failure prevents sealing; partial export stays incomplete. |
+| AEDT integral targeting | `scgsim.aedt._epr_eigenmode._integral_target()` decodes one transient `IntegralTarget`; unit mapping and raw storage consume `kind` and `scope_id`. | Valid identity, payload, units, and formulas stay unchanged; malformed selections may fail earlier. The target is not persisted. |
+| Result presentation | AEDT history, EPR, and benchmark projections live in `scgsim.aedt._presentation`; Palace EPR presentation lives in `scgsim.palace._presentation`. Existing public delegates remain at their entry points. | Keep signatures, Figure/`.data` outputs, visible row/trace values and order, missingness, coverage, baselines, masks, loss states, and backend-specific port/junction meaning. Add no resolver, native I/O, new physics, or shared result schema. |
 
 ## Contract boundaries
 
 | Boundary | Authority |
 |---|---|
 | Material, layer, fabrication, Z/thickness, and 3D host facts | PDK |
-| Component nets, ports, functional regions, and topology selectors | Component designer |
+| Local entities, polygons, ports, and topology selectors | Component designer |
+| Named occurrences and the final `Net -> Entity` assignment | Notebook `GeometryPlan` |
+| Immutable normalized source geometry | `GeometryPlan` and `GeometryBuildInput` |
 | Revision-bound material, interface, owner, side, and evidence facts | `scgsim.semantics` internal stdlib core |
 | Geometry names, topology, Route A/B surfaces | SGB |
 | Palace and AEDT implementation | `scgsim.palace` and `scgsim.aedt` |
+| Native geometry bindings and derived aggregates | Backend adapters, with source members and coverage retained |
 | Solver-bound geometry inspection and preview evidence | `scgsim.visualization` |
 | Run identity, handoff, profiles, receipts | One common SCGSim contract |
 | Physical result meaning | Solver-specific, never flattened into a false common quantity |
@@ -72,37 +91,38 @@ unknown rather than becoming guessed contact.
 Classification requires an established conductor and solution-domain role;
 an observation by itself is evidence, not proof of physical contact.
 
+The prepared source boundary contains qualified Entity and polygon identities,
+holes, material and effective-domain identities, Z/thickness, route
+representations, and occurrence provenance. The explicit final net map is
+separate from component-local facts; unmapped entities remain unassigned until
+a backend operation requires a binding. Components expose no public `Group`
+API, implicit connectivity, or child-net merge. Physical mesh groups serve
+high-count geometry: copies share a group only when explicit Net, material,
+local source Entity ID, parent occurrence context, and role match. Qualified
+Entity/member lineage remains available, and an unassigned Net stays separate;
+the eight sibling Ground bumps in the public coupon therefore map to one
+physical group while retaining eight Entity IDs. AEDT owner/interface/integral
+groups remain backend-specific with their existing policy. These groups keep
+their distinct purposes and source-member/coverage evidence; Entity lineage
+alone does not promise a raw per-Entity measurement or field expression.
+Source-linked junction declarations retain terminal nets, direction,
+dimensions, inductance, and capacitance. Palace lowers source facts through
+SGB into conformal topology. AEDT creates its own native bodies, sheets, faces,
+and calculator selections while recording source bindings and native aggregate
+membership. Neither backend may make its native identity the other's input.
+
 Material identity, geometry approximation, PEC approximation, and native
 implementation are separate facts. The core classifies already-valid values;
 the existing SGB and Palace adapters retain their source-specific validation,
 error messages, and call order.
 
 For Palace routes, PDK fabrication owns substrate materials and Z ranges;
-component intent owns metal nets and polygon selections. SGB verifies
-positive-area contact between the complete normalized face-metal and modeled
-dielectric regions, including explicit holes, before Route-A substrate support
-is recorded. A contact candidate cannot be inferred from bounding boxes.
-Palace may request a generated background Region after those source facts are
-declared. Its internal conductor-host reference allows construction and cuts,
-but neither the Region envelope nor a coupon bounding box proves attachment
-or creates a physical die-to-die gap. Existing authored vacuum regions keep
-their own records and explicit unresolved host references remain errors.
-
-The dev27 candidate partitions each Route-A sheet by exact local bottom/top
-solution domains before SA/AA construction. It therefore preserves supported
-MS/MA and synthetic partial-contact MA/MA patches without assigning substrate
-support to an exposed remainder. Contact caps retain only the surviving side,
-and a lumped-port footprint must belong to one compatible local patch. Route B
-applies the same local evidence to finite top, bottom, and sidewall records.
-Fully freestanding Route-A sheets remain unsupported.
-
-Each patch keeps its semantic side contributions in one provenance ledger.
-Physical surface kinds remain the Palace classification boundary: separate
-MS/MA kinds lower separately, while two MA sides sharing one native surface
-lower to one aggregate MA row with internal-boundary cracking enabled. The
-ledger and the aggregate policy remain present in physical-group, index, and
-report metadata; native output is not presented as side-resolved. Historical
-records without a ledger remain readable and are not reconstructed.
+component intent owns metal nets and polygon selections. SGB establishes
+source-side contact and local route evidence before Palace-specific lowering;
+native geometry cannot create source contact intent. The Route A/B contact,
+background-region, patch, and aggregation contracts are documented in
+[Geometry and SGB Route A/B](geometry-sgb.qmd) and
+[Palace Electrostatic + SGB](specs/palace-electrostatic-sgb.qmd).
 
 ## Current truth
 
@@ -110,8 +130,8 @@ The Human accepted the PDK/Component/SCGSim semantic-authority split and public
 notebook ownership on 2026-08-16. SCGSim owns no public notebook source; OrPen
 SC PDK owns the public component examples and calls the shared runtime directly.
 
-The Palace Electrostatic/Eigenmode and version-locked AEDT runtime families are
-implemented but remain `CONVERGING`, not V1 stable.
+The per-family implementation status, exercised evidence, and current limits
+are maintained in the [Backend Support Matrix](backend-support.qmd).
 
 Palace mesh-quality inspection is an offline reader over the emitted MSH file.
 It neither owns mesh construction nor starts a native backend. The reader binds
@@ -173,17 +193,18 @@ carrier and cannot reinterpret a caller spec or workspace.
 
 New preparation keeps the handoff and handoff-manifest schemas at V1 while both
 declare that the mutable run receipt uses `scgsim.aedt.receipt.v3`. The initial
-V3 receipt records a complete preparation-time SCGSim module manifest and
-content digest. Before mutation, execution verifies the canonical manifest and
-binds the initial-receipt and prepared-manifest hashes. A canonical historical
+V3 receipt records a complete `runtime-source.v5` preparation-time SCGSim module
+manifest and content digest. Before mutation, execution verifies the canonical
+manifest and binds the initial-receipt and prepared-manifest hashes. A canonical historical
 V1 `not_run` handoff with neither marker remains executable, but its resulting
 V3 receipt records preparation provenance as `legacy_v1_not_recorded`; it does
 not fabricate history.
 
-Every completed V3 receipt records a separate complete execution-time module
-manifest and digest while retaining the former runtime-source keys. Preparation
-and execution identities are not required to match: their separation records
-what prepared and what actually executed the handoff. Historical completed V1
+Every new completed V3 receipt records a separate complete `runtime-source.v5`
+execution-time module manifest and digest while retaining the former
+runtime-source keys. Preparation and execution identities are not required to
+match: their separation records what prepared and what actually executed the
+handoff. Historical completed V1
 receipts remain subject to their old resolution rules, except that a V1 receipt
 combined with either later-version expectation marker is rejected as an
 inconsistent cohort. Historical completed V2 receipts retain their existing
@@ -191,13 +212,15 @@ resolution rules; new V3-only native PEC checks do not reinterpret them. This
 consistency contract is not source authenticity for an actor able
 to rewrite the entire unsigned artifact set.
 
-The frozen `runtime-source.v1` reader contract is distinct from the current
-producer inventory used to emit it. One pure, versioned initial-receipt codec
-owns the historical V1/V2 and current V3 JSON member order, indentation, and
-final newline; handoff writing and initial-receipt reconstruction use that same
-codec. A producer may emit the frozen schema only while its current inventory
-matches the declared thirteen-module contract. Historical receipt hashes are
-never compared with installed source, and prepared and actual identities remain
+The `runtime-source.v1` thirteen-module contract and the V2/V3/V4 extensions
+are frozen reader formats. New V3 receipts use `runtime-source.v5`, which adds
+the GeometryPlan module and SGB package dispatcher to the frozen V4 inventory;
+V4 added the AEDT presentation module. These source manifests do not change
+the receipt schema or historical module membership. One pure, versioned
+initial-receipt codec owns the historical V1/V2 and current V3 JSON member
+order, indentation, and final newline; handoff writing and initial-receipt
+reconstruction use that same codec. Historical receipt hashes are never
+compared with installed source, and prepared and actual identities remain
 independent evidence.
 
 Runtime-source provenance is computed inside the receipt-owned failure
@@ -205,6 +228,38 @@ transaction before PyAEDT import and Desktop construction. New HFSS V3 receipts
 also keep source material identity distinct from verified native PEC
 implementation: solids are native `pec` with Solve Inside disabled, while
 sheets receive Perfect E and must have complete native face coverage.
+
+The converging Eigenmode EPR lifecycle is an explicit additive path under that
+same transaction owner. It does not reinterpret the historical one-shot
+prepare--solve--export path or broaden the meaning of an ordinary completed
+receipt. Before its one solve, the EPR path declares geometry bindings,
+junctions, contributions, margins, calculator definitions, and native pass
+cache items. After the solver stops it exports the recorded pass/mode history;
+if the solve raises or returns failure, the transaction preserves that original
+error, releases the owned Desktop, and performs no automatic save or partial
+export recovery. The existing complete-convergence reader remains unchanged;
+history exported after a successful solve records its own completed pass
+identities and status.
+
+Mode selection is postprocessing state, not a physical design variation. A
+complete Eigenmode source vector selects exactly one native mode with the
+dimensionless relative control `1`, with every other mode `0`, and binds phase
+and the selected solution explicitly. `EigenPeakElectricField` names the
+native normalization convention; this control is not a measured `1 V/m` field.
+The vector order and persisted native source entries are evidence; inherited
+GUI state and a synthetic `Mode` intrinsic are not. Pass-cache identity
+separately binds setup, physical variation, adaptive pass, native mode, item
+definition, dependencies, context, and solution. Item titles and row positions
+are never identity.
+
+Historical cache resolution and final saved-field analysis are independent
+capabilities. The history reader returns only the pass/mode values that AEDT
+actually recorded, preserving axes and missingness. Final analysis closes and
+seals the solved project plus its complete result directory, reopens a distinct
+working copy with solve guards installed, and evaluates the last saved fields
+without modifying the original. Missing final fields do not fall back to an
+earlier cache pass, and a new postsolve margin is a final-field calculation,
+not invented pass history.
 
 See [Folder tree and ownership](ownership.qmd) for repository placement and
 [Headless Geometry Preview](geometry-preview.qmd) for the static and connected

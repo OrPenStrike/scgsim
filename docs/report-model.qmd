@@ -20,6 +20,21 @@ readable evidence without promoting an incomplete run. The strict
 `resolve_palace_result(..., expected_handoff_id=...)` path accepts only a
 completed package whose handoff, receipt, solver, and artifact hashes validate.
 
+The AEDT `ResolvedRun.show_all_results()` order is identity, numerical
+evidence, benchmark, physics, then details. Identity uses the recorded project,
+backend, setup, requested modes, actual final pass, and completion state.
+Canonical relative receipt paths and artifact hashes appear only in details;
+absolute host paths are not displayed. For example,
+`resolved.show_all_results(show_details=False, theme="light")` collapses raw
+source and long tables; `show_details=True` opens them without changing result
+selection. If Plotly is unavailable, HTML tables remain available and the
+unavailable plots are identified.
+
+Numerical figures show frequency, surface participation by mode and interface,
+junction history, and energy balance. They preserve existing projections and
+eligibility; a valid partial-row frequency remains visible while unavailable
+EPR values stay as gaps, with no fallback to an earlier pass.
+
 ## Honesty rule
 
 Solver-specific quantities remain solver-specific. Electrostatic matrices,
@@ -27,15 +42,78 @@ eigenfrequencies, driven network responses, field-energy participation, Q3D
 matrices, and Q2D per-unit-length results must retain their own units,
 extraction authority, and failure meaning.
 
-For Palace Surface EPR, `LossTan=0` preserves participation evidence but makes
-surface-loss Q and T1 unavailable; the report makes no surface-loss lifetime
-claim. Palace also returns the native `domain-E.csv` Volume Energy table and
-its exact index mapping, but no first-class Volume Energy report renderer is
-implemented.
+For Palace, `LossTan=0.0` is also the backend-compatible config value when no
+loss tangent was supplied. It does not turn an unknown assumption into a known
+zero: the v2 index and detached `PalaceEprResult` retain `loss_tangent=None`,
+and SCGSim leaves the corresponding inverse-Q contribution unavailable. An
+explicit known zero instead gives a zero contribution. Neither state creates a
+surface-loss lifetime claim. The [Eigenmode and Offline EPR guide](eigenmode-epr.qmd)
+documents its analysis methods and assumptions. Palace's generic `domain-E.csv`
+Volume Energy table still has no general-purpose report renderer.
 
-Palace and AEDT resolved quantities remain bound to their exact receipt,
-artifact-hash, handoff, and solver identities. Presentation never weakens those
-bindings and makes no numerical-convergence or cross-solver-agreement claim.
+## Eigenmode EPR presentation
+
+AEDT and Palace keep separate `show_epr()` inputs and return a Plotly `Figure`;
+the view consumes an existing result and does not resolve files or start a
+solver. This page owns the report's visible availability and coverage contract.
+
+Each figure separates surface and bulk participation. AEDT shows junction
+inductive and capacitive participation together on a junction axis; Palace
+shows its signed native port participation separately. Surface bars identify the
+semantic owner or owners, interface, and baseline or requested-margin
+evaluation. Hover data retains source members, field side, and loss assumptions.
+The coverage annotation counts reported surface rows and source bindings or
+surfaces, bulk domains, and junctions or ports.
+
+In the integrated AEDT report, each requested mode at the actual final pass
+has a descending horizontal surface-owner ranking, separate bulk and junction
+participation plots, and a surface table with owner, interface, evaluation,
+margin, participation, loss, and inverse-Q. Junction inductive and capacitive
+participation have separate plots and tables. Requested margins form trends
+per mode and pass; the unmasked baseline is separate and is not connected to
+the margin line. Every evaluation remains visible: `Unmasked` and
+`Requested 0` are distinct, and alternative margins or split aggregates are
+never summed together. The known baseline subtotal and unknown-loss count stay
+separate; the report does not claim total device Q or T1.
+
+Scientific keys, not display labels, identify plotted data. Shared readable
+labels appear across figures; hover data and metadata retain full group,
+members, side, and source identity.
+
+`InputSummary` HTML inherits the front-end light/dark palette. AEDT report and
+Plotly views use their explicit theme choice, defaulting to light; they do not
+automatically follow the front-end theme. Surface interfaces retain MA
+`#56B4E9`, MS `#E69F00`, and SA `#009E73`; same-interface owners remain
+distinguishable by labels, dash patterns, and markers.
+
+An AEDT `ResolvedRun` provides `epr_result()` for its bound EPR record and
+`show_all_results(show_details=False)` for the integrated run view; the latter
+returns `None`. The view uses all requested modes at the actual last completed
+pass and includes the adaptive history. Missing or partial values remain
+unavailable; presentation does not fall back to an earlier complete pass. It
+checks consumed result CSVs and benchmark data against hashes captured during
+resolution, without consulting a live simulation object or rereading native
+AEDT state. See the
+[AEDT runtime reference](specs/aedt-runtime.qmd) for strict resolution and
+missing-artifact behavior.
+
+Adaptive frequency has its own availability rule: a finite, positive numeric
+value that is not a boolean is plotted even when that mode's EPR row is partial.
+Participation and energy still require a complete row; row status, integrity
+checks, pass selection, and gaps in the plotted history remain unchanged.
+
+The displayed inverse-Q subtotal includes only known, unmasked baseline
+surface terms. Unknown baseline losses are counted as unknown; requested mask
+margins are alternative views and are not added to the subtotal. Sidewall
+energy remains labeled uncomputed where it was not evaluated. These figures
+show the available evidence and do not claim total device loss or a lifetime.
+
+Palace and AEDT quantities resolved from original run packages remain bound to
+their applicable receipt, artifact-hash, handoff, and solver identities. A
+detached Palace EPR result retains original artifact identity and hash
+references, but those references do not authenticate the detached JSON itself.
+Presentation does not weaken source bindings and makes no
+numerical-convergence or cross-solver-agreement claim.
 
 The separate [Tetrahedral Mesh Quality](mesh-quality.qmd) report is bound to a
 single MSH file read. Its volume, orientation, and condition evidence are
@@ -69,9 +147,9 @@ evidence; the physics presentation does not reinterpret refinement evidence.
 
 A native zero participation or surface energy means only that the native
 contribution is zero. Without supporting geometry evidence, it does not prove
-that a region was geometrically fully excluded. Infinite surface-loss Q, or Q
-made unavailable by `LossTan=0`, remains nonfinite or unavailable rather than
-being converted into a lifetime claim; participation and energy evidence stay
+that a region was geometrically fully excluded. An unavailable inverse-Q
+contribution caused by unknown loss remains unavailable rather than being
+converted into a lifetime claim; participation and energy evidence stay
 visible.
 
 This report surface remains **CONVERGING** and does not add a cumulative

@@ -13,9 +13,11 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
+from ._benchmark import attach_simulation_benchmark
 from ._hfss_convergence import read_hfss_convergence
 from ._native_common import (
     BoundAedtRequest,
+    analyze_with_resources,
     create_region as _create_region,
     detached_data,
     import_and_bind as _import_and_bind,
@@ -24,6 +26,7 @@ from ._native_common import (
     saved_setup_properties as _saved_setup_properties,
 )
 from .spec import (
+    AedtResources,
     POINT_COUNT,
     REQUIRED_AEDT_VERSION,
     SURFACE_APPROXIMATION_LEVEL,
@@ -55,11 +58,18 @@ class PreparedHfss:
             object.__setattr__(self, name, detached_data(getattr(self, name)))
 
 
-def run_hfss(Hfss: Any, run_dir: Path, spec: HfssSpec) -> dict[str, Any]:
+def run_hfss(
+    Hfss: Any, run_dir: Path, spec: HfssSpec,
+    resources: AedtResources | None = None,
+    resource_evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Use the same preparation stage as diagnostics, then solve and export."""
     prepared = prepare_hfss(Hfss, run_dir, spec)
-    solve_hfss(prepared)
-    return export_hfss(prepared)
+    solve_hfss(prepared, resources, resource_evidence)
+    result = export_hfss(prepared)
+    return attach_simulation_benchmark(
+        result, prepared.app, run_dir, spec.run_control.setup_name
+    )
 
 
 def prepare_hfss(Hfss: Any, run_dir: Path, spec: HfssSpec) -> PreparedHfss:
@@ -106,19 +116,27 @@ def prepare_hfss(Hfss: Any, run_dir: Path, spec: HfssSpec) -> PreparedHfss:
     )
 
 
-def solve_hfss(prepared: PreparedHfss) -> None:
+def solve_hfss(
+    prepared: PreparedHfss, resources: AedtResources | None = None,
+    resource_evidence: dict[str, Any] | None = None,
+) -> None:
     """Run the one explicit HFSS setup solve."""
     spec = prepared.request.parse()
     if not isinstance(spec, HfssSpec):
         raise TypeError("bound HFSS request did not retain an HFSS spec")
-    if not prepared.app.analyze_setup(name=spec.run_control.setup_name, blocking=True):
+    if not analyze_with_resources(
+        prepared.app, spec.run_control.setup_name, prepared.request.workspace,
+        resources, resource_evidence if resource_evidence is not None else {},
+    ):
         raise RuntimeError(
             f"HFSS failed to analyze setup {spec.run_control.setup_name!r}"
         )
+    if not prepared.app.save_project() or not prepared.project_path.is_file():
+        raise RuntimeError("HFSS solved project save failed")
 
 
 def export_hfss(prepared: PreparedHfss) -> dict[str, Any]:
-    """Export, perform the final save, and bind convergence readback."""
+    """Export the saved solve and bind convergence readback."""
     run_dir = prepared.request.workspace
     spec = prepared.request.parse()
     if not isinstance(spec, HfssSpec):
@@ -128,6 +146,22 @@ def export_hfss(prepared: PreparedHfss) -> dict[str, Any]:
     )
     outputs = detached_data(outputs)
     result_readback = detached_data(result_readback)
+    if isinstance(spec, HfssEigenmodeSpec):
+        convergence_path = run_dir / "results/eigenmode/adaptive-convergence.prop"
+        returned = prepared.app.export_convergence(
+            spec.run_control.setup_name,
+            variations="",
+            output_file=str(convergence_path),
+        )
+        if (
+            not returned
+            or Path(returned).resolve() != convergence_path.resolve()
+            or not convergence_path.is_file()
+        ):
+            raise RuntimeError("HFSS Eigenmode adaptive convergence export is missing")
+        outputs[convergence_path.relative_to(run_dir).as_posix()] = file_sha256(
+            convergence_path
+        )
     saved = bool(prepared.app.save_project())
     if not saved or not prepared.project_path.is_file():
         raise RuntimeError("HFSS project was not saved")
@@ -885,7 +919,8 @@ def _bind_modal_evidence(
                 f"AEDT native modal integration line is unavailable: {port.name!r}"
             ) from exc
         observed = [
-            [float(item[f"{axis}Position"]) for axis in "XYZ"] for item in positions
+            [_native_position_um(item[f"{axis}Position"]) for axis in "XYZ"]
+            for item in positions
         ]
         expected = [list(point) for point in port.integration_line_um]
         if (
@@ -922,6 +957,36 @@ def _bind_modal_evidence(
             "characteristic_impedance": mode["CharImp"],
         }
     return ports
+
+
+def _native_position_um(value: Any) -> float:
+    """Read one saved AEDT modal coordinate as a finite micrometer value."""
+    if isinstance(value, bool):
+        raise ValueError("AEDT modal coordinate must be a finite length")
+    if isinstance(value, str):
+        match = re.fullmatch(
+            r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*([A-Za-z]+)",
+            value.strip(),
+        )
+        if match:
+            from ansys.aedt.core.generic.constants import AEDT_UNITS, unit_converter
+
+            units = match.group(2)
+            if units not in AEDT_UNITS["Length"]:
+                raise ValueError("AEDT modal coordinate units must be a length")
+            value = unit_converter(
+                float(match.group(1)),
+                unit_system="Length",
+                input_units=units,
+                output_units="um",
+            )
+    try:
+        result = float(value)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError("AEDT modal coordinate must be a finite length") from exc
+    if not math.isfinite(result):
+        raise ValueError("AEDT modal coordinate must be a finite length")
+    return result
 
 
 def _bind_terminal_reference_evidence(

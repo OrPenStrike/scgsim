@@ -9,6 +9,7 @@ stored mesh and are not workflow failures or acceptance thresholds.
 from scgsim._mesh_quality import MeshQualityReport, check_mesh_quality
 
 from .eigenmode import EigenmodeSim
+from ._epr_results import PalaceEprResult, epr_result, reanalyze_epr, resolve_epr_result, show_epr
 from .electrostatic import ElectrostaticSim
 from .report import (
     PalaceFailureDiagnosis,
@@ -33,6 +34,7 @@ from .resolve import (
 
 __all__ = [
     "EigenmodeSim",
+    "PalaceEprResult",
     "ElectrostaticSim",
     "MeshQualityReport",
     "PalaceCost",
@@ -52,4 +54,8 @@ __all__ = [
     "check_mesh_quality",
     "inspect_run_trustworthiness",
     "resolve_palace_result",
+    "epr_result",
+    "reanalyze_epr",
+    "resolve_epr_result",
+    "show_epr",
 ]

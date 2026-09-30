@@ -6,12 +6,17 @@ project:
     - docs/*.qmd
     - docs/specs/*.qmd
 
+execute:
+  enabled: false
+
 website:
   title: "SCGSim"
   description: "Independent downstream research toolkit for superconducting-circuit simulation"
   page-navigation: true
-  reader-mode: true
-  search: true
+  reader-mode: false
+  search:
+    location: navbar
+    type: overlay
   repo-url: https://github.com/OrPenStrike/scgsim
   repo-actions: [source, issue]
   navbar:
@@ -20,6 +25,8 @@ website:
         href: README.md
       - text: "Examples"
         href: docs/examples.qmd
+      - text: "Xmon tutorials"
+        href: docs/tutorial-xmon-input.qmd
       - text: "Architecture"
         href: docs/architecture.qmd
       - text: "Specs"
@@ -34,7 +41,7 @@ website:
           href: README.md
         - text: "Goals and upstream relationship"
           href: docs/goals-and-upstream.qmd
-        - text: "Roadmap and current status"
+        - text: "Roadmap and priorities"
           href: docs/roadmap.qmd
     - id: examples
       title: "Examples"
@@ -43,6 +50,14 @@ website:
       contents:
         - text: "Examples"
           href: docs/examples.qmd
+        - text: "Shared Xmon inputs"
+          href: docs/tutorial-xmon-input.qmd
+        - text: "Palace Route B Eigenmode"
+          href: docs/tutorial-xmon-palace.qmd
+        - text: "AEDT Route B Eigenmode + EPR"
+          href: docs/tutorial-xmon-aedt.qmd
+        - text: "Eigenmode and offline EPR"
+          href: docs/eigenmode-epr.qmd
         - text: "Notebook UX contracts"
           href: docs/notebook-ux.qmd
     - id: architecture
@@ -52,7 +67,7 @@ website:
       contents:
         - text: "Architecture and data flow"
           href: docs/architecture.qmd
-        - text: "Geometry and SGB Route A/B"
+        - text: "GeometryPlan and SGB Route A/B"
           href: docs/geometry-sgb.qmd
         - text: "Headless geometry preview"
           href: docs/geometry-preview.qmd
@@ -69,6 +84,8 @@ website:
       contents:
         - text: "Backend support matrix"
           href: docs/backend-support.qmd
+        - text: "AEDT Runtime Families"
+          href: docs/specs/aedt-runtime.qmd
         - text: "Palace Electrostatic + SGB"
           href: docs/specs/palace-electrostatic-sgb.qmd
         - text: "Provenance and data boundaries"
@@ -77,18 +94,10 @@ website:
           href: docs/ownership.qmd
 
 format:
-  html:
-    theme:
-      light: [cosmo, docs/theme-light.scss]
-      dark: [cosmo, docs/theme-dark.scss]
+  askr-html:
     css: docs/styles.css
     html-math-method: mathjax
     respect-user-color-scheme: true
     toc: true
     page-layout: article
-    grid:
-      sidebar-width: 260px
-      body-width: 960px
-      margin-width: 240px
-      gutter-width: 2.5rem
     code-copy: true

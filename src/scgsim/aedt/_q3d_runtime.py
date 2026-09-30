@@ -11,9 +11,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ._benchmark import attach_simulation_benchmark
 from ._matrix_export import parse_matrix_export
 from ._native_common import (
     BoundAedtRequest,
+    analyze_with_resources,
     create_region as _create_region,
     detached_data,
     import_and_bind as _import_and_bind,
@@ -23,7 +25,7 @@ from ._native_common import (
     saved_setup_properties as _saved_setup_properties,
 )
 from ._q2d_convergence import read_q3d_convergence
-from .spec import REQUIRED_AEDT_VERSION, Q3dSpec
+from .spec import AedtResources, REQUIRED_AEDT_VERSION, Q3dSpec
 from .util import file_sha256, write_csv
 
 _Q3D_REGION_DIRECTIONS = ("+X", "-X", "+Y", "-Y", "+Z", "-Z")
@@ -56,11 +58,18 @@ class PreparedQ3d:
             object.__setattr__(self, name, detached_data(getattr(self, name)))
 
 
-def run_q3d(Q3d: Any, run_dir: Path, spec: Q3dSpec) -> dict[str, Any]:
+def run_q3d(
+    Q3d: Any, run_dir: Path, spec: Q3dSpec,
+    resources: AedtResources | None = None,
+    resource_evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Use the same preparation stage as diagnostics, then solve and export."""
     prepared = prepare_q3d(Q3d, run_dir, spec)
-    solve_q3d(prepared)
-    return export_q3d(prepared)
+    solve_q3d(prepared, resources, resource_evidence)
+    result = export_q3d(prepared)
+    return attach_simulation_benchmark(
+        result, prepared.app, run_dir, spec.run_control.setup_name
+    )
 
 
 def prepare_q3d(Q3d: Any, run_dir: Path, spec: Q3dSpec) -> PreparedQ3d:
@@ -118,12 +127,18 @@ def prepare_q3d(Q3d: Any, run_dir: Path, spec: Q3dSpec) -> PreparedQ3d:
     )
 
 
-def solve_q3d(prepared: PreparedQ3d) -> None:
+def solve_q3d(
+    prepared: PreparedQ3d, resources: AedtResources | None = None,
+    resource_evidence: dict[str, Any] | None = None,
+) -> None:
     """Run the one explicit Q3D setup solve."""
     spec = prepared.request.parse()
     if not isinstance(spec, Q3dSpec):
         raise TypeError("bound Q3D request did not retain a Q3D spec")
-    if not prepared.app.analyze_setup(name=spec.run_control.setup_name, blocking=True):
+    if not analyze_with_resources(
+        prepared.app, spec.run_control.setup_name, prepared.request.workspace,
+        resources, resource_evidence if resource_evidence is not None else {},
+    ):
         raise RuntimeError(
             f"Q3D failed to analyze setup {spec.run_control.setup_name!r}"
         )

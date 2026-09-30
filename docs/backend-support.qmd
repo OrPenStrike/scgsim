@@ -2,24 +2,32 @@
 title: "Backend Support Matrix"
 ---
 
-This matrix records current runtime evidence. `CONVERGING` means the candidate
-exists but is not an accepted or stable V1 capability.
+This matrix separates implementation state, the exercise evidence recorded for
+that scope, and claims that evidence does not establish. `CONVERGING` means an
+implementation candidate exists; it is not an accepted or stable V1 capability.
 
-| Backend surface | Public namespace | State | Planned order |
+| Backend surface | Implementation | Exercise evidence recorded here | Current limit |
 |---|---|---|---|
-| Palace Electrostatic | `scgsim.palace` | CONVERGING; Route A/B LTlab Slurm + resolve/report exercised | Stabilize after Human acceptance |
-| Palace Eigenmode | `scgsim.palace` | CONVERGING; Route A/B LTlab Slurm + resolve/report exercised | Stabilize after Human acceptance |
-| Palace Driven | `scgsim.palace` | Planned; not implemented | Later |
-| Palace Magnetostatic | `scgsim.palace` | Planned; not implemented | Later |
-| HFSS Eigenmode | `scgsim.aedt` | CONVERGING; AEDT 2024.2 run + strict resolve exercised | Current |
-| HFSS Driven Modal | `scgsim.aedt` | CONVERGING; AEDT 2024.2 run + strict resolve exercised | Current |
-| HFSS Driven Terminal | `scgsim.aedt` | CONVERGING; AEDT 2024.2 run + strict resolve exercised | Current |
-| Q3D | `scgsim.aedt` | CONVERGING; AEDT 2024.2 run + strict resolve exercised | Current |
-| Q2D | `scgsim.aedt` | CONVERGING; AEDT 2024.2 run + strict resolve exercised | Current |
-| Meep | None | Excluded | Not planned |
+| Palace Electrostatic | Candidate; `CONVERGING` | Route A/B LTlab Slurm runs with strict resolution and reports exercised | Exercise scope does not establish all inputs or V1 stability. |
+| Palace Eigenmode | Candidate; `CONVERGING` | Route A/B LTlab Slurm runs with strict resolution and reports exercised | This does not validate every Eigenmode EPR output or numerical result. |
+| Palace Eigenmode EPR | Candidate APIs for surface, bulk, port, reanalysis, and reports; `CONVERGING` | The guide's paired component examples are static and make no native-solve or numerical-validation claim. | Sidewall energy may remain uncomputed; reported known-loss subtotal is not total device loss. |
+| Palace Driven | Not implemented | None | Planned for later. |
+| Palace Magnetostatic | Not implemented | None | Planned for later. |
+| HFSS Eigenmode | Candidate; `CONVERGING` | AEDT 2024.2 run and strict resolution exercised | Run/resolve exercise does not establish every saved-field EPR branch. |
+| HFSS Driven Modal | Candidate; `CONVERGING` | AEDT 2024.2 run and strict resolution exercised | Evidence is limited to the named run/resolve scope. |
+| HFSS Driven Terminal | Candidate; `CONVERGING` | AEDT 2024.2 run and strict resolution exercised | Evidence is limited to the named run/resolve scope. |
+| Q3D | Candidate; `CONVERGING` | AEDT 2024.2 run and strict resolution exercised | Evidence is limited to the named run/resolve scope. |
+| Q2D | Candidate; `CONVERGING` | AEDT 2024.2 run and strict resolution exercised | Evidence is limited to the named run/resolve scope. |
+| AEDT Eigenmode EPR | Candidate saved-field and history paths; `CONVERGING` | A bounded unsolved probe loaded four dependent expression definitions; the full inset-sheet library is not verified. | The probe does not establish field-side selection or numerical EPR accuracy. |
+| Meep | Excluded | None | Not planned. |
 
-Backend support requires real implementation, validation, and evidence. A
-namespace name or source-lane identity is not support.
+An exercised run is evidence only for its named scope. It does not establish
+universal solver correctness, numerical convergence, cross-backend agreement,
+or V1 acceptance. A namespace name or source-lane identity is not support.
 
-See [AEDT Runtime Families](specs/aedt-runtime.qmd) for the current ownership
-and failure contract.
+Use the [Eigenmode and Offline EPR guide](eigenmode-epr.qmd) for the method and
+static workflow. The backend specifications own exact behavior:
+[AEDT Runtime Families](specs/aedt-runtime.qmd) and
+[Palace Electrostatic + SGB](specs/palace-electrostatic-sgb.qmd). The
+[Unified Report Model](report-model.qmd) describes result presentation and
+availability.
