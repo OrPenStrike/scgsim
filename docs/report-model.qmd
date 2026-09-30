@@ -61,6 +61,11 @@ AEDT state. See the
 [AEDT runtime reference](specs/aedt-runtime.qmd) for strict resolution and
 missing-artifact behavior.
 
+Adaptive frequency has its own availability rule: a finite, positive numeric
+value that is not a boolean is plotted even when that mode's EPR row is partial.
+Participation and energy still require a complete row; row status, integrity
+checks, pass selection, and gaps in the plotted history remain unchanged.
+
 The displayed inverse-Q subtotal includes only known, unmasked baseline
 surface terms. Unknown baseline losses are counted as unknown; requested mask
 margins are alternative views and are not added to the subtotal. Sidewall

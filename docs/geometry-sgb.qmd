@@ -238,3 +238,7 @@ guessing a stack. The summary records source, entity, Net, material, Z/vacuum,
 port, EPR, and run-control inputs; unset or unknown values stay explicit. It
 does no file I/O, meshing, catalogue rebuild, or native solver inspection and
 does not claim native geometry or run evidence.
+For the source summary, `source.top_cell_name` uses a valid adapter-selected
+`selected_cell_name` first, then falls back to legacy `top_cell_name` when the
+selected name is unavailable, and otherwise is `None`. This display choice
+does not mutate source metadata or reread the GDS.

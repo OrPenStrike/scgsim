@@ -95,9 +95,20 @@ def _history_view(
             )
             series: dict[str, dict[int, float]] = {}
             frequency_by_pass: dict[int, float] = {}
+            for row in result.rows:
+                if row["mode"] != row_mode:
+                    continue
+                frequency = row.get("frequency_hz")
+                if not isinstance(frequency, (int, float)) or isinstance(frequency, bool):
+                    continue
+                try:
+                    frequency_hz = float(frequency)
+                except OverflowError:
+                    continue
+                if math.isfinite(frequency_hz) and frequency_hz > 0:
+                    frequency_by_pass[int(row["native_pass"])] = frequency_hz
             for row in complete:
                 native = int(row["native_pass"])
-                frequency_by_pass[native] = float(row["frequency_hz"])
                 series.setdefault("magnetic+inductive / normalization", {})[native] = (
                     float(row["magnetic_energy_balance_j"]) / float(row["normalization_energy_j"])
                 )

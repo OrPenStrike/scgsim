@@ -110,11 +110,16 @@ def summarize_geometry_input(
             }),
         })
     source_metadata = build_input.metadata
+    top_cell_name = source_metadata.get("selected_cell_name")
+    if not isinstance(top_cell_name, str) or not top_cell_name.strip():
+        top_cell_name = source_metadata.get("top_cell_name")
+    if not isinstance(top_cell_name, str) or not top_cell_name.strip():
+        top_cell_name = None
     return InputSummary({
         "source": {
             "status": "normalized",
             "gds_sha256": source_metadata.get("gds_sha256"),
-            "top_cell_name": source_metadata.get("top_cell_name"),
+            "top_cell_name": top_cell_name,
             "entity_count": len(build_input.entities),
             "polygon_count": len(build_input.polygons),
             "port_sheet_count": len(build_input.port_sheet_regions),
