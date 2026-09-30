@@ -354,6 +354,7 @@ class EigenmodeSim:
 
     @staticmethod
     def show_epr(
-        result: EprResult, *, mode: int | None = None, native_pass: int | None = None
+        result: EprResult, *, mode: int | None = None, native_pass: int | None = None,
+        theme: str = "light",
     ) -> Any:
-        return show_epr(result, mode=mode, native_pass=native_pass)
+        return show_epr(result, mode=mode, native_pass=native_pass, theme=theme)

@@ -413,6 +413,7 @@ def plot_epr_result(
     mode: int | None = None,
     native_pass: int | None = None,
     show_convergence: bool = True,
+    theme: str = "light",
 ) -> Any:
     """Render the exact selected pass plus an optional separate convergence view."""
 
@@ -420,7 +421,7 @@ def plot_epr_result(
 
     return render(
         result, mode=mode, native_pass=native_pass,
-        show_convergence=show_convergence,
+        show_convergence=show_convergence, theme=theme,
     )
 
 
@@ -1019,13 +1020,14 @@ def reanalyze_epr(
 
 
 def show_epr(
-    result: EprResult, *, mode: int | None = None, native_pass: int | None = None
+    result: EprResult, *, mode: int | None = None, native_pass: int | None = None,
+    theme: str = "light",
 ) -> Any:
     """Show one exact pass/mode with separate surface, bulk, and junction axes."""
 
     from ._presentation import show_epr as render
 
-    return render(result, mode=mode, native_pass=native_pass)
+    return render(result, mode=mode, native_pass=native_pass, theme=theme)
 
 
 __all__ = [

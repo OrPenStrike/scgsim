@@ -85,14 +85,17 @@ class ResolvedRun:
             raise RuntimeError("requested EPR result was not resolved")
         return self._epr_result
 
-    def show_all_results(self, *, show_details: bool = False) -> None:
+    def show_all_results(self, *, show_details: bool = False, theme: str = "light") -> None:
         """Display verified primary, benchmark, and requested EPR evidence."""
 
         if type(show_details) is not bool:
             raise TypeError("show_details must be a bool")
+        from scgsim._notebook_presentation import checked_theme
+
+        checked_theme(theme)
         from ._presentation import display_resolved_run
 
-        display_resolved_run(self, show_details=show_details)
+        display_resolved_run(self, show_details=show_details, theme=theme)
 
     def physics_results(self) -> tuple[dict[str, str], ...]:
         """Return the verified primary result as string-valued rows."""
@@ -151,9 +154,14 @@ class ResolvedRun:
             ),
         }
 
-    def show_simulation_benchmark(self, *, show_details: bool = False) -> AedtBenchmarkReport:
+    def show_simulation_benchmark(
+        self, *, show_details: bool = False, theme: str = "light"
+    ) -> AedtBenchmarkReport:
         """Return a notebook-displayable, offline view of native profile evidence."""
-        return AedtBenchmarkReport(self.simulation_benchmark(), show_details)
+        from scgsim._notebook_presentation import checked_theme
+
+        checked_theme(theme)
+        return AedtBenchmarkReport(self.simulation_benchmark(), show_details, theme)
 
 
 @dataclass(frozen=True)
@@ -162,11 +170,12 @@ class AedtBenchmarkReport:
 
     data: dict[str, Any]
     show_details: bool = False
+    theme: str = "light"
 
     def _ipython_display_(self) -> None:
         from ._presentation import display_benchmark
 
-        display_benchmark(self.data, show_details=self.show_details)
+        display_benchmark(self.data, show_details=self.show_details, theme=self.theme)
 
 
 def _captured_fields(

@@ -242,3 +242,13 @@ For the source summary, `source.top_cell_name` uses a valid adapter-selected
 `selected_cell_name` first, then falls back to legacy `top_cell_name` when the
 selected name is unavailable, and otherwise is `None`. This display choice
 does not mutate source metadata or reread the GDS.
+
+Its notebook HTML presents source, backend, route, and count cards, followed by
+Entity/occurrence/Net/material/source-Z, port/host/direction, junction A/B/L/C,
+analysis-choice, film/loss/source/margin-assumption, and solver/resource
+tables. The original detached JSON is in a collapsed disclosure. Unknown
+values remain distinct from zero; `None` means all and an empty tuple means
+none only for a selection, while an absent request is labeled not requested.
+The HTML has no theme
+argument and inherits the front-end light/dark palette; the detached `.data`
+contract is unchanged.

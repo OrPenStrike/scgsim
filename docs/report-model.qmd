@@ -20,6 +20,21 @@ readable evidence without promoting an incomplete run. The strict
 `resolve_palace_result(..., expected_handoff_id=...)` path accepts only a
 completed package whose handoff, receipt, solver, and artifact hashes validate.
 
+The AEDT `ResolvedRun.show_all_results()` order is identity, numerical
+evidence, benchmark, physics, then details. Identity uses the recorded project,
+backend, setup, requested modes, actual final pass, and completion state.
+Canonical relative receipt paths and artifact hashes appear only in details;
+absolute host paths are not displayed. For example,
+`resolved.show_all_results(show_details=False, theme="light")` collapses raw
+source and long tables; `show_details=True` opens them without changing result
+selection. If Plotly is unavailable, HTML tables remain available and the
+unavailable plots are identified.
+
+Numerical figures show frequency, surface participation by mode and interface,
+junction history, and energy balance. They preserve existing projections and
+eligibility; a valid partial-row frequency remains visible while unavailable
+EPR values stay as gaps, with no fallback to an earlier pass.
+
 ## Honesty rule
 
 Solver-specific quantities remain solver-specific. Electrostatic matrices,
@@ -49,6 +64,27 @@ semantic owner or owners, interface, and baseline or requested-margin
 evaluation. Hover data retains source members, field side, and loss assumptions.
 The coverage annotation counts reported surface rows and source bindings or
 surfaces, bulk domains, and junctions or ports.
+
+In the integrated AEDT report, each requested mode at the actual final pass
+has a descending horizontal surface-owner ranking, separate bulk and junction
+participation plots, and a surface table with owner, interface, evaluation,
+margin, participation, loss, and inverse-Q. Junction inductive and capacitive
+participation have separate plots and tables. Requested margins form trends
+per mode and pass; the unmasked baseline is separate and is not connected to
+the margin line. Every evaluation remains visible: `Unmasked` and
+`Requested 0` are distinct, and alternative margins or split aggregates are
+never summed together. The known baseline subtotal and unknown-loss count stay
+separate; the report does not claim total device Q or T1.
+
+Scientific keys, not display labels, identify plotted data. Shared readable
+labels appear across figures; hover data and metadata retain full group,
+members, side, and source identity.
+
+`InputSummary` HTML inherits the front-end light/dark palette. AEDT report and
+Plotly views use their explicit theme choice, defaulting to light; they do not
+automatically follow the front-end theme. Surface interfaces retain MA
+`#56B4E9`, MS `#E69F00`, and SA `#009E73`; same-interface owners remain
+distinguishable by labels, dash patterns, and markers.
 
 An AEDT `ResolvedRun` provides `epr_result()` for its bound EPR record and
 `show_all_results(show_details=False)` for the integrated run view; the latter

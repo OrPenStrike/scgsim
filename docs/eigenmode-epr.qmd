@@ -19,7 +19,16 @@ limits.
 | Configure | Both facades consume the same prepared `scgsim.sgb.GeometryPlanSnapshot` through `set_plan(snapshot)`. AEDT then uses `set_output_dir(path)`, `set_eigenmode(*, project_name, design_name, run_control, route='B', route_a_profile=None, resources=None, geometry_workers=None)`, `set_surface_epr(*, contributions=(), defaults=None)`, `add_junction(PlanarJunction)`, and `set_epr_request(EprAnalysisRequest | None)`. | Palace then uses `set_output_dir(path)`, `set_eigenmode(*, num_modes=10, target=None, tolerance=1e-6, save=0)`, and `set_mesh(*, refined_mesh_size, max_mesh_size)`. Optional EPR setup: `set_surface_epr(*, representation, specs, route_a_thin_film=None)`, `add_port(qualified_name, *, layer, layout_sheet=True, inductance)`, and `set_epr_request(*, surface_interfaces: Sequence[str] | None = None, bulk_domain_ids: Sequence[str] | None = None, port_names: Sequence[str] | None = None)`. The outer vacuum envelope comes from the plan snapshot. |
 | Prepare a handoff | `prepare_handoff()` creates the versioned HFSS Eigenmode package. It does not run HFSS. | `mesh()` creates the local mesh; `write_config()` writes Palace configuration; `prepare_handoff(*, profile, executable, resources=None, setup_commands=(), petsc_options=())` creates the manual run package. Quarto examples are disabled and do not call these methods. |
 | Resolve returned results | `sim.resolve_results(run_dir=None)` resolves the AEDT run summary. `scgsim.aedt.resolve_epr_result(path)` loads the EPR result record. | `scgsim.palace.resolve_palace_result(run_dir, *, expected_handoff_id)` resolves a returned run; `resolved.epr_result()` detaches its final Eigenmode EPR quantities. `scgsim.palace.resolve_epr_result(path)` loads a detached EPR JSON file without reading the full solver run. |
-| Reanalyze and show | `scgsim.aedt.reanalyze_epr(result, *, surface_defaults=None, group_overrides=None)` returns a fresh `EprResult`; `show_epr(result, *, mode=None, native_pass=None)` returns a Plotly `Figure`. | `scgsim.palace.reanalyze_epr(result, *, surface_defaults=None, group_overrides=None)` returns a fresh `PalaceEprResult`; `show_epr(result, *, mode=None)` returns a Plotly `Figure`. |
+| Reanalyze and show | `scgsim.aedt.reanalyze_epr(result, *, surface_defaults=None, group_overrides=None)` returns a fresh `EprResult`; `show_epr(result, *, mode=None, native_pass=None, theme="light")` returns a Plotly `Figure`. | `scgsim.palace.reanalyze_epr(result, *, surface_defaults=None, group_overrides=None)` returns a fresh `PalaceEprResult`; `show_epr(result, *, mode=None)` returns a Plotly `Figure`. |
+
+AEDT presentation accepts the keyword-only `theme="light"` or
+`theme="dark"`, defaulting to light, on `ResolvedRun.show_all_results()`,
+`ResolvedRun.show_simulation_benchmark()`, standalone `show_epr()` and
+`plot_epr_result()`, and `EigenmodeSim.show_epr()`. An invalid theme raises a
+`ValueError`; existing return types are unchanged. For example,
+`resolved.show_all_results(show_details=False, theme="dark")` selects a dark
+report explicitly. `InputSummary` has no theme parameter, and its detached
+`.data` is unchanged.
 
 ::: {.callout-note title="Backend boundary choices"}
 The shared Eigenmode workflow does not promise identical models. In the current
@@ -157,6 +166,12 @@ The subtotal is not total device loss or a lifetime estimate; requested mask
 rows are alternatives and are not added into it. Sidewall terms remain
 uncomputed where they were not evaluated.
 
+`show_epr()` keeps its three-region surface/bulk/junction view.
+`plot_epr_result()` returns one adaptive-history figure with independent
+frequency, participation, and energy subplots; a valid partial-row frequency
+does not fill its unavailable EPR quantities. Both views use stable scientific
+keys for selection rather than readable display labels.
+
 ## Static component examples {#static-component-examples}
 
 The public Xmon inputs, component metadata, layer stack, and backend setup now
@@ -236,9 +251,11 @@ updated = reanalyze_epr(
     result,
     surface_defaults={"MA": {"loss_tangent": 2.0e-4}},
 )
-updated_figure = show_epr(updated, mode=mode)
+updated_figure = show_epr(updated, mode=mode, theme="light")
+updated_dark_figure = show_epr(updated, mode=mode, theme="dark")
 recorded_figure.write_html("aedt-epr-recorded.html")
 updated_figure.write_html("aedt-epr-updated.html")
+updated_dark_figure.write_html("aedt-epr-updated-dark.html")
 ```
 
 The surface bars carry owner labels and hover details, and the coverage note
@@ -288,6 +305,7 @@ convergence = plot_epr_result(
     mode=mode,
     native_pass=native_pass,
     show_convergence=True,
+    theme="dark",
 )
 convergence.write_html("aedt-epr-convergence.html")
 ```

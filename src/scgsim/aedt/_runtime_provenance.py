@@ -22,7 +22,8 @@ SOURCE_SCHEMA_V3 = "scgsim.aedt.runtime-source.v3"
 SOURCE_SCHEMA_V4 = "scgsim.aedt.runtime-source.v4"
 SOURCE_SCHEMA_V5 = "scgsim.aedt.runtime-source.v5"
 SOURCE_SCHEMA_V6 = "scgsim.aedt.runtime-source.v6"
-SOURCE_SCHEMA = SOURCE_SCHEMA_V6
+SOURCE_SCHEMA_V7 = "scgsim.aedt.runtime-source.v7"
+SOURCE_SCHEMA = SOURCE_SCHEMA_V7
 
 # Frozen membership of the public runtime-source.v1 evidence format. Changing
 # producer structure must not silently change what historical readers mean.
@@ -84,6 +85,12 @@ _RUNTIME_SOURCE_V6_PATHS = tuple(sorted((
     "scgsim/sgb/summary.py",
 )))
 
+# Notebook presentation is imported by current summary and AEDT report paths.
+_RUNTIME_SOURCE_V7_PATHS = tuple(sorted((
+    *_RUNTIME_SOURCE_V6_PATHS,
+    "scgsim/_notebook_presentation.py",
+)))
+
 def _module_manifest() -> list[dict[str, str]]:
     package_root = Path(__file__).resolve().parents[1]
     return [
@@ -92,7 +99,7 @@ def _module_manifest() -> list[dict[str, str]]:
             "path": path,
             "sha256": file_sha256(package_root.parent / path),
         }
-        for path in _RUNTIME_SOURCE_V6_PATHS
+        for path in _RUNTIME_SOURCE_V7_PATHS
     ]
 
 
@@ -194,6 +201,7 @@ def validate_runtime_source(
         SOURCE_SCHEMA_V4: _RUNTIME_SOURCE_V4_PATHS,
         SOURCE_SCHEMA_V5: _RUNTIME_SOURCE_V5_PATHS,
         SOURCE_SCHEMA_V6: _RUNTIME_SOURCE_V6_PATHS,
+        SOURCE_SCHEMA_V7: _RUNTIME_SOURCE_V7_PATHS,
     }.get(schema)
     if (
         expected_paths is None

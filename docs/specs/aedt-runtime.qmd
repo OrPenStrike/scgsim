@@ -120,16 +120,16 @@ These unsigned consistency checks do not authenticate an artifact set against
 an actor able to rewrite every member.
 
 `runtime-source.v1` is a frozen thirteen-module reader contract, not a live
-enumeration rule. The V2, V3, and V4 inventories are also frozen. Current
-producer receipts use V5, which extends V4 with
-`scgsim/sgb/geometry_plan.py` and `scgsim/sgb/__init__.py`; V4 added
-`scgsim/aedt/_presentation.py`. The V1–V4 module membership and hashes retain
-their historical meaning. These source manifests do not change the V3 receipt
-schema. A pure initial-receipt codec owns exact V1/V2/V3 member order, two-space
-JSON indentation, and the trailing newline. V1 omits prepared provenance; V2
-and V3 insert it between `source` and `outputs`. Reading historical evidence
-uses the declared frozen schema and does not compare historical hashes with
-the installed package.
+enumeration rule. The V2–V6 inventories are also frozen. V4 added
+`scgsim/aedt/_presentation.py`; V5 added `scgsim/sgb/geometry_plan.py` and
+`scgsim/sgb/__init__.py`. Current producer receipts use V7, which adds
+`scgsim/_notebook_presentation.py` to V6. The V1–V6 module membership and hashes
+retain their historical meaning. These source manifests do not change the V3
+receipt schema. A pure initial-receipt codec owns exact V1/V2/V3 member order,
+two-space JSON indentation, and the trailing newline. V1 omits prepared
+provenance; V2 and V3 insert it between `source` and `outputs`. Reading
+historical evidence uses the declared frozen schema and does not compare
+historical hashes with the installed package.
 
 Execution computes mandatory runtime-source provenance inside the receipt-bound
 failure transaction, before importing PyAEDT or constructing Desktop. Missing
@@ -189,8 +189,9 @@ errors rather than silently omitted groups; it also retains scalar setup-root
 properties carrying native variation identity.
 
 `ResolvedRun.simulation_benchmark()` retains its four existing summary keys and
-adds the verified benchmark record. `show_simulation_benchmark(show_details=False)`
-returns a notebook-displayable report with the same `.data`, summary cards,
+adds the verified benchmark record.
+`show_simulation_benchmark(show_details=False, theme="light")` returns a
+notebook-displayable report with the same `.data`, summary cards,
 native-stage/pass table, and Plotly adaptive-stage curves when native values are
 present. When only native elapsed time exists, tables and curves label it
 `elapsed` rather than presenting it as real time. Eigenmode adaptive passes,
@@ -198,6 +199,9 @@ Driven adaptive and sweep scopes, and
 Q3D/Q2D native subproblem and element labels remain separate; a family without
 reported adaptive values has no invented pass curve. Details optionally shows
 stages and exact provenance. Rendering and offline resolution never open AEDT.
+The AEDT report methods accept keyword-only `theme="light"` or `theme="dark"`,
+default to light, and reject other values. `AedtBenchmarkReport` keeps its
+existing `.data` and carries the selected theme.
 
 ## Q2D native combined matrix export
 
