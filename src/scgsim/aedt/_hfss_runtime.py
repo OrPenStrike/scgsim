@@ -595,32 +595,74 @@ def _parse_eigenmode_export(
     path: Path, spec: HfssEigenmodeSpec
 ) -> list[dict[str, Any]]:
     lines = path.read_text(encoding="utf-8").splitlines()
+    table_header = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if "Mode" in line and "Frequency (GHz)" in line and "Q" in line
+        ),
+        None,
+    )
     if (
         not lines
         or lines[0] != "# Ansys eigenmode data file.  Version 2.0"
         or f"# Design:     {spec.design_name}" not in lines
         or f"# Solution:   {spec.run_control.setup_name} : LastAdaptive" not in lines
-        or not any(
-            "Mode" in line and "Frequency (GHz)" in line and "Q" in line
-            for line in lines
-        )
+        or table_header is None
     ):
         raise RuntimeError("HFSS Eigenmode native export header is invalid")
     rows: list[dict[str, Any]] = []
-    for line in lines:
-        tokens = line.split()
-        if len(tokens) != 3 or not tokens[0].isdigit():
+    for line_number, line in enumerate(
+        lines[table_header + 1 :], start=table_header + 2
+    ):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
             continue
+        tokens = line.split()
+        if (
+            not tokens
+            or re.fullmatch(r"[0-9]+", tokens[0]) is None
+            or len(tokens) not in {3, 6}
+        ):
+            raise RuntimeError(
+                f"HFSS Eigenmode native mode row at line {line_number} is malformed"
+            )
         mode = int(tokens[0])
-        frequency = float(tokens[1])
-        q_factor = float(tokens[2])
+        if mode <= 0:
+            raise RuntimeError(
+                f"HFSS Eigenmode native mode row at line {line_number} is malformed"
+            )
+        try:
+            frequency = float(tokens[1])
+            if len(tokens) == 3:
+                q_factor = float(tokens[2])
+                imaginary_frequency = None
+            else:
+                if tokens[2] not in {"+", "-"} or tokens[4] != "j":
+                    raise ValueError
+                imaginary_magnitude = float(tokens[3])
+                imaginary_frequency = (
+                    imaginary_magnitude if tokens[2] == "+" else -imaginary_magnitude
+                )
+                q_factor = float(tokens[5])
+        except ValueError:
+            raise RuntimeError(
+                f"HFSS Eigenmode native mode row at line {line_number} is malformed"
+            ) from None
         if (
             not math.isfinite(frequency)
             or frequency <= 0
             or not math.isfinite(q_factor)
             or q_factor < 0
+            or (
+                imaginary_frequency is not None
+                and not math.isfinite(imaginary_frequency)
+            )
         ):
-            raise RuntimeError("HFSS Eigenmode native result is invalid")
+            raise RuntimeError(
+                "HFSS Eigenmode native mode row at line "
+                f"{line_number} has invalid numeric values"
+            )
         rows.append({"mode": mode, "frequency_ghz": frequency, "q_factor": q_factor})
     if [row["mode"] for row in rows] != list(range(1, spec.run_control.num_modes + 1)):
         raise RuntimeError("HFSS Eigenmode native mode count/order is invalid")

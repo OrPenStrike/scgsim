@@ -150,7 +150,7 @@ version checks, receipts, and path/hash validation:
 |---|---|---|
 | HFSS Driven Terminal | terminal ports with explicit reference conductors | ordered terminal S-parameters and Touchstone |
 | HFSS Driven Modal | modal ports with exact integration lines | ordered modal S-parameters, impedance, and Touchstone |
-| HFSS Eigenmode | the existing runtime remains port-free, with explicit mode count and search frequency; the EPR frontend separately declares linearized Lumped RLC junction sheets as model elements, not driven excitation ports | ordinary mode frequency, damping/Q, and convergence evidence remain unchanged; EPR history and saved-field results use their separate result contract |
+| HFSS Eigenmode | the existing runtime remains port-free, with explicit mode count and search frequency; the EPR frontend separately declares linearized Lumped RLC junction sheets as model elements, not driven excitation ports | ordinary real mode frequency, native Q, and convergence evidence; EPR history and saved-field results use their separate result contract |
 | Q3D | exact nets with source/sink assignments; optional exact six-face Region ground seal | native capacitance and, when enabled, resistance/inductance matrices |
 | Q2D | explicit cross-section geometry and conductor/reference assignments | per-unit-length capacitance/conductance and resistance/inductance matrices |
 
@@ -161,6 +161,34 @@ unresolved native assignments, and path/hash mismatches.
 Likewise, a `completed` label and an `.aedt` file alone do not prove that saved
 fields are present or reusable; only the versioned family evidence sealed and
 checked by the resolver has that meaning.
+
+### HFSS Eigenmode native frequency export {#hfss-eigenmode-native-frequency-export}
+
+The shared HFSS Eigenmode exporter accepts native real-only mode rows with
+three fields (`mode`, real `frequency_ghz`, native `Q`) and complex-frequency
+rows with six fields (`mode`, real frequency, `+` or `-`, imaginary magnitude,
+lowercase `j`, native `Q`). The stored `frequency_ghz` is the real component.
+The parser validates a finite imaginary component but does not turn it into a
+damping value or calculate Q. It preserves the native Q token's numeric value.
+The original `eigenmodes.eig` remains in the hashed output manifest, so the
+complex component's sign and magnitude remain available as raw provenance.
+
+The normalized `eigenmodes.csv` columns remain `mode`, `frequency_ghz`, and
+`q_factor`; the `result_readback.eigenmodes` fields and receipt schema are
+unchanged. Ordinary Eigenmode runs, EPR solves, and saved-field EPR analysis
+share this exporter. Saved-field analysis uses the real frequency component
+when evaluating each mode.
+
+The version, design, setup, and table headers remain required. Blank and
+comment lines after the table header are allowed. A noncomment body record
+with an unsupported shape, nonpositive or non-ASCII-integer mode, bad
+separator, invalid numeric field, nonfinite value, nonpositive real frequency,
+or negative Q fails with a line-specific malformed/invalid-row error. Valid
+rows must still be exactly the requested ordered modes `1..num_modes`; missing,
+duplicate, or reordered mode indices fail the separate native mode
+count/order check. A malformed row is therefore not reported as a missing
+solver mode. These checks describe parser behavior only and do not establish a
+private consumer solve or EPR result.
 
 ### Native simulation benchmark
 
