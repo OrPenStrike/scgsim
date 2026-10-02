@@ -5,20 +5,3 @@ main.content table {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
 }
-
-main.content table th,
-main.content table td {
-  min-width: 8rem;
-  vertical-align: top;
-}
-
-.sidebar-navigation .sidebar-item-text {
-  white-space: normal;
-}
-
-@media (max-width: 575.98px) {
-  main.content table th,
-  main.content table td {
-    min-width: 7rem;
-  }
-}

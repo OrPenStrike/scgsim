@@ -3,101 +3,62 @@ title: "SCGSim"
 output-file: index.html
 ---
 
-# SCGSim
+<span id="scgsim"></span>SCGSim prepares geometry-based inputs and backend-specific solver handoffs for
+superconducting-circuit simulations, then resolves and presents returned
+results. It is an independent downstream research toolkit.
 
-SCGSim is an independent downstream research toolkit for superconducting-circuit
-simulation workflows. It prioritizes reproducible research behavior and stable
-consumer contracts. It is **not official gsim**, does not erase or replace
-upstream work, and does not promise Human review of Agent-driven code changes.
+## Choose a workflow {#documentation-source}
 
-Within SCQ_Design, SCGSim is the sole current reusable solver, runtime, and
-result-production authority. External gsim and historical SGB remain derivation
-provenance only: new SCGSim work must not consume them directly or use them as a
-fallback; the in-tree `scgsim.sgb` Core is the current geometry and topology
-authority.
+Start with the [Examples and tutorials](docs/examples.qmd) page. It builds the
+shared Xmon inputs first, then points to the Palace or AEDT workflow.
 
-The converging geometry candidate starts from component-local entities and
-named occurrences. A Notebook-authored `GeometryPlan` applies the final
-`Net -> Entity` map and prepares one immutable input for the Palace and AEDT
-backends. The [GeometryPlan and SGB guide](docs/geometry-sgb.qmd) documents
-this source-identity contract.
+### Follow the tutorial path {#workflows}
 
-The current `CONVERGING` package provides the in-tree `scgsim.sgb` Core,
-Palace Electrostatic/Eigenmode geometry-to-report workflows, and version-locked
-AEDT handoff/run/resolve workflows for HFSS Driven Terminal/Modal, HFSS
-Eigenmode, Q3D, and Q2D. The Eigenmode candidate includes backend-specific
-surface, bulk, and port/junction EPR analysis, offline film reanalysis, and
-owner-and-coverage reports. These are implemented candidates, not V1-stable
-contracts; the two backends retain separate preparation and result APIs. The
-[Backend Support Matrix](docs/backend-support.qmd) separates implementation
-status from exercised evidence and current limits. Static EPR examples do not
-claim native solver validation.
+1. [Build the shared Xmon inputs](docs/tutorial-xmon-input.qmd).
+2. Choose the [Palace handoff](docs/tutorial-xmon-palace.qmd) or the
+   [AEDT handoff and EPR workflow](docs/tutorial-xmon-aedt.qmd).
+3. Read [Eigenmode methods and offline EPR](docs/eigenmode-epr.qmd) for
+   normalization, loss assumptions, and returned-result analysis.
 
-The package supports Python 3.12 and 3.13. The optional AEDT integration pins
-PyAEDT 1.3.0; Python 3.13 package support does not by itself establish native
-AEDT 2024.2 operation correctness.
+The backend pages document separate preparation and result APIs. Their static
+examples do not claim a native geometry check or solver run.
 
 ## Optional installation extras
 
-Install the ordinary AEDT workflows with `pip install 'scgsim[aedt]'`. The
-`aedt` extra includes GDS support and PyAEDT 1.3.0, but does not install the
-additional layout-geometry dependencies used by AEDT Surface-EPR preparation.
-For that path, install `pip install 'scgsim[aedt-epr]'`; this extra adds the
-supported GDSFactory 9.x and KLayout 0.30.x ranges while retaining the same
-AEDT requirements.
+SCGSim supports Python 3.12 and 3.13. Install ordinary AEDT workflows with
+`pip install 'scgsim[aedt]'`; this extra includes GDS support and PyAEDT 1.3.0.
+For AEDT Surface-EPR preparation, install `pip install 'scgsim[aedt-epr]'`;
+it adds the supported GDSFactory 9.x and KLayout 0.30.x ranges while retaining
+the AEDT requirements. Python 3.13 package support alone does not establish
+native AEDT 2024.2 correctness; see the [AEDT runtime
+reference](docs/specs/aedt-runtime.qmd).
 
 When SCGSim and OrPen are used in one interpreter, resolve both packages
 together so the consumer project's lock selects one compatible GDSFactory,
-kfactory, and KLayout set. SCGSim's development `uv.lock` resolves SCGSim's own
-extras; it is not a cross-project pin for an OrPen consumer environment.
-
-OrPen SC PDK owns the public component-simulation notebooks. SCGSim owns no
-duplicate notebook source and has no runtime dependency on OrPen.
+kfactory, and KLayout set. The [OrPen Xmon tutorials](docs/examples.qmd) link
+to the public notebook sources they use.
 
 ## Online documentation
 
-The canonical documentation URLs are:
+The [SCGSim documentation home](https://orpenstrike.github.io/scgsim/) lists
+published versions. Open the [development documentation](https://orpenstrike.github.io/scgsim/develop/)
+for the current `develop` site.
 
-- [SCGSim documentation home](https://orpenstrike.github.io/scgsim/) — the
-  version landing page for documentation branches that have been published.
-- [Development documentation](https://orpenstrike.github.io/scgsim/develop/) —
-  built from the latest `develop` snapshot when its documentation workflow
-  succeeds.
+<span id="reference"></span>
 
-The first public deployment requires repository Pages setup and a successful
-workflow run. Until then, use the source links below. A `/main/` documentation
-home is reserved for a future `main` branch and is not published yet.
+<span id="current-nonclaims"></span>
 
-## Documentation source
+## More information
 
-### Workflows
+### Package capabilities and limits
 
-- [Choose a workflow and find public notebooks](docs/examples.qmd)
-- [Build the shared public Xmon inputs](docs/tutorial-xmon-input.qmd)
-- [Prepare a Palace Route B Xmon Eigenmode handoff](docs/tutorial-xmon-palace.qmd)
-- [AEDT Route B Xmon Eigenmode and EPR guide](docs/tutorial-xmon-aedt.qmd)
-- [Eigenmode methods, EPR, and offline reanalysis](docs/eigenmode-epr.qmd)
-- [Notebook UX contracts](docs/notebook-ux.qmd)
-- [Execution profiles and handoff](docs/execution-profiles.qmd)
+The [Backend Support Matrix](docs/backend-support.qmd) distinguishes implemented
+capabilities, exercised evidence, and current limits. Palace Driven and
+Magnetostatic workflows are not implemented.
 
-### Reference
+### Project context {#project-context}
 
-- [Backend implementation, evidence, and limits](docs/backend-support.qmd)
-- [AEDT runtime and data contracts](docs/specs/aedt-runtime.qmd)
-- [Palace Electrostatic and SGB contracts](docs/specs/palace-electrostatic-sgb.qmd)
-- [Unified report model](docs/report-model.qmd)
-- [Architecture and data flow](docs/architecture.qmd)
-
-### Project context
-
-- [Goals and upstream relationship](docs/goals-and-upstream.qmd)
-- [Roadmap](docs/roadmap.qmd)
-- [Provenance and data boundaries](docs/provenance.qmd)
-- [Error archive](docs/errors.qmd)
-- [Folder tree and ownership](docs/ownership.qmd)
-
-## Current nonclaims
-
-Palace Driven and Magnetostatic are not implemented; the [support matrix](docs/backend-support.qmd)
-has the complete capability state. SCGSim does not use cloud fallback or grant
-publication authority for private evidence.
+The [project goals and upstream relationship](docs/goals-and-upstream.qmd) and
+[architecture guide](docs/architecture.qmd) describe package ownership,
+source boundaries, and fallback limits. See [Provenance and data
+boundaries](docs/provenance.qmd) for evidence and publication authority.

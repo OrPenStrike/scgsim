@@ -21,32 +21,28 @@ website:
   repo-actions: [source, issue]
   navbar:
     left:
-      - text: "Overview"
+      - text: "Start"
         href: README.md
-      - text: "Examples"
+      - text: "Tutorials"
         href: docs/examples.qmd
-      - text: "Xmon tutorials"
-        href: docs/tutorial-xmon-input.qmd
-      - text: "Architecture"
-        href: docs/architecture.qmd
-      - text: "Specs"
+      - text: "Guides"
+        href: docs/eigenmode-epr.qmd
+      - text: "Reference"
         href: docs/backend-support.qmd
+      - text: "Project"
+        href: docs/goals-and-upstream.qmd
   sidebar:
-    - id: overview
-      title: "Overview"
-      style: floating
-      collapse-level: 1
+    - id: start
+      title: "Pages"
+      style: docked
+      collapse-level: 2
       contents:
-        - text: "Overview"
+        - text: "Start"
           href: README.md
-        - text: "Goals and upstream relationship"
-          href: docs/goals-and-upstream.qmd
-        - text: "Roadmap and priorities"
-          href: docs/roadmap.qmd
-    - id: examples
-      title: "Examples"
-      style: floating
-      collapse-level: 1
+    - id: tutorials
+      title: "Pages"
+      style: docked
+      collapse-level: 2
       contents:
         - text: "Examples"
           href: docs/examples.qmd
@@ -56,42 +52,53 @@ website:
           href: docs/tutorial-xmon-palace.qmd
         - text: "AEDT Route B Eigenmode + EPR"
           href: docs/tutorial-xmon-aedt.qmd
+    - id: guides
+      title: "Pages"
+      style: docked
+      collapse-level: 2
+      contents:
         - text: "Eigenmode and offline EPR"
           href: docs/eigenmode-epr.qmd
-        - text: "Notebook UX contracts"
-          href: docs/notebook-ux.qmd
-    - id: architecture
-      title: "Architecture"
-      style: floating
-      collapse-level: 1
-      contents:
-        - text: "Architecture and data flow"
-          href: docs/architecture.qmd
-        - text: "GeometryPlan and SGB Route A/B"
-          href: docs/geometry-sgb.qmd
-        - text: "Headless geometry preview"
-          href: docs/geometry-preview.qmd
         - text: "Execution profiles and handoff"
           href: docs/execution-profiles.qmd
-        - text: "Unified report model"
-          href: docs/report-model.qmd
+        - text: "Headless geometry preview"
+          href: docs/geometry-preview.qmd
         - text: "Tetrahedral mesh quality"
           href: docs/mesh-quality.qmd
-    - id: specs
-      title: "Specs"
-      style: floating
-      collapse-level: 1
+        - text: "Unified report model"
+          href: docs/report-model.qmd
+    - id: reference
+      title: "Pages"
+      style: docked
+      collapse-level: 2
       contents:
         - text: "Backend support matrix"
           href: docs/backend-support.qmd
+        - text: "GeometryPlan and SGB Route A/B"
+          href: docs/geometry-sgb.qmd
+        - text: "Notebook UX contracts"
+          href: docs/notebook-ux.qmd
         - text: "AEDT Runtime Families"
           href: docs/specs/aedt-runtime.qmd
         - text: "Palace Electrostatic + SGB"
           href: docs/specs/palace-electrostatic-sgb.qmd
+    - id: project
+      title: "Pages"
+      style: docked
+      collapse-level: 2
+      contents:
+        - text: "Goals and upstream relationship"
+          href: docs/goals-and-upstream.qmd
+        - text: "Architecture and data flow"
+          href: docs/architecture.qmd
+        - text: "Roadmap and priorities"
+          href: docs/roadmap.qmd
         - text: "Provenance and data boundaries"
           href: docs/provenance.qmd
         - text: "Folder tree and ownership"
           href: docs/ownership.qmd
+        - text: "Error archive"
+          href: docs/errors.qmd
 
 format:
   askr-html:
@@ -99,5 +106,9 @@ format:
     html-math-method: mathjax
     respect-user-color-scheme: true
     toc: true
+    toc-title: "Sections"
+    toc-location: right
     page-layout: article
     code-copy: true
+    code-overflow: wrap
+    smooth-scroll: true

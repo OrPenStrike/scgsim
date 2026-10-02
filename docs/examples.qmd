@@ -2,17 +2,16 @@
 title: "Examples and tutorials"
 ---
 
-SCGSim owns the solver handoff, result, and report APIs. OrPen SC PDK owns the
-public component-simulation notebooks. This site links a short package-owned
-Xmon tutorial path without copying those notebooks.
+This is the tutorial entry point: build the shared Xmon inputs, then choose the
+Palace or AEDT backend path. SCGSim documents its handoff and result APIs;
+OrPen SC PDK owns the public component-simulation notebooks linked below.
 
 ## Learn the shared Xmon workflow
 
-Start with the shared public Xmon inputs, then follow the Palace Route B path.
-The AEDT page is a separate backend candidate. Its input contract retains an
-authored `D0_TO_D1_GAP` as a vacuum entity while adding only the outer
-background. Static pages do not establish native-geometry validation or a
-solver run.
+The shared-input page prepares one source snapshot. Choose a backend tutorial
+for its own configuration and result contract. These static pages document
+preparation and returned-package handling; they do not establish native
+geometry validation or a solver run.
 
 1. [Build the public Xmon inputs](tutorial-xmon-input.qmd): construct the
    component-local geometry, register named occurrences, set the Notebook's
@@ -24,9 +23,6 @@ solver run.
    selected bulk domains using AEDT's backend-specific request.
 
 The backend pages keep their setup, handoff, and result contracts separate.
-Palace and AEDT Route B pages show backend-specific handoff preparation; the
-pages include pre-solve input summaries and the verified returned-package
-resolution steps, but do not perform a native geometry check or solver run.
 Both remain converging candidates. For Route A background and the complete
 public notebook context, use the pinned
 [OrPen Xmon component-simulation sources](https://github.com/OrPenStrike/orpen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/src/ComponentSimulation/Kosen2024_Xmon).
