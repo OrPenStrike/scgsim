@@ -684,7 +684,7 @@ plane; model CAD, boundaries, and mesh are unchanged. Split components are
 integrated separately and summed; an empty intersection is an explicit zero.
 Native analysis-sheet names identify their physical owner/support,
 classification and field side, then `Unmasked` or the effective margin in
-nanometres. A `PartNN` suffix appears only for multiple disconnected pieces.
+nanometres. A `PartNN` suffix appears only when there are multiple pieces.
 When one geometry serves multiple contributions, its single sheet name
 identifies the complete shared membership rather than an arbitrary first
 contribution; full internal identities remain in preparation evidence.
@@ -719,6 +719,45 @@ Margins are alternative
 evaluations rather than additive contributions, and MA/MS on one sheet remain
 distinct. Neither this discretization nor unsolved expression setup proves
 quadrature or EPR numerical accuracy.
+
+#### Inset contour coherence {#epr-inset-contour-coherence}
+
+The 128-vertex circle erosion remains the inset definition. Per-edge sizing
+(`Region.sized`) uses a different corner policy and can produce a different
+domain; it is not an interchangeable fallback. At the shared region-to-CAD
+conversion, SCGSim applies KLayout minimum coherence with
+`Region.merged(True, 1)` and lowers every resulting simple polygon separately.
+KLayout describes this mode as resolving kissing-corner contacts into separate
+polygons ([`Region.merged`](https://www.klayout.de/doc/code/class_Region.html)).
+This partitions a self-touching ring without moving its contact or changing the
+inset domain. The existing order remains: union full physical support, apply
+the circle inset, intersect with the owner's attribution, normalize contours,
+then create one CAD polyline per piece. Holes and all resulting pieces are
+retained, including pieces that meet at a point.
+
+Each piece keeps its owner, interface, field side, contribution, and margin
+identity. Disjoint pieces are summed only within that one logical evaluation;
+alternative margins remain separate. Baseline and requested-zero evaluations
+also remain distinct, so they are never counted twice as one result. A
+geometrically empty inset is a zero contribution; a failed CAD polyline
+creation remains an error. The motivating prepare-only failure was AEDT's
+`CreatePolyline` crossing-edge rejection of a self-contacting contour. The
+figures below are synthetic geometry diagnostics, not native AEDT runs.
+
+![Generic acute-tip diagnostic at a 900 nm inset: the circle result self-contacts at (5.999, 0.900) um, while minimum coherence partitions the unchanged domain into two valid polygons.](../assets/inset-coherence/acute-contact.png){fig-alt="Synthetic acute-tip region with the circle128 self-contact marked, a sized-mode comparison, and a zoom of the contact." fig-cap="A kissing-corner contact becomes two simple pieces without moving the contact." width="95%"}
+
+![Generic two-hole ligament diagnostic at 500 and 1000 nm: circle128 erosion retains six pieces at 1000 nm, while per-edge sizing mode 2 produces no positive-area pieces.](../assets/inset-coherence/hole-ligament.png){fig-alt="Synthetic two-hole ligament at 500 and 1000 nm, comparing circle128 erosion with per-edge sizing mode 2." fig-cap="Different corner policies can produce different domains; sizing is not an equivalent fallback." width="95%"}
+
+In synthetic validation with KLayout 0.30.10, minimum-coherence normalization
+produced valid simple rings and an empty KLayout XOR against each
+pre-normalized region in all 1,224 configuration/margin cases. The 900 nm
+acute case normalized from one invalid ring to two valid pieces. At 1000 nm,
+the neck case split into two pieces and the hole case retained six circle128
+pieces (1.718672 um²), while sizing mode 2 produced none. Serial, grouped, and
+two-worker precomputation agreed on 16 checked plans. No sampled nesting
+violation was observed, but this finite sample does not prove strict
+monotonicity. Native AEDT polyline acceptance and numerical EPR accuracy remain
+unvalidated by these offline checks.
 
 Pure inset contours may be precomputed in separate spawned processes before
 Desktop construction. The optional geometry-worker count controls only that

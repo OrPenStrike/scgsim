@@ -645,6 +645,10 @@ def _klayout_region(
 
 
 def _regions_from_klayout(region: Any, dbu_um: float) -> list[dict[str, Any]]:
+    # Split point contacts without changing the integer polygon set. Iterate
+    # stored pieces so implicit merging cannot recreate a self-touching contour.
+    simple = region.merged(True, 1)
+
     def points(iterator: Any) -> list[list[float]]:
         return [[point.x * dbu_um, point.y * dbu_um] for point in iterator]
 
@@ -656,7 +660,7 @@ def _regions_from_klayout(region: Any, dbu_um: float) -> list[dict[str, Any]]:
                 for index in range(polygon.holes())
             ],
         }
-        for polygon in region.each_merged()
+        for polygon in simple.each()
     ]
     return sorted(result, key=canonical_sha256)
 
