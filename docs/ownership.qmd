@@ -32,3 +32,46 @@ Generated API reference may be produced from product-owned source, while its
 placement and presentation remain package-owned. No owner listed here may
 infer Human acceptance, publication authority, or merge authority from a green
 build.
+
+## Public documentation site
+
+The canonical site is `https://orpenstrike.github.io/scgsim/`; it is the
+version landing page. The current development home is
+`https://orpenstrike.github.io/scgsim/develop/`. A `/main/` home is reserved
+until a `main` branch exists and has been published. Do not advertise a dead
+`/main/` link or create version archives as part of routine documentation
+maintenance.
+
+The **Documentation Pages** GitHub Actions workflow owns publication. Pushes
+to `develop` or `main`, and a manual `workflow_dispatch`, start one combined
+build. At build start, `scripts/build_docs_site.py` resolves and records the
+current remote commit for each available branch. It renders clean tracked
+snapshots separately with Quarto 1.10.18 and code execution disabled, then
+publishes one artifact containing the version landing page and available
+branch homes. Each branch page and `build.json` record its package version and
+source commit. Pull requests do not publish. Generated site output is not
+committed to either branch.
+
+If a branch render fails, the publish step must not run; the last successfully
+published site remains in place. Read the failing Actions run and its build
+logs, fix the tracked source or configuration, and push the correction to the
+same branch. For a one-off rebuild without a new commit, open **Actions →
+Documentation Pages → Run workflow** and select `develop` (or `main` once it
+exists). The workflow rebuilds the combined artifact from then-current remote
+heads; uncommitted local changes are not included. If deployment itself fails,
+inspect the deploy job and the `github-pages` environment, correct the setup,
+then run the workflow again. Repository Pages settings and the environment are
+owned by Integration & Sync.
+
+For a local diagnostic build, use Python 3.12, network access to GitHub, and
+Quarto 1.10.18. The helper reads remote commits rather than the local working
+tree, and `--output` must name a new directory:
+
+```bash
+preview_dir="$(mktemp -d)"
+rmdir "$preview_dir"
+python scripts/build_docs_site.py --output "$preview_dir"
+```
+
+Do not upload local output by hand or bypass the workflow with a Pages branch
+or personal access token.

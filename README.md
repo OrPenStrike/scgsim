@@ -54,7 +54,21 @@ extras; it is not a cross-project pin for an OrPen consumer environment.
 OrPen SC PDK owns the public component-simulation notebooks. SCGSim owns no
 duplicate notebook source and has no runtime dependency on OrPen.
 
-## Read the site
+## Online documentation
+
+The canonical documentation URLs are:
+
+- [SCGSim documentation home](https://orpenstrike.github.io/scgsim/) — the
+  version landing page for documentation branches that have been published.
+- [Development documentation](https://orpenstrike.github.io/scgsim/develop/) —
+  built from the latest `develop` snapshot when its documentation workflow
+  succeeds.
+
+The first public deployment requires repository Pages setup and a successful
+workflow run. Until then, use the source links below. A `/main/` documentation
+home is reserved for a future `main` branch and is not published yet.
+
+## Documentation source
 
 ### Workflows
 
