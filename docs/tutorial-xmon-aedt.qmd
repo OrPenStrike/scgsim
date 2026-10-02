@@ -33,9 +33,11 @@ geometry; the Notebook `GeometryPlan` supplies the final terminal Nets. Bind
 that normalized sheet to the explicit Nets and circuit values before
 cataloguing surfaces. The same `junction` is supplied to the catalogue
 geometry below and added to `EigenmodeSim` before final handoff preparation, so
-both preparations use the same partition request. See the
+both preparations use the same partition request. Closed-XY binder contact
+finds candidate owners; preparation still checks the complete designated end
+edge against the shared emitted geometry. See the
 [partition contract](specs/aedt-runtime.qmd#aedt-automatic-junction-partition)
-for its topology and search assumptions.
+for its shared-coordinate construction, topology, and search assumptions.
 
 The public Palace example models the port as inductive with
 $L=11.78\,\mathrm{nH}$. This AEDT example sets $C=0$ as an explicit

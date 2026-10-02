@@ -448,7 +448,11 @@ recorded `source_name`. The helper uses the recorded source sheet for direction
 and width, while the caller supplies the terminal nets and circuit values
 explicitly. Missing, ambiguous, or invalid source sheets fail; the helper does
 not infer connectivity. It retains the existing rectangular-sheet and
-owner-overlap checks.
+owner-overlap checks. Binder discovery uses closed-XY contact with candidate
+terminal-owner geometry, including area overlap or boundary contact. This
+identifies a candidate binding but does not qualify the final partition.
+Preparation separately checks complete coverage of the designated central end
+edge.
 
 #### Automatic rectangular junction partition {#aedt-automatic-junction-partition}
 
@@ -490,21 +494,32 @@ Boolean output, and deviations keep index arithmetic distinct from the
 geometry kernel's separate precision. Boolean collapse or topology change is a
 numerical geometry failure, not proof that all cuts are invalid.
 
-Let `F = S - (A ∪ B)` be the source sheet after subtracting both terminal
-assemblies. Both ends and the central rectangle come from this one residual
-construction; their union must cover `F`, and their interiors must be
-disjoint. An end may be omitted only when
-its residual domain is empty and its original arm covers the complete
-designated central end edge. Other residual pockets cannot be discarded just
-because a full edge is also covered. A nonempty end must be connected (point-
-connected fragments do not count); holes and all components are preserved, and
-invalid topology fails rather than dropping pieces. Coverage means the exact
-designated end edge is covered by the correct terminal assembly, not that
-total shared-boundary lengths happen to match. The two corners of each
-designated end edge belong to that edge, so correct terminal corner contact is
-allowed; a wrong-net corner, partial edge, isolated corner, or line/point
-contact on an open side is rejected. The central RLC rectangle contains no
-PEC area.
+Let `S` be the authored source sheet and `Arm_A` and `Arm_B` its accepted
+terminal-arm geometry. The shared model-coordinate construction forms the
+effective sheet `E = S - (Arm_A ∪ Arm_B)`, then partitions it as
+`E = PEC_A ∪ R ∪ PEC_B`, where `R` is the full-width central rectangle. The
+existing 2+2 source-local cut selector is unchanged. After it selects the
+cuts, source/arm intersections and those cuts are assembled in model
+coordinates; shared boundary nodes are emitted once. Common edges are
+cancelled once to build the loops used by the native PEC ends and RLC rectangle
+and their owner/catalogue support. Nodes from junctions on the same Ground
+accumulate before loops are finalized, and contact/coverage checks use those
+emitted loops. Supports are not independently regridded or rebuilt through a
+local-coordinate round trip. This correction changes geometry construction
+behind the existing interface; it adds no public API or result schema.
+
+The pieces must cover `E` exactly and have disjoint interiors. No sliver or
+residual pocket may be discarded to force coverage. An end may be omitted
+only when its residual geometry is empty and its original arm covers the
+complete designated central end edge. A nonempty end must be connected
+(point-connected fragments do not count); holes and all components are
+preserved, and invalid topology fails rather than dropping pieces. Coverage
+means the exact designated end edge is covered by the correct terminal
+assembly, not that total shared-boundary lengths happen to match. The two
+corners of each designated end edge belong to that edge, so correct terminal
+corner contact is allowed; a wrong-net corner, partial edge, isolated corner,
+or line/point contact on an open side is rejected. The central RLC rectangle
+contains no PEC area.
 
 Partitioning is AEDT-only and occurs after owner/route normalization but before
 surface catalogues, insets, or caches. Each end inherits an unambiguous source
@@ -524,9 +539,10 @@ Native creation and saved-model rebinding must read back the central shape,
 contacts, PEC/RLC assignments, and targets before cache installation.
 The candidate fails closed when a required native field is unavailable instead
 of substituting cached requested properties. Live native shape, contact, and
-property readback still needs separately authorized AEDT validation.
-Historical artifacts keep their recorded geometry. This candidate has not been
-verified against native AEDT readback or a solver run.
+property readback needs separate AEDT validation. Native creation and
+saved-project reopen/readback remain unexecuted; current evidence covers offline
+geometry preparation only, with no solver result claimed. Historical artifacts
+keep their recorded geometry.
 
 ![Authored source sheet and the prepared conductor pieces: pale existing A and B terminals, darker added A- and B-side conductor ends, and the central RLC rectangle.](../assets/junction-partition-generic.svg){fig-alt="Generic authored sheet with pale existing terminal metal, darker added conductor ends, and the central RLC rectangle." fig-cap="Generic solver-free prepared geometry; the lighter terminal fills remain part of each complete conductor. This is not native AEDT readback or solver evidence." width="95%"}
 

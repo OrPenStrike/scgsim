@@ -1,4 +1,8 @@
-"""Planar source preparation and HFSS-native body/selection binding for EPR."""
+"""Planar preparation and native binding using the same final source boundaries.
+
+Authored inputs remain immutable. Junction binding includes closed edge contact;
+prepared arm subdivisions, PEC ends and central rectangles share model vertices.
+"""
 
 from __future__ import annotations
 
@@ -1095,6 +1099,13 @@ def prepare_planar_geometry_input(
         )
     build_input = partition_junctions(build_input, junction_tuple, source_dbu_um)
     if junction_tuple:
+        final_polygons = {p.polygon_id: p for p in build_input.polygons}
+        for junction in junction_tuple:
+            record = build_input.metadata["aedt_junction_partitions"][junction.junction_id]
+            polygon = final_polygons[record["central_polygon_id"]]
+            _junction_terminal_line(
+                {"exterior": polygon.exterior, "holes": polygon.holes}, junction, 0.0
+            )
         partition_source = {
             "route_a_thin_film": prepared_stack.get("metadata", {}).get(
                 "route_a_thin_film"
@@ -2263,10 +2274,26 @@ def planar_junction_from_port(
             f"found {len(matches)}"
         )
     region = matches[0]
-    entities = {entity.semantic_id: entity for entity in build_input.entities}
-    overlap_nets = {
-        entities[overlap.host_semantic_id].net_id for overlap in region.overlaps
-    }
+    # Adapter overlap inventories contain positive area only. Binding also owns
+    # complete terminal-edge contact, and therefore checks the closed XY source.
+    def source_rings(exterior, holes):
+        return tuple(
+            tuple(tuple(Fraction(str(float(v))) for v in point) for point in ring)
+            for ring in (exterior, *holes)
+        )
+
+    sheet = source_rings(region.exterior, region.holes)
+    polygons = {polygon.polygon_id: polygon for polygon in build_input.polygons}
+    overlap_nets = set()
+    for entity in build_input.entities:
+        if entity.material_kind != "conductor":
+            continue
+        for pid in entity.polygon_ids:
+            if pid == region.source_polygon_id:
+                continue
+            polygon = polygons[pid]
+            if _closed_contact([sheet], [source_rings(polygon.exterior, polygon.holes)]):
+                overlap_nets.add(entity.net_id)
     if overlap_nets != {terminal_a_net, terminal_b_net}:
         raise ValueError(
             f"port {port_name!r} overlaps must identify exactly the explicit "
