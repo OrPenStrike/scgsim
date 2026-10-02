@@ -509,6 +509,16 @@ overlaps, and curvature remain subject to the existing checks. Inductance and
 capacitance use their own dimensionally appropriate value comparisons, not this
 length tolerance.
 
+Boundary comparison also tolerates equivalent straight-edge subdivisions: an
+otherwise matching straight chain may contain different numbers of collinear
+vertices. This comparison does not rewrite the prepared source, the actual
+native coordinates, or their cache identity. The central RLC face remains a
+four-edge rectangle; real corners, holes, material and Z assignment, contact,
+and actual Route B extrusion geometry remain checked under the same
+`1e-9 µm` absolute, zero-relative coordinate policy. This generic comparison
+behavior is not evidence of live AEDT readback or of any particular consumer
+case.
+
 Let `S` be the authored source sheet and `Arm_A` and `Arm_B` its accepted
 terminal-arm geometry. The shared model-coordinate construction forms the
 effective sheet `E = S - (Arm_A ∪ Arm_B)`, then partitions it as

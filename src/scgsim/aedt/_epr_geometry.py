@@ -4,7 +4,9 @@ Authored inputs remain immutable. Junction binding includes closed edge contact;
 prepared arm subdivisions, PEC ends and central rectangles share model vertices.
 Native junction observations use the recorded absolute coordinate comparison
 policy without moving CAD, changing prepared geometry or asserting exact contact
-below the readback resolution.
+below the readback resolution. Conductor comparison permits redundant straight
+boundary subdivisions; contacts retain the raw observed loops. Extrusion checks
+use actual cap and side boundaries rather than authored vertex or face counts.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from dataclasses import replace
 from fractions import Fraction
 from importlib.metadata import version
+from itertools import pairwise
 from multiprocessing import get_context
 from typing import Any
 
@@ -1800,14 +1803,65 @@ def _native_coordinates_close(left, right) -> bool:
     )
 
 
-def _native_polygon_correspondence(loops, polygon, name, deviations):
-    """Verify a unique vertex/edge bijection; return actual, ordered vertices."""
-    expected = [
-        tuple(Fraction(str(float(v))) for v in point)
-        for ring in (polygon["exterior"], *polygon["holes"])
-        for point in ring
-    ]
-    actual = [point for rings in loops for ring in rings for point in ring]
+def _native_straight_ring(ring):
+    """Comparison copy with whole monotone straight chains, never moved nodes."""
+    points = [tuple(Fraction(str(float(v))) for v in point) for point in ring]
+    if len(points) > 1 and points[0] == points[-1]:
+        points.pop()
+    if len(points) < 3 or any(
+        _native_coordinates_close(a, b)
+        for a, b in zip(points, (*points[1:], points[0]))
+    ):
+        raise RuntimeError("native junction boundary is unresolved at readback resolution")
+    chains = [[a, b] for a, b in zip(points, (*points[1:], points[0]))]
+    changed = True
+    while changed and len(points) > 3:
+        changed = False
+        for index in range(len(points)):
+            chain = chains[index - 1] + chains[index][1:]
+            parameters = [
+                _native_edge_projection(p, chain[0], chain[-1])[0] for p in chain
+            ]
+            if (
+                parameters == sorted(parameters)
+                and all(_native_on_segment(p, chain[0], chain[-1]) for p in chain)
+            ):
+                chains[index - 1] = chain
+                del chains[index]
+                del points[index]
+                changed = True
+                break
+    return points, chains
+
+
+def _native_polygon_correspondence(
+    loops, polygon, name, deviations, *, subdivisions=True
+):
+    """Match boundary corner cycles, retaining raw native loops for contacts.
+
+    Both raw chains must cover each other at the existing coordinate policy;
+    independent straight-chain reduction alone could hide opposing deviations.
+    The central rectangle disables reduction and retains its four-edge contract.
+    """
+    source_rings = (polygon["exterior"], *polygon["holes"])
+    actual_rings = [ring for rings in loops for ring in rings]
+    if len(loops) != 1 or len(actual_rings) != len(source_rings):
+        raise RuntimeError(f"native junction conductor shape/holes differ from source: {name!r}")
+
+    def comparison(rings):
+        corners, chains = [], {}
+        for ring in rings:
+            points = [tuple(Fraction(str(float(v))) for v in p) for p in ring]
+            if subdivisions:
+                points, raw_chains = _native_straight_ring(points)
+            else:
+                raw_chains = [[a, b] for a, b in zip(points, (*points[1:], points[0]))]
+            corners.extend(points)
+            chains.update({tuple(sorted((c[0], c[-1]))): c for c in raw_chains})
+        return corners, chains
+
+    expected, expected_chains = comparison(source_rings)
+    actual, actual_chains = comparison(actual_rings)
     matches = {}
     for point in actual:
         candidates = [p for p in expected if _native_coordinates_close(point, p)]
@@ -1819,33 +1873,24 @@ def _native_polygon_correspondence(loops, polygon, name, deviations):
         deviations.append(max(abs(float(a - b)) for a, b in zip(point, candidates[0])))
     if len(actual) != len(expected) or set(matches) != set(expected):
         raise RuntimeError(f"native junction vertex topology differs: {name!r}")
+    if len(actual_chains) != len(actual) or len(expected_chains) != len(expected):
+        raise RuntimeError(f"native junction boundary has repeated edges: {name!r}")
     reverse = {point: wanted for wanted, point in matches.items()}
-    expected_edges = {
-        tuple(
-            sorted(
-                (
-                    tuple(Fraction(str(float(v))) for v in a),
-                    tuple(Fraction(str(float(v))) for v in b),
-                )
-            )
-        )
-        for ring in (polygon["exterior"], *polygon["holes"])
-        for a, b in zip(ring, (*ring[1:], ring[0]))
-    }
-    actual_edges = {
-        tuple(sorted((reverse[a], reverse[b])))
-        for rings in loops
-        for ring in rings
-        for a, b in zip(ring, (*ring[1:], ring[0]))
-    }
-    if (
-        actual_edges != expected_edges
-        or len(loops) != 1
-        or len(loops[0]) != 1 + len(polygon["holes"])
-    ):
-        raise RuntimeError(
-            f"native junction conductor shape/holes differ from source: {name!r}"
-        )
+    for edge, chain in actual_chains.items():
+        source_chain = expected_chains.get(tuple(sorted(reverse[p] for p in edge)))
+        if source_chain is None:
+            raise RuntimeError(f"native junction conductor shape/holes differ from source: {name!r}")
+        for nodes, other in ((chain, source_chain), (source_chain, chain)):
+            for point in nodes:
+                segments = list(pairwise(other))
+                if not any(_native_on_segment(point, a, b) for a, b in segments):
+                    raise RuntimeError(f"native junction boundary chain differs from source: {name!r}")
+                residuals = []
+                for a, b in segments:
+                    parameter, projected = _native_edge_projection(point, a, b)
+                    nearest = a if parameter < 0 else b if parameter > 1 else projected
+                    residuals.append(max(abs(float(p - q)) for p, q in zip(point, nearest)))
+                deviations.append(min(residuals))
     return matches
 
 
@@ -1996,6 +2041,47 @@ def _native_z_contact(left, left_solid, right, right_solid) -> bool:
     )
 
 
+def _native_face_edges(face, name):
+    """Read straight face edges in actual XYZ for both caps and sides."""
+    edges = []
+    edge_observations = []
+    for edge in face.edges:
+        vertices = [vertex.position for vertex in edge.vertices]
+        if len(vertices) != 2 or any(p is None or len(p) != 3 for p in vertices):
+            raise RuntimeError(
+                f"native junction boundary is not polygonal: {name!r}"
+            )
+        midpoint = edge.midpoint
+        expected_midpoint = [(float(a) + float(b)) / 2 for a, b in zip(*vertices)]
+        length = edge.length
+        chord = math.dist(*vertices)
+        if (
+            midpoint is None
+            or not _native_coordinates_close(midpoint, expected_midpoint)
+            or isinstance(length, bool)
+            or not isinstance(length, (int, float))
+            or not _native_coordinates_close((length,), (chord,))
+        ):
+            raise RuntimeError(
+                f"native junction edge is curved or its linear readback differs: {name!r}"
+            )
+        a, b = [tuple(Fraction(str(float(v))) for v in p) for p in vertices]
+        edges.append((a, b))
+        edge_observations.append(
+            {
+                "vertices_um": [list(map(float, point)) for point in vertices],
+                "midpoint_um": list(map(float, midpoint)),
+                "native_length_um": float(length),
+                "chord_length_um": chord,
+                "maximum_midpoint_coordinate_deviation_um": max(
+                    abs(float(a) - float(b))
+                    for a, b in zip(midpoint, expected_midpoint)
+                ),
+            }
+        )
+    return edges, edge_observations
+
+
 def _native_planar_loops(obj: Any, z_um: float, observations=None) -> list[tuple]:
     """Read actual planar boundaries at absolute 1e-9 um coordinate resolution.
 
@@ -2024,42 +2110,8 @@ def _native_planar_loops(obj: Any, z_um: float, observations=None) -> list[tuple
             raise RuntimeError(
                 "native junction face has inconsistent actual Z coordinates"
             )
-        edges = []
-        edge_observations = []
-        for edge in face.edges:
-            vertices = [vertex.position for vertex in edge.vertices]
-            if len(vertices) != 2 or any(p is None or len(p) != 3 for p in vertices):
-                raise RuntimeError(
-                    f"native junction boundary is not polygonal: {obj.name!r}"
-                )
-            midpoint = edge.midpoint
-            expected_midpoint = [(float(a) + float(b)) / 2 for a, b in zip(*vertices)]
-            length = edge.length
-            chord = math.dist(*vertices)
-            if (
-                midpoint is None
-                or not _native_coordinates_close(midpoint, expected_midpoint)
-                or isinstance(length, bool)
-                or not isinstance(length, (int, float))
-                or not _native_coordinates_close((length,), (chord,))
-            ):
-                raise RuntimeError(
-                    f"native junction edge is curved or its linear readback differs: {obj.name!r}"
-                )
-            a, b = [tuple(Fraction(str(float(v))) for v in p[:2]) for p in vertices]
-            edges.append((a, b))
-            edge_observations.append(
-                {
-                    "vertices_um": [list(map(float, point)) for point in vertices],
-                    "midpoint_um": list(map(float, midpoint)),
-                    "native_length_um": float(length),
-                    "chord_length_um": chord,
-                    "maximum_midpoint_coordinate_deviation_um": max(
-                        abs(float(a) - float(b))
-                        for a, b in zip(midpoint, expected_midpoint)
-                    ),
-                }
-            )
+        xyz_edges, edge_observations = _native_face_edges(face, obj.name)
+        edges = [(a[:2], b[:2]) for a, b in xyz_edges]
         if observations is not None:
             observations.append(
                 {
@@ -2088,6 +2140,124 @@ def _native_planar_loops(obj: Any, z_um: float, observations=None) -> list[tuple
             f"native junction conductor has no planar face at source Z: {obj.name!r}"
         )
     return loops
+
+
+def _native_extrusion_sides(obj, bottom, top, z_range, thickness, observations):
+    """Verify straight prism sides against actual caps, independent of subdivision.
+
+    Side faces remain simple vertical quadrilaterals after comparison-only
+    straight-chain reduction. This does not support general face tessellation.
+    """
+    from scgsim.sgb.planning import (
+        _cancel_reversed_planar_edges,
+        _simple_planar_loops_from_edges,
+    )
+
+    caps = (bottom, top)
+    strips = ([], [])
+    cap_z = [
+        [p[2] for p in observation["face_vertices_um"]]
+        for observation in observations[-2:]
+    ]
+    boundary_edges = [
+        tuple(tuple(Fraction(str(v)) for v in p) for p in edge["vertices_um"])
+        for observation in observations[-2:] for edge in observation["edges"]
+    ]
+    if any(
+        not _native_coordinates_close((height,), (thickness,))
+        for height in (
+            max(cap_z[1]) - min(cap_z[0]), min(cap_z[1]) - max(cap_z[0])
+        )
+    ):
+        raise RuntimeError("native junction actual top/bottom extrusion differs")
+
+    def layer(point):
+        found = [
+            n for n, z in enumerate(z_range)
+            if _native_coordinates_close((point[2],), (z,))
+        ]
+        if len(found) != 1 or any(
+            not _native_coordinates_close((point[2],), (z,))
+            for z in cap_z[found[0]]
+        ):
+            raise RuntimeError("native junction actual extrusion vertex Z differs")
+        return found[0]
+
+    def on_cap(point, n):
+        return any(
+            _native_on_segment(point[:2], a, b)
+            for rings in caps[n] for ring in rings
+            for a, b in zip(ring, (*ring[1:], ring[0]))
+        )
+
+    for face in obj.faces:
+        positions = [vertex.position for vertex in face.vertices]
+        if positions and any(
+            all(_native_coordinates_close((p[2],), (z,)) for p in positions)
+            for z in z_range
+        ):
+            continue  # Cap shape and straight edges were already read in full.
+        edges, edge_observations = _native_face_edges(face, obj.name)
+        rings = _simple_planar_loops_from_edges(_cancel_reversed_planar_edges(edges))
+        if len(rings) != 1:
+            raise RuntimeError("native junction extrusion side has unsupported loops")
+        corners, _ = _native_straight_ring(rings[0])
+        sides = [[p for p in corners if layer(p) == n] for n in (0, 1)]
+        if len(corners) != 4 or any(len(side) != 2 for side in sides):
+            raise RuntimeError("native junction extrusion side is not a vertical quadrilateral")
+        if any(
+            layer(a) != layer(b) and not _native_coordinates_close(a[:2], b[:2])
+            for a, b in zip(corners, (*corners[1:], corners[0]))
+        ):
+            raise RuntimeError("native junction extrusion side has nonvertical edges")
+        for point in sides[0]:
+            mates = [p for p in sides[1] if _native_coordinates_close(point[:2], p[:2])]
+            if len(mates) != 1 or not _native_coordinates_close(
+                (float(mates[0][2] - point[2]),), (thickness,)
+            ):
+                raise RuntimeError("native junction actual top/bottom extrusion differs")
+        for n, side in enumerate(sides):
+            strip = tuple(p[:2] for p in side)
+            if not all(
+                on_cap(p, n) for p in rings[0]
+                if _native_coordinates_close((p[2],), (z_range[n],))
+            ) or not _native_edge_covered(caps[n], *strip):
+                raise RuntimeError("native junction side differs from actual cap boundary")
+            strips[n].append((strip,))
+        boundary_edges.extend(zip(corners, (*corners[1:], corners[0])))
+        observations.append({
+            "object_name": obj.name,
+            "extrusion_side_vertices_um": [list(map(float, p)) for p in rings[0]],
+            "edges": edge_observations,
+        })
+    for vertex in obj.vertices:
+        position = vertex.position
+        if (
+            position is None or len(position) != 3
+            or not _native_z_may_contact(
+                (position[2], position[2]), (min(cap_z[0]), max(cap_z[1]))
+            )
+            or not any(_native_on_segment(position, a, b) for a, b in boundary_edges)
+        ):
+            raise RuntimeError("native solid vertex differs from actual extrusion boundary")
+    for n, cap in enumerate(caps):
+        for rings in cap:
+            for ring in rings:
+                corners, _ = _native_straight_ring(ring)
+                for a, b in zip(corners, (*corners[1:], corners[0])):
+                    intervals = []
+                    for strip in strips[n]:
+                        spans, _ = _native_edge_section([strip], a, b, boundary_only=True)
+                        intervals.extend(set(spans))  # Two-node strip has two directions.
+                    reached = Fraction(0)
+                    for lo, hi in sorted(intervals):
+                        left = tuple(p + lo * (q - p) for p, q in zip(a, b))
+                        previous = tuple(p + reached * (q - p) for p, q in zip(a, b))
+                        if lo != reached and not _native_coordinates_close(left, previous):
+                            raise RuntimeError("native junction extrusion sides gap or overlap")
+                        reached = max(reached, hi)
+                    if reached != 1:
+                        raise RuntimeError("native junction extrusion side coverage is incomplete")
 
 
 def _native_junction_readback(
@@ -2121,7 +2291,7 @@ def _native_junction_readback(
     central_loops = _native_planar_loops(central, z_um, observations)
     expected = polygons[record["central_polygon_id"]]
     central_matches = _native_polygon_correspondence(
-        central_loops, expected, central_name, deviations
+        central_loops, expected, central_name, deviations, subdivisions=False
     )
     central_z = tuple(
         operation(p[2] for p in observations[0]["face_vertices_um"])
@@ -2209,6 +2379,14 @@ def _native_junction_readback(
                 top_matches = _native_polygon_correspondence(
                     top, wanted, name, deviations
                 )
+                try:
+                    _native_polygon_correspondence(
+                        top, {"exterior": loops[0][0], "holes": loops[0][1:]}, name, []
+                    )
+                except RuntimeError as exc:
+                    raise RuntimeError(
+                        "native junction actual top/bottom extrusion differs"
+                    ) from exc
                 top_xyz = {
                     tuple(Fraction(str(v)) for v in p[:2]): p
                     for p in observations[-1]["face_vertices_um"]
@@ -2230,41 +2408,9 @@ def _native_junction_readback(
                     raise RuntimeError(
                         "native junction actual top/bottom extrusion differs"
                     )
-                expected_xyz = [
-                    (*point, z)
-                    for ring in (wanted["exterior"], *wanted["holes"])
-                    for point in ring
-                    for z in _entity_z_range(entity)
-                ]
-                actual_xyz = [vertex.position for vertex in obj.vertices]
-                matches = []
-                for position in actual_xyz:
-                    candidates = [
-                        n
-                        for n, point in enumerate(expected_xyz)
-                        if _native_coordinates_close(position, point)
-                    ]
-                    if len(candidates) != 1 or candidates[0] in matches:
-                        raise RuntimeError(
-                            "native solid vertex correspondence is missing or ambiguous"
-                        )
-                    matches.append(candidates[0])
-                    deviations.append(
-                        max(
-                            abs(float(a) - float(b))
-                            for a, b in zip(position, expected_xyz[candidates[0]])
-                        )
-                    )
-                edge_count = sum(
-                    len(ring) for ring in (wanted["exterior"], *wanted["holes"])
+                _native_extrusion_sides(
+                    obj, loops, top, _entity_z_range(entity), thickness, observations
                 )
-                if (
-                    len(matches) != len(expected_xyz)
-                    or len(obj.faces) != edge_count + 2
-                ):
-                    raise RuntimeError(
-                        f"native junction solid is not the source polygon extrusion: {name!r}"
-                    )
             solid = entity["representation"] != "surface_sheet"
             native_z = (
                 (min(zs), max(zs))
@@ -2484,6 +2630,7 @@ def _native_junction_readback(
     deviations.extend(
         observation["maximum_plane_coordinate_deviation_um"]
         for observation in observations
+        if "maximum_plane_coordinate_deviation_um" in observation
     )
     return {
         "method": "native_face_edges_and_live_boundary_properties.v2",
