@@ -6,9 +6,9 @@ import hashlib
 import json
 import re
 import subprocess
+from collections.abc import Mapping
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
-from collections.abc import Mapping
 from typing import Any, Literal
 
 from .util import file_sha256
@@ -23,7 +23,8 @@ SOURCE_SCHEMA_V4 = "scgsim.aedt.runtime-source.v4"
 SOURCE_SCHEMA_V5 = "scgsim.aedt.runtime-source.v5"
 SOURCE_SCHEMA_V6 = "scgsim.aedt.runtime-source.v6"
 SOURCE_SCHEMA_V7 = "scgsim.aedt.runtime-source.v7"
-SOURCE_SCHEMA = SOURCE_SCHEMA_V7
+SOURCE_SCHEMA_V8 = "scgsim.aedt.runtime-source.v8"
+SOURCE_SCHEMA = SOURCE_SCHEMA_V8
 
 # Frozen membership of the public runtime-source.v1 evidence format. Changing
 # producer structure must not silently change what historical readers mean.
@@ -90,6 +91,17 @@ _RUNTIME_SOURCE_V7_PATHS = tuple(sorted((
     *_RUNTIME_SOURCE_V6_PATHS,
     "scgsim/_notebook_presentation.py",
 )))
+# AEDT junction partitioning participates in current source preparation. Old
+# inventories remain exact readers for their original producer membership.
+_RUNTIME_SOURCE_V8_PATHS = tuple(
+    sorted(
+        (
+            *_RUNTIME_SOURCE_V7_PATHS,
+            "scgsim/aedt/_junction_partition.py",
+        )
+    )
+)
+
 
 def _module_manifest() -> list[dict[str, str]]:
     package_root = Path(__file__).resolve().parents[1]
@@ -99,7 +111,7 @@ def _module_manifest() -> list[dict[str, str]]:
             "path": path,
             "sha256": file_sha256(package_root.parent / path),
         }
-        for path in _RUNTIME_SOURCE_V7_PATHS
+        for path in _RUNTIME_SOURCE_V8_PATHS
     ]
 
 
@@ -202,6 +214,7 @@ def validate_runtime_source(
         SOURCE_SCHEMA_V5: _RUNTIME_SOURCE_V5_PATHS,
         SOURCE_SCHEMA_V6: _RUNTIME_SOURCE_V6_PATHS,
         SOURCE_SCHEMA_V7: _RUNTIME_SOURCE_V7_PATHS,
+        SOURCE_SCHEMA_V8: _RUNTIME_SOURCE_V8_PATHS,
     }.get(schema)
     if (
         expected_paths is None

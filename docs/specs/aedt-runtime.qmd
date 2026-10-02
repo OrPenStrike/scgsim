@@ -450,6 +450,86 @@ explicitly. Missing, ambiguous, or invalid source sheets fail; the helper does
 not infer connectivity. It retains the existing rectangular-sheet and
 owner-overlap checks.
 
+#### Automatic rectangular junction partition {#aedt-automatic-junction-partition}
+
+For this AEDT path, the authored rectangular junction sheet is partitioned into
+two terminal-side conductor ends and one full-authored-width central RLC
+rectangle. The complete original inductance and capacitance remain assigned
+only to that central rectangle. The final RLC rectangle must have exactly two
+opposite terminal-contact edges; the authored sheet may contact terminals on
+all four edges. The A-to-B direction and axis come from the authored rectangle
+and port direction. SCGSim does not swap terminals to make a partition fit.
+The contract does not add manual cut positions, a fixed 50-nm clearance,
+narrower-width fallback, or a general rectangle optimizer.
+
+The maximum means the longest valid central rectangle only within a verified
+clear interval for this rectangular topology; it is not a claim about every
+possible layout. Closed contact with either terminal includes area, segment,
+and point contact. Coordinates use the authored rectangle's local frame and
+its A-to-B direction. Let `L` be the largest `s` coordinate where the source
+contacts terminal A and `U` the smallest where it contacts terminal B; the
+interval must satisfy `L < U`.
+The full-width corridor, including its side boundaries, must be clear of other
+metal. The A end may contact only terminal A and the B end only terminal B;
+cross-terminal or third-net contact is rejected. If these preconditions do
+not hold, the candidate reports unsupported topology/search assumptions
+rather than universal infeasibility.
+
+Search uses the source-local DBU `h` recorded with the partition evidence. It
+must be finite and positive; missing precision fails instead of guessing. Let
+`s_min` be the lower source-local bound; a candidate coordinate is derived as
+`s_min + k*h` from an integer local index.
+The algorithm checks each aligned interval endpoint and the nearest strictly
+interior grid point on each side (at most two candidates per side), then picks
+the smallest valid A index and largest valid B index, requiring `a < b`.
+This constant-size search relies on the verified clear corridor: moving a cut
+there adds a full-width strip without changing the topology or contacts behind
+the cut. It does not scan the DBU grid or resnap derived coordinates to a
+Cartesian GDS grid. The recorded indices, local coordinates, frame, precision,
+Boolean output, and deviations keep index arithmetic distinct from the
+geometry kernel's separate precision. Boolean collapse or topology change is a
+numerical geometry failure, not proof that all cuts are invalid.
+
+Let `F = S - (A ∪ B)` be the source sheet after subtracting both terminal
+assemblies. Both ends and the central rectangle come from this one residual
+construction; their union must cover `F`, and their interiors must be
+disjoint. An end may be omitted only when
+its residual domain is empty and its original arm covers the complete
+designated central end edge. Other residual pockets cannot be discarded just
+because a full edge is also covered. A nonempty end must be connected (point-
+connected fragments do not count); holes and all components are preserved, and
+invalid topology fails rather than dropping pieces. Coverage means the exact
+designated end edge is covered by the correct terminal assembly, not that
+total shared-boundary lengths happen to match. The two corners of each
+designated end edge belong to that edge, so correct terminal corner contact is
+allowed; a wrong-net corner, partial edge, isolated corner, or line/point
+contact on an open side is rejected. The central RLC rectangle contains no
+PEC area.
+
+Partitioning is AEDT-only and occurs after owner/route normalization but before
+surface catalogues, insets, or caches. Each end inherits an unambiguous source
+Entity's material and geometry lineage; SCGSim does not choose arbitrarily
+between same-net owners with different material or height. Derived end geometry
+is appended under that source Entity and uses the existing conductor and
+interface-support path; it does not invent another Net owner. Route A ends
+inherit their effective plane, while Route B ends retain the source solid's
+height, thickness, and material. Original source polygons, material/stack
+assignments, and the snapshot remain unchanged; the existing sidewall EPR
+exclusion remains in force. Versioned partition intent and prepared-input
+evidence plus source/model hashes bind the derived geometry to its source; this
+does not add a scientific result schema. The native RLC
+object, lumped line, and area-integral selection stay on the central rectangle;
+the existing width-based voltage and energy normalization do not change.
+Native creation and saved-model rebinding must read back the central shape,
+contacts, PEC/RLC assignments, and targets before cache installation.
+The candidate fails closed when a required native field is unavailable instead
+of substituting cached requested properties. Live native shape, contact, and
+property readback still needs separately authorized AEDT validation.
+Historical artifacts keep their recorded geometry. This candidate has not been
+verified against native AEDT readback or a solver run.
+
+![Authored source sheet and the prepared conductor pieces: pale existing A and B terminals, darker added A- and B-side conductor ends, and the central RLC rectangle.](../assets/junction-partition-generic.svg){fig-alt="Generic authored sheet with pale existing terminal metal, darker added conductor ends, and the central RLC rectangle." fig-cap="Generic solver-free prepared geometry; the lighter terminal fills remain part of each complete conductor. This is not native AEDT readback or solver evidence." width="95%"}
+
 #### Catalogue-driven handoff
 
 The inputs below are the real `GeometryBuildInput` and prepared-stack mapping
@@ -457,10 +537,13 @@ from the existing in-tree SGB workflow, including the selected route and its
 material, vacuum-region, and (for Route A) thin-film provenance. See
 [Geometry and SGB Route A/B](../geometry-sgb.qmd#shared-source-facts-for-aedt).
 The first call requests no analysis contributions and exposes the horizontal
-top/bottom `contribution_catalog`; the selected contribution and source polygon
-are then checked against that catalogue before constructing `SurfaceEprSpec`. Supply
-the existing Route A profile (`substrate_face` or `metal_gap_equivalent`)
-explicitly as `route_a_profile`; no profile is defaulted.
+top/bottom `contribution_catalog` after applying the declared junctions. A row
+can include original and derived polygon IDs. In this helper, the caller
+selects the unique intersection with original `build_input.polygons` IDs; the
+selected source polygon is then checked against the catalogue before
+constructing `SurfaceEprSpec`. Supply the existing Route A profile
+(`substrate_face` or `metal_gap_equivalent`) explicitly as `route_a_profile`;
+no profile is defaulted.
 
 ```python
 from collections.abc import Mapping
@@ -472,6 +555,7 @@ from scgsim.aedt import (
     EprAnalysisRequest,
     EigenmodeRunControl,
     HandoffPlan,
+    PlanarJunction,
     PreparedPlanarGeometry,
     SurfaceEprSpec,
     prepare_hfss_eigenmode_from_geometry,
@@ -484,6 +568,7 @@ def prepare_surface_epr_handoff(
     *,
     build_input: GeometryBuildInput,
     prepared_stack: Mapping[str, Any],
+    junctions: tuple[PlanarJunction, ...],
     route_a_profile: str,
     contribution_id: str,
     source_polygon_id: str,
@@ -502,6 +587,7 @@ def prepare_surface_epr_handoff(
         prepared_stack=prepared_stack,
         route="A",
         route_a_profile=route_a_profile,
+        junctions=junctions,
     )
     for record in catalogue_geometry.contribution_catalog:
         print(
@@ -519,8 +605,12 @@ def prepare_surface_epr_handoff(
     if len(matches) != 1:
         raise ValueError("select exactly one contribution_id from the catalogue")
     record = matches[0]
-    if source_polygon_id not in record["source_polygon_ids"]:
-        raise ValueError("source_polygon_id is not listed for this contribution")
+    original_polygon_ids = {item.polygon_id for item in build_input.polygons}
+    original_sources = set(record["source_polygon_ids"]) & original_polygon_ids
+    if len(original_sources) != 1:
+        raise ValueError("catalogue row must resolve to one original source polygon")
+    if source_polygon_id not in original_sources:
+        raise ValueError("source_polygon_id must be the row's original source polygon")
 
     surface = SurfaceEprSpec(
         contribution_id=record["contribution_id"],
@@ -536,11 +626,13 @@ def prepare_surface_epr_handoff(
         prepared_stack=prepared_stack,
         route="A",
         route_a_profile=route_a_profile,
+        junctions=junctions,
         contributions=(surface,),
     )
     request = EprAnalysisRequest(
         mode_indices=mode_indices,
         surface_contribution_ids=(surface.contribution_id,),
+        junction_ids=tuple(item.junction_id for item in junctions),
     )
     handoff = prepare_hfss_eigenmode_from_geometry(
         geometry=geometry,
@@ -560,9 +652,10 @@ def prepare_surface_epr_handoff(
 ```
 
 Call this local example with the existing SGB outputs, the exact IDs printed
-from the catalogue, PDK film properties, the selected `EigenmodeRunControl`,
-the existing Route A profile passed as `route_a_profile`, and a new path such
-as `runs/cpw-epr-prepare-only`. On the AEDT host, the
+from the catalogue, the same declared `PlanarJunction` objects for both
+geometry preparations, PDK film properties, the selected
+`EigenmodeRunControl`, the existing Route A profile passed as
+`route_a_profile`, and a new path such as `runs/cpw-epr-prepare-only`. On the AEDT host, the
 generated script's explicit preparation-only invocation is
 `<handoff.run_dir>/run_aedt.sh --prepare-only`; this saves and releases the
 prepared model but does not solve or produce field integrals. Preparation

@@ -5,11 +5,12 @@ from __future__ import annotations
 import math
 import os
 import time
+from collections.abc import Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from dataclasses import replace
+from fractions import Fraction
 from importlib.metadata import version
 from multiprocessing import get_context
-from collections.abc import Mapping, Sequence
-from dataclasses import replace
 from typing import Any
 
 from scgsim.semantics.route_a import (
@@ -34,6 +35,14 @@ from ._epr_models import (
     canonical_sha256,
     detached,
     surface_evaluations,
+)
+from ._junction_partition import (
+    _closed_contact,
+    _covered,
+    _cross,
+    _inside_ring,
+    _section,
+    partition_junctions,
 )
 from ._native_common import (
     _native_boundary_type,
@@ -405,6 +414,18 @@ def _source_payload(
             else "hash.v1"
         ),
         "surface_evaluation_policy": "unmasked_plus_requested.v1",
+        **(
+            {
+                "junction_partitions": _plain(
+                    build_input.metadata["aedt_junction_partitions"]
+                ),
+                "authored_input_sha256": build_input.metadata[
+                    "aedt_authored_input_sha256"
+                ],
+            }
+            if "aedt_junction_partitions" in build_input.metadata
+            else {}
+        ),
         "conductors": conductors,
         "route_a_thin_film": _plain(profile) if profile is not None else None,
         "junction_regions": [
@@ -1059,6 +1080,49 @@ def prepare_planar_geometry_input(
                 f"junction {item.junction_id!r} references unknown polygon "
                 f"{item.source_polygon_id!r}"
             )
+        authored = next(
+            (p for p in build_input.polygons if p.polygon_id == item.source_polygon_id),
+            None,
+        )
+        if authored is None:
+            authored = next(
+                r
+                for r in build_input.port_sheet_regions
+                if r.source_polygon_id == item.source_polygon_id
+            )
+        _junction_terminal_line(
+            {"exterior": authored.exterior, "holes": authored.holes}, item, 0.0
+        )
+    build_input = partition_junctions(build_input, junction_tuple, source_dbu_um)
+    if junction_tuple:
+        partition_source = {
+            "route_a_thin_film": prepared_stack.get("metadata", {}).get(
+                "route_a_thin_film"
+            ),
+            "conductors": [
+                {
+                    "semantic_id": e.semantic_id,
+                    "source_semantic_id": e.metadata.get(
+                        "source_semantic_id",
+                        e.metadata.get("semantic_group_id", e.semantic_id),
+                    )
+                    if "split_polygon_index" in e.metadata
+                    else e.semantic_id,
+                    "representation": e.route_representations.get(route),
+                    "geometry": e.geometry,
+                }
+                for e in build_input.entities
+                if e.material_kind == "conductor"
+            ],
+        }
+        records = _plain(build_input.metadata["aedt_junction_partitions"])
+        for record in records.values():
+            record["z_um"] = _junction_partition_plane(partition_source, record)
+        build_input = replace(
+            build_input,
+            metadata={**build_input.metadata, "aedt_junction_partitions": records},
+        )
+        validate_geometry_input(build_input)
     build_input, planned_surfaces = plan_surface_contribution_patches(
         build_input, route=route  # type: ignore[arg-type]
     )
@@ -1671,6 +1735,462 @@ def _entity_z_range(entity: Mapping[str, Any]) -> tuple[float, float]:
     return geometry_z_range(entity.get("geometry"), str(entity.get("semantic_id")))
 
 
+def _junction_partition_plane(
+    source: Mapping[str, Any], record: Mapping[str, Any]
+) -> float:
+    entities = {item["semantic_id"]: item for item in source["conductors"]}
+    owners = [entities[end["source_entity_id"]] for end in record["ends"]]
+    positions = [
+        _route_a_sheet_z(source, owner)
+        if owner["representation"] == "surface_sheet"
+        else _entity_z_range(owner)[0]
+        for owner in owners
+    ]
+    if len(set(positions)) != 1:
+        raise ValueError(
+            "junction source Entity planes differ; no thickness or plane fallback"
+        )
+    for owner in owners:
+        if (
+            owner["representation"] != "surface_sheet"
+            and _entity_z_range(owner)[1] <= positions[0]
+        ):
+            raise ValueError(
+                "junction Route B source Entity has no positive solid thickness"
+            )
+    return positions[0]
+
+
+def _junction_polygon(
+    source: Mapping[str, Any], junction: PlanarJunction, polygons: Mapping[str, Any]
+):
+    record = source.get("junction_partitions", {}).get(junction.junction_id)
+    if record is None:
+        # Historical prepared geometry retains its recorded authored sheet.
+        return polygons[junction.source_polygon_id], None
+    if record.get("method") != "scgsim.aedt.junction-partition.v1":
+        raise ValueError("unknown junction partition method")
+    if record["authored_polygon_id"] != junction.source_polygon_id:
+        raise ValueError("junction partition authored source identity differs")
+    return polygons[record["central_polygon_id"]], record
+
+
+def _native_planar_loops(obj: Any, z_um: float) -> list[tuple]:
+    """Read straight native face edges at the junction plane, including holes."""
+    from scgsim.sgb.planning import (
+        _cancel_reversed_planar_edges,
+        _simple_planar_loops_from_edges,
+    )
+
+    loops = []
+    for face in obj.faces:
+        positions = [vertex.position for vertex in face.vertices]
+        if not positions or any(p is None or len(p) != 3 for p in positions):
+            raise RuntimeError(
+                f"native junction face vertices unavailable: {obj.name!r}"
+            )
+        if any(float(p[2]) != z_um for p in positions):
+            continue
+        edges = []
+        for edge in face.edges:
+            vertices = [vertex.position for vertex in edge.vertices]
+            if len(vertices) != 2 or any(p is None or len(p) != 3 for p in vertices):
+                raise RuntimeError(
+                    f"native junction boundary is not polygonal: {obj.name!r}"
+                )
+            midpoint = edge.midpoint
+            expected_midpoint = [(float(a) + float(b)) / 2 for a, b in zip(*vertices)]
+            if midpoint is None or list(map(float, midpoint)) != expected_midpoint:
+                raise RuntimeError(
+                    f"native junction edge is curved or its linear readback differs: {obj.name!r}"
+                )
+            a, b = [tuple(Fraction(str(float(v))) for v in p[:2]) for p in vertices]
+            edges.append((a, b))
+        # Edge direction is not a native face-loop ordering contract.
+        face_loops = _simple_planar_loops_from_edges(
+            _cancel_reversed_planar_edges(edges)
+        )
+        area = lambda ring: abs(
+            sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(ring, (*ring[1:], ring[0])))
+        )
+        outer = max(face_loops, key=area)
+        loops.append((outer, *(ring for ring in face_loops if ring is not outer)))
+    if not loops:
+        raise RuntimeError(
+            f"native junction conductor has no planar face at source Z: {obj.name!r}"
+        )
+    return loops
+
+
+def _native_junction_readback(
+    app: Any, source: Mapping[str, Any], junction: PlanarJunction
+) -> dict[str, Any]:
+    """Verify partitioned CAD and live boundary targets before expression caches.
+
+    Face edges supply complete planar footprints, rather than bounding-box
+    contact guesses. Contact calculations use exact returned coordinates;
+    missing live RLC properties are an explicit unsupported readback failure.
+    """
+    from ansys.aedt.core.generic.constants import AEDT_UNITS, unit_converter
+    from ansys.aedt.core.generic.numbers_utils import decompose_variable_value
+    from ansys.aedt.core.modules.boundary.common import BoundaryObject
+
+    record = source["junction_partitions"][junction.junction_id]
+    if app.modeler.model_units != "um":
+        raise RuntimeError(
+            "junction native readback requires source micrometre model units"
+        )
+    polygons = {p["polygon_id"]: p for p in source["polygons"]}
+    z_um = float(record["z_um"])
+    central_name = _native_name("junction", junction.junction_id)
+    central = app.modeler.get_object_from_name(central_name)
+    if central is None or len(central.faces) != 1 or len(central.faces[0].edges) != 4:
+        raise RuntimeError("native central junction is not one four-edge face")
+    central_loops = _native_planar_loops(central, z_um)
+    expected = polygons[record["central_polygon_id"]]
+    expected_points = {
+        tuple(Fraction(str(float(v))) for v in p) for p in expected["exterior"]
+    }
+    if (
+        len(central_loops) != 1
+        or len(central_loops[0]) != 1
+        or set(central_loops[0][0]) != expected_points
+    ):
+        raise RuntimeError(
+            "native central junction shape differs from source-bound rectangle"
+        )
+
+    def assignment(boundary_name, target, kind):
+        if _native_boundary_type(app, boundary_name) != kind:
+            raise RuntimeError(
+                f"native junction boundary type differs: {boundary_name!r}"
+            )
+        raw = app.oboundary.GetBoundaryAssignment(boundary_name)
+        if raw is None:
+            raise RuntimeError(
+                f"native junction boundary target unavailable: {boundary_name!r}"
+            )
+        ids = [int(v) for v in raw]
+        if not ids or len(ids) != len(set(ids)):
+            raise RuntimeError("native junction boundary assignment IDs are invalid")
+        _, _, names = _resolve_native_assignment(app, ids)
+        if names != {target}:
+            raise RuntimeError(
+                f"native junction boundary has wrong targets: {boundary_name!r}"
+            )
+
+    native_by_net: dict[str, list] = {}
+    native_by_polygon: dict[tuple[str, str], list] = {}
+    authored_ids = {partition["authored_polygon_id"] for partition in source["junction_partitions"].values()}
+    for entity in source["conductors"]:
+        plane = (
+            _route_a_sheet_z(source, entity)
+            if entity["representation"] == "surface_sheet"
+            else _entity_z_range(entity)[0]
+        )
+        for pid in entity["polygon_ids"]:
+            if pid in authored_ids:
+                continue
+            name = _native_entity_name(source, "conductor", entity["semantic_id"], pid)
+            obj = app.modeler.get_object_from_name(name)
+            if obj is None:
+                raise RuntimeError(
+                    f"native junction source conductor unavailable: {name!r}"
+                )
+            loops = _native_planar_loops(obj, plane)
+            wanted = polygons[pid]
+            expected_edges = {
+                tuple(
+                    sorted(
+                        (
+                            tuple(Fraction(str(float(v))) for v in a),
+                            tuple(Fraction(str(float(v))) for v in b),
+                        )
+                    )
+                )
+                for ring in (wanted["exterior"], *wanted["holes"])
+                for a, b in zip(ring, (*ring[1:], ring[0]))
+            }
+            actual_edges = {
+                tuple(sorted((a, b)))
+                for rings in loops
+                for ring in rings
+                for a, b in zip(ring, (*ring[1:], ring[0]))
+            }
+            if actual_edges != expected_edges:
+                raise RuntimeError(
+                    f"native junction conductor shape/holes differ from source: {name!r}"
+                )
+            if entity["representation"] == "surface_sheet":
+                assignment(
+                    _native_name("pec_boundary", entity["semantic_id"], pid),
+                    name,
+                    "Perfect E",
+                )
+            else:
+                if (
+                    native_object_property(obj, "Material").strip('"').casefold()
+                    != "pec"
+                    or _native_object_boolean_property(obj, "Solve Inside") is not False
+                ):
+                    raise RuntimeError(
+                        f"native junction conductor lacks finite PEC lowering: {name!r}"
+                    )
+                zs = [float(vertex.position[2]) for vertex in obj.vertices]
+                if not zs or (min(zs), max(zs)) != _entity_z_range(entity):
+                    raise RuntimeError(
+                        f"native junction source material/Z lineage differs: {name!r}"
+                    )
+                top = _native_planar_loops(obj, max(zs))
+                top_edges = {
+                    tuple(sorted((a, b)))
+                    for rings in top
+                    for ring in rings
+                    for a, b in zip(ring, (*ring[1:], ring[0]))
+                }
+                if top_edges != expected_edges:
+                    raise RuntimeError(
+                        f"native junction solid top footprint differs: {name!r}"
+                    )
+                expected_xyz = {
+                    (*point, z)
+                    for edge in expected_edges
+                    for point in edge
+                    for z in (min(zs), max(zs))
+                }
+                actual_xyz = {
+                    (
+                        *tuple(Fraction(str(float(v))) for v in vertex.position[:2]),
+                        float(vertex.position[2]),
+                    )
+                    for vertex in obj.vertices
+                }
+                if (
+                    actual_xyz != expected_xyz
+                    or len(obj.faces) != len(expected_edges) + 2
+                ):
+                    raise RuntimeError(
+                        f"native junction solid is not the source polygon extrusion: {name!r}"
+                    )
+            if plane == z_um or (
+                entity["representation"] != "surface_sheet"
+                and plane <= z_um <= _entity_z_range(entity)[1]
+            ):
+                native_by_net.setdefault(entity["net_id"], []).extend(loops)
+                native_by_polygon[entity["semantic_id"], pid] = loops
+
+    # The expected four vertices are ordered in the authored A->B frame.
+    points = [tuple(Fraction(str(float(v))) for v in p) for p in expected["exterior"]]
+
+    def strict_inside(point, rings):
+        return _inside_ring(point, rings[0]) == 1 and all(
+            _inside_ring(point, hole) == -1 for hole in rings[1:]
+        )
+
+    central_midpoint = tuple(sum(p[i] for p in points) / 4 for i in (0, 1))
+    for bodies in native_by_net.values():
+        for rings in bodies:
+            if any(strict_inside(p, (points,)) for p in rings[0]) or any(
+                strict_inside(p, rings) for p in (*points, central_midpoint)
+            ):
+                raise RuntimeError("native PEC occupies central RLC interior")
+            for ring in rings:
+                for a, b in zip(ring, (*ring[1:], ring[0])):
+                    for c, d in zip(points, (*points[1:], points[0])):
+                        if (
+                            _cross(a, b, c) * _cross(a, b, d) < 0
+                            and _cross(c, d, a) * _cross(c, d, b) < 0
+                        ):
+                            raise RuntimeError(
+                                "native PEC crosses central RLC interior"
+                            )
+    derived_ids = {
+        end["polygon_id"]
+        for partition in source["junction_partitions"].values()
+        for end in partition["ends"]
+        if end["polygon_id"] is not None
+    }
+
+    def boundary_lines(bodies):
+        lines = {}
+        for rings in bodies:
+            for ring in rings:
+                for a, b in zip(ring, (*ring[1:], ring[0])):
+                    if a[0] != b[0]:
+                        slope = (b[1] - a[1]) / (b[0] - a[0])
+                        key = ("x", slope, a[1] - slope * a[0])
+                        axis = 0
+                    else:
+                        key = ("y", a[0])
+                        axis = 1
+                    lines.setdefault(key, []).append(
+                        (min(a[axis], b[axis]), max(a[axis], b[axis]))
+                    )
+        return lines
+
+    for end in record["ends"]:
+        if end["polygon_id"] is None:
+            continue
+        end_loops = native_by_polygon[end["source_entity_id"], end["polygon_id"]]
+        arms = [
+            rings
+            for (eid, pid), loops in native_by_polygon.items()
+            if eid == end["source_entity_id"] and pid not in derived_ids
+            for rings in loops
+        ]
+        left, right = boundary_lines(end_loops), boundary_lines(arms)
+        if not any(
+            max(a, c) < min(b, d)
+            for key in left.keys() & right.keys()
+            for a, b in left[key]
+            for c, d in right[key]
+        ):
+            raise RuntimeError(
+                "native derived end lacks positive-length source-arm contact"
+            )
+        foreign = [
+            rings
+            for net, loops in native_by_net.items()
+            if net != end["net_id"]
+            for rings in loops
+        ]
+        if _closed_contact(end_loops, foreign):
+            raise RuntimeError("native derived end contacts another net")
+    edge_specs = (
+        (points[3], points[0], junction.terminal_a_net),
+        (points[1], points[2], junction.terminal_b_net),
+        (points[0], points[1], None),
+        (points[2], points[3], None),
+    )
+    edge_evidence = []
+    for start, end, correct_net in edge_specs:
+        dx, dy = end[0] - start[0], end[1] - start[1]
+        norm = dx * dx + dy * dy
+        transformed = {
+            net: [
+                tuple(
+                    tuple(
+                        (
+                            ((p[0] - start[0]) * dx + (p[1] - start[1]) * dy) / norm,
+                            dx * (p[1] - start[1]) - dy * (p[0] - start[0]),
+                        )
+                        for p in ring
+                    )
+                    for ring in rings
+                )
+                for rings in bodies
+            ]
+            for net, bodies in native_by_net.items()
+        }
+
+        if correct_net is not None and not _covered(
+            transformed.get(correct_net, []), 1, 0, 0, 1
+        ):
+            raise RuntimeError(
+                "native designated junction end edge is not wholly covered"
+            )
+        for net, bodies in transformed.items():
+            for rings in bodies:
+                intervals, contacts = _section(rings, 1, 0, 0, 1)
+                if correct_net is not None:
+                    forbidden = net != correct_net and bool(intervals or contacts)
+                else:
+                    forbidden = bool(intervals) or any(0 < v < 1 for v in contacts)
+                    # Open side corners belong to their respective end edge.
+                    for v in contacts:
+                        point = start if v == 0 else end
+                        own_corner = (
+                            junction.terminal_a_net
+                            if point in (points[0], points[3])
+                            else junction.terminal_b_net
+                        )
+                        forbidden |= net != own_corner
+                if forbidden:
+                    raise RuntimeError(
+                        "native junction has forbidden side/wrong-net corner contact"
+                    )
+        edge_evidence.append(
+            {
+                "start_um": list(map(float, start)),
+                "end_um": list(map(float, end)),
+                "terminal_net": correct_net,
+            }
+        )
+
+    boundary_name = _native_name("junction_rlc", junction.junction_id)
+    assignment(boundary_name, central_name, "Lumped RLC")
+    live = BoundaryObject(app, boundary_name, auto_update=False)._child_object
+    if live is None:
+        raise RuntimeError("native live junction RLC property object unavailable")
+    available = [str(v) for v in live.GetPropNames()]
+    required = (
+        "RLC Type",
+        "UseInduct",
+        "Inductance",
+        "UseCap",
+        "UseResist",
+        "CurrentLine",
+    )
+    if any(name not in available for name in required):
+        raise RuntimeError(
+            f"native live RLC readback lacks required properties; available={available!r}"
+        )
+    values = {name: live.GetPropValue(name) for name in required}
+
+    def enabled(value):
+        if value in (True, "true", "True", 1):
+            return True
+        if value in (False, "false", "False", 0):
+            return False
+        raise RuntimeError("native RLC enabled property is invalid")
+
+    def scalar(value, unit):
+        number, observed_unit = decompose_variable_value(value)
+        system = {"H": "Inductance", "F": "Capacitance", "um": "Length"}[unit]
+        if (
+            observed_unit not in AEDT_UNITS[system]
+            or not isinstance(number, (int, float))
+            or isinstance(number, bool)
+            or not math.isfinite(number)
+        ):
+            raise RuntimeError("native RLC scalar unit/value unavailable")
+        return float(
+            unit_converter(
+                number, unit_system=system, input_units=observed_unit, output_units=unit
+            )
+        )
+
+    if (
+        values["RLC Type"] != "Parallel"
+        or not enabled(values["UseInduct"])
+        or enabled(values["UseResist"])
+        or scalar(values["Inductance"], "H") != junction.inductance_h
+    ):
+        raise RuntimeError("native junction parallel L/R parameters differ")
+    if enabled(values["UseCap"]) != bool(junction.capacitance_f):
+        raise RuntimeError("native junction capacitance enable state differs")
+    if junction.capacitance_f and (
+        "Capacitance" not in available
+        or scalar(live.GetPropValue("Capacitance"), "F") != junction.capacitance_f
+    ):
+        raise RuntimeError("native junction capacitance differs")
+    line, _ = _junction_terminal_line(expected, junction, z_um)
+    actual_line = values["CurrentLine"]
+    if not isinstance(actual_line, Mapping) or set(actual_line) != {"Start", "End"}:
+        raise RuntimeError("native live RLC CurrentLine format is unavailable")
+    observed_line = [
+        [scalar(value, "um") for value in actual_line[key]] for key in ("Start", "End")
+    ]
+    if observed_line != line:
+        raise RuntimeError("native junction integration line differs")
+    return {
+        "method": "native_face_edges_and_live_boundary_properties.v1",
+        "edge_contacts": edge_evidence,
+        "integration_line_um": observed_line,
+        "boundary_name": boundary_name,
+    }
+
+
 def _junction_terminal_line(
     polygon: Mapping[str, Any], junction: PlanarJunction, z_um: float
 ) -> tuple[list[list[float]], float]:
@@ -1930,7 +2450,10 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
     if not isinstance(prepared, PreparedPlanarGeometry):
         raise TypeError("prepared must be PreparedPlanarGeometry")
     source = detached(prepared.source)
-    if source.get("native_region", {}).get("method") != "single_region_absolute_offset.v1":
+    if (
+        source.get("native_region", {}).get("method")
+        != "single_region_absolute_offset.v1"
+    ):
         raise ValueError("EPR geometry predates single Region; reprepare the handoff")
     if source["native_region"].get("outer_boundary_policy") != "hfss_default.v1":
         raise ValueError("EPR Region boundary policy requires re-preparation")
@@ -1989,7 +2512,9 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
         for polygon_id in entity["polygon_ids"]:
             if polygon_id in junction_polygons:
                 continue
-            name = _native_entity_name(source, "conductor", entity["semantic_id"], polygon_id)
+            name = _native_entity_name(
+                source, "conductor", entity["semantic_id"], polygon_id
+            )
             boundary_name: str | None = None
             if is_route_a_sheet:
                 obj = _polygon_sheet(app, polygons[polygon_id], name=name, z_um=z_um)
@@ -2053,9 +2578,11 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
     junction_bindings: list[dict[str, Any]] = []
     started = time.perf_counter()
     for junction in prepared.junctions:
-        polygon = polygons[junction.source_polygon_id]
+        polygon, partition = _junction_polygon(source, junction, polygons)
         region = junction_regions.get(junction.source_polygon_id)
-        if region is None:
+        if partition is not None:
+            owner_ids = [end["source_entity_id"] for end in partition["ends"]]
+        elif region is None:
             owner_ids = [
                 item["semantic_id"]
                 for item in entities
@@ -2081,7 +2608,7 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
         ]
         if max(z_values) - min(z_values) > 1e-9:
             raise RuntimeError(f"junction {junction.junction_id!r} owners are not coplanar")
-        z_um = z_values[0]
+        z_um = partition["z_um"] if partition is not None else z_values[0]
         name = _native_name("junction", junction.junction_id)
         sheet = _polygon_sheet(app, polygon, name=name, z_um=z_um)
         line, span_um = _junction_terminal_line(polygon, junction, z_um)
@@ -2097,6 +2624,11 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
         if boundary is False or boundary is None:
             raise RuntimeError(f"failed to assign junction {junction.junction_id!r}")
         evidence = _native_object_evidence(app, sheet.name)
+        partition_readback = (
+            _native_junction_readback(app, source, junction)
+            if partition is not None
+            else None
+        )
         junction_bindings.append(
             {
                 "junction_id": junction.junction_id,
@@ -2110,6 +2642,19 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
                 "width_um": junction.width_um,
                 "inductance_h": junction.inductance_h,
                 "capacitance_f": junction.capacitance_f,
+                **(
+                    {"partition_readback": partition_readback}
+                    if partition_readback is not None
+                    else {}
+                ),
+                **(
+                    {
+                        "central_polygon_id": partition["central_polygon_id"],
+                        "partition_method": partition["method"],
+                    }
+                    if partition is not None
+                    else {}
+                ),
                 **evidence,
             }
         )
@@ -2209,7 +2754,10 @@ def bind_saved_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -> di
     if not isinstance(prepared, PreparedPlanarGeometry):
         raise TypeError("prepared must be PreparedPlanarGeometry")
     source = detached(prepared.source)
-    if source.get("native_region", {}).get("method") != "single_region_absolute_offset.v1":
+    if (
+        source.get("native_region", {}).get("method")
+        != "single_region_absolute_offset.v1"
+    ):
         raise ValueError("saved EPR geometry predates single Region; reprepare")
     objects: list[dict[str, Any]] = []
     for domain in source["solution_regions"]:
@@ -2326,11 +2874,21 @@ def bind_saved_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -> di
         evidence = _native_object_evidence(app, name)
         if evidence["native_object_type"] != "Sheet":
             raise RuntimeError(f"saved junction {name!r} is not a sheet")
+        partition_readback = (
+            _native_junction_readback(app, source, junction)
+            if junction.junction_id in source.get("junction_partitions", {})
+            else None
+        )
         junctions.append(
             {
                 "junction_id": junction.junction_id,
                 "source_polygon_id": junction.source_polygon_id,
                 "object_name": name,
+                **(
+                    {"partition_readback": partition_readback}
+                    if partition_readback is not None
+                    else {}
+                ),
                 **evidence,
             }
         )
