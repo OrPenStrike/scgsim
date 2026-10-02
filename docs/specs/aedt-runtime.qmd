@@ -494,6 +494,21 @@ Boolean output, and deviations keep index arithmetic distinct from the
 geometry kernel's separate precision. Boolean collapse or topology change is a
 numerical geometry failure, not proof that all cuts are invalid.
 
+Native readback compares coordinates componentwise with one absolute tolerance
+of `1e-9 µm` and zero relative tolerance. The same policy covers the junction
+midpoint, source/native vertex and edge coordinates, straightness, Z/extrusion,
+lumped-line coordinates, and contact checks. It compares returned geometry
+without snapping to the DBU, moving the model, or changing source or cache
+identity; observed values and deviations remain readback evidence. This SCGSim
+policy is 100–1000 times larger than the observed `1e-12`–`1e-11 µm`
+decimal serialization differences and one million times smaller than the
+contextual 1 nm DBU. It is not an AEDT accuracy guarantee. Contact claims are
+limited to this readback resolution, so a sub-resolution gap or contact cannot
+be proven absent. Topology, holes, assignments, and actual gaps, shorts,
+overlaps, and curvature remain subject to the existing checks. Inductance and
+capacitance use their own dimensionally appropriate value comparisons, not this
+length tolerance.
+
 Let `S` be the authored source sheet and `Arm_A` and `Arm_B` its accepted
 terminal-arm geometry. The shared model-coordinate construction forms the
 effective sheet `E = S - (Arm_A ∪ Arm_B)`, then partitions it as
