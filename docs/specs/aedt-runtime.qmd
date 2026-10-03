@@ -396,11 +396,15 @@ evidence records this policy with `explicit_assignment: false` and does not
 invent a boundary name or type. Saved-field readback verifies the same policy.
 A pre-execution handoff without this marker must be prepared again; saved
 historical projects without it remain readable through the original named
-Perfect E validation path. Substrate domains stay separate, and
-electric/magnetic domain integrals count the physical Region once alongside
-each substrate domain; logical vacuum components cannot multiply the energy
-denominator. Historical per-component result records remain readable under
-their original source contract.
+Perfect E validation path. Substrate domains stay separate.
+`native_region.logical_vacuum_ids` lists planner-generated auto-vacuum
+components represented by the native Region; only those logical components
+collapse to that one physical domain. Explicitly authored vacuum solution
+domains, including a host gap, remain distinct and retain their own integrals.
+Electric and magnetic integrals count the physical Region once alongside the
+retained solution domains, so the collapsed auto components do not multiply
+the normalization denominator. Historical per-component result records
+remain readable under their original source contract.
 New surface analysis also emits one unmasked baseline per selected physical
 owner/interface group in addition to the explicitly requested margins. The
 baseline has its own `unmasked_baseline` evaluation identity at zero shrink;
@@ -777,10 +781,19 @@ report_path.parent.mkdir(parents=True, exist_ok=True)
 figure.write_html(report_path)
 ```
 
-`combine_epr_mode()` accepts one complete
-raw pass/mode integral mapping, its exact prepared geometry, and the matching
-request for offline film-coefficient recombination. Changing film thickness
-or permittivity can reuse those raw integrals; changing a margin changes the
+`combine_epr_mode()` accepts one complete raw pass/mode integral mapping, its
+exact prepared geometry, and the matching request for offline
+film-coefficient recombination. It keeps the complete frequency-dependent
+quantities. `combine_surface_epr_mode()` uses the same domain-normalization and
+surface-combination logic but returns only `normalization_energy_j` and
+`surface_contributions`; it does not require frequency, magnetic integrals,
+relative permeability, or effective domain volumes. It does require electric
+integrals for every effective model domain and junction voltage integrals for
+all prepared junctions, because all model-domain electric energy and junction
+capacitive energy form the shared denominator. Output selections do not remove
+domains or junction capacitances from that denominator. Both functions retain
+the prepared grouping, lineage, and units. Changing film thickness or
+permittivity can reuse the raw surface integrals; changing a margin changes the
 integration domain and requires a new saved-field evaluation. None of these
 offline APIs substitutes a historical cache row for a final saved-field row.
 

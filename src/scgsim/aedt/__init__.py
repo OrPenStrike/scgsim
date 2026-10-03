@@ -16,6 +16,7 @@ from ._epr_models import (
 )
 from ._epr_results import (
     combine_epr_mode,
+    combine_surface_epr_mode,
     plot_epr_result,
     reanalyze_epr,
     resolve_epr_result,
@@ -92,6 +93,7 @@ __all__ = [
     "TerminalPort",
     "analyze_epr",
     "combine_epr_mode",
+    "combine_surface_epr_mode",
     "parse_aedt_spec",
     "planar_junction_from_port",
     "plot_epr_result",
