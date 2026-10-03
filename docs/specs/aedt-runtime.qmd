@@ -522,6 +522,15 @@ returns `False` if that call raises. The API gives no numerical precision
 bound. SCGSim's `1e-5 µm` coordinate policy is not a guarantee of AEDT
 edge-length accuracy.
 
+Extrusion-side coverage failures also preserve diagnostics in the same receipt
+`error` text: the cap edge, prior reached-owner and current projected intervals
+when available, the contributing side-strip and cached-face context, and the
+signed projected gap or overlap in micrometres under the same `1e-5 µm`
+tolerance. These
+projections explain the coverage comparison; they do not prove a physical CAD
+defect or change the blocking geometry and coverage checks. Coordinate data
+remain consumer-private.
+
 Boundary comparison also tolerates equivalent straight-edge subdivisions: an
 otherwise matching straight chain may contain different numbers of collinear
 vertices. This comparison does not rewrite the prepared source, the actual

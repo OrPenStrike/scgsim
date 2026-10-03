@@ -9,6 +9,8 @@ boundary subdivisions; contacts retain the raw observed loops. Extrusion checks
 use actual cap and side boundaries rather than authored vertex or face counts.
 Failed straight-edge readback includes only the offending edge's observations
 in the existing exception/receipt channel, without additional native getters.
+Failed extrusion coverage reports the local projected interval and its prior
+reached owner through that same channel; it does not infer the physical cause.
 """
 
 from __future__ import annotations
@@ -2289,7 +2291,8 @@ def _native_extrusion_sides(obj, bottom, top, z_range, thickness, observations):
                 if _native_coordinates_close((p[2],), (z_range[n],))
             ) or not _native_edge_covered(caps[n], *strip):
                 raise RuntimeError("native junction side differs from actual cap boundary")
-            strips[n].append((strip,))
+            face_state = getattr(face, "__dict__", {})
+            strips[n].append(((strip,), face_state.get("_id", face_state.get("id"))))
         boundary_edges.extend(zip(corners, (*corners[1:], corners[0])))
         observations.append({
             "object_name": obj.name,
@@ -2306,24 +2309,74 @@ def _native_extrusion_sides(obj, bottom, top, z_range, thickness, observations):
             or not any(_native_on_segment(position, a, b) for a, b in boundary_edges)
         ):
             raise RuntimeError("native solid vertex differs from actual extrusion boundary")
+    def interval_record(interval):
+        if interval is None:
+            return None
+        lo, hi, strip, face_id = interval
+        return {
+            "lo": float(lo), "hi": float(hi), "side_face_id": face_id,
+            "strip_endpoints_um": [list(map(float, p)) for p in strip[0]],
+        }
+
     for n, cap in enumerate(caps):
-        for rings in cap:
-            for ring in rings:
+        for component_index, rings in enumerate(cap):
+            for ring_index, ring in enumerate(rings):
                 corners, _ = _native_straight_ring(ring)
-                for a, b in zip(corners, (*corners[1:], corners[0])):
+                for edge_index, (a, b) in enumerate(zip(corners, (*corners[1:], corners[0]))):
                     intervals = []
-                    for strip in strips[n]:
+                    for strip, face_id in strips[n]:
                         spans, _ = _native_edge_section([strip], a, b, boundary_only=True)
-                        intervals.extend(set(spans))  # Two-node strip has two directions.
+                        intervals.extend(
+                            (lo, hi, strip, face_id) for lo, hi in set(spans)
+                        )  # Two-node strip has two directions; keep different faces.
                     reached = Fraction(0)
-                    for lo, hi in sorted(intervals):
+                    reached_owner = None
+
+                    condition = None
+                    current_interval = None
+                    for interval in sorted(intervals, key=lambda v: (v[0], v[1])):
+                        lo, hi, _, _ = interval
                         left = tuple(p + lo * (q - p) for p, q in zip(a, b))
                         previous = tuple(p + reached * (q - p) for p, q in zip(a, b))
                         if lo != reached and not _native_coordinates_close(left, previous):
-                            raise RuntimeError("native junction extrusion sides gap or overlap")
+                            condition = "gap" if lo > reached else "overlap"
+                            current_interval = interval
+                            break
+                        if hi > reached:
+                            reached_owner = interval
                         reached = max(reached, hi)
-                    if reached != 1:
-                        raise RuntimeError("native junction extrusion side coverage is incomplete")
+                    if condition is None and reached != 1:
+                        condition = "incomplete"
+                    if condition is not None:
+                        target = current_interval[0] if current_interval is not None else Fraction(1)
+                        left = tuple(p + target * (q - p) for p, q in zip(a, b))
+                        previous = tuple(p + reached * (q - p) for p, q in zip(a, b))
+                        diagnostic = {
+                            "object_name": obj.name,
+                            "cap_index": n, "cap_component_index": component_index,
+                            "cap_ring_index": ring_index, "cap_edge_index": edge_index,
+                            "cap_edge_endpoints_um": [list(map(float, p)) for p in (a, b)],
+                            "condition": condition,
+                            "current_interval": interval_record(current_interval),
+                            "previous_reached_owner": interval_record(reached_owner),
+                            "reached": float(reached), "total_interval_count": len(intervals),
+                            "projected_target_um": list(map(float, left)),
+                            "projected_reached_um": list(map(float, previous)),
+                            "coordinate_residual_um": [float(p - q) for p, q in zip(left, previous)],
+                            "signed_span_discrepancy_um": float(target - reached) * math.dist(a, b),
+                            "model_units": "um",
+                            "absolute_tolerance_um": _NATIVE_JUNCTION_COORDINATE_ABS_TOL_UM,
+                            "relative_tolerance": 0.0,
+                        }
+                        message = (
+                            "native junction extrusion side coverage is incomplete"
+                            if condition == "incomplete"
+                            else "native junction extrusion sides gap or overlap"
+                        )
+                        raise RuntimeError(
+                            message + "; extrusion_coverage_diagnostic="
+                            + json.dumps(diagnostic, allow_nan=False)
+                        )
 
 
 def _native_junction_readback(
