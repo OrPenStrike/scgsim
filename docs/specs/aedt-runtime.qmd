@@ -522,14 +522,19 @@ returns `False` if that call raises. The API gives no numerical precision
 bound. SCGSim's `1e-5 µm` coordinate policy is not a guarantee of AEDT
 edge-length accuracy.
 
-Extrusion-side coverage failures also preserve diagnostics in the same receipt
-`error` text: the cap edge, prior reached-owner and current projected intervals
-when available, the contributing side-strip and cached-face context, and the
-signed projected gap or overlap in micrometres under the same `1e-5 µm`
-tolerance. These
-projections explain the coverage comparison; they do not prove a physical CAD
-defect or change the blocking geometry and coverage checks. Coordinate data
-remain consumer-private.
+Extrusion-side association uses native face-edge incidence rather than
+proximity-only interval projection. PyAEDT's [`FacePrimitive.edges` API](https://aedt.docs.pyansys.com/version/stable/API/_autosummary/ansys.aedt.core.modeler.cad.elements_3d.FacePrimitive.edges.html)
+returns the face's `EdgePrimitive` objects through `GetEdgeIDsFromFace`.
+SCGSim associates each raw horizontal side edge with a cap edge only when both
+faces report the same current `EdgePrimitive.id`, then compares linked XYZ
+coordinates under the existing `1e-5 µm` absolute, zero-relative policy. Each
+actual cap edge must have exactly one side incidence; missing or duplicate
+incidence and coordinate mismatches remain hard failures. This keeps distinct
+nearby boundaries separate and retains raw subdivisions. Proximity-only
+projection could associate a nearby parallel side strip with the wrong cap
+interval and report a false overlap; that is an association ambiguity, not
+proof of a physical CAD defect. These IDs are current-object readback evidence,
+not stable across saves or part of source/cache identity.
 
 Boundary comparison also tolerates equivalent straight-edge subdivisions: an
 otherwise matching straight chain may contain different numbers of collinear

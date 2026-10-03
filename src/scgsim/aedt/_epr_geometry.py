@@ -9,8 +9,9 @@ boundary subdivisions; contacts retain the raw observed loops. Extrusion checks
 use actual cap and side boundaries rather than authored vertex or face counts.
 Failed straight-edge readback includes only the offending edge's observations
 in the existing exception/receipt channel, without additional native getters.
-Failed extrusion coverage reports the local projected interval and its prior
-reached owner through that same channel; it does not infer the physical cause.
+Extrusion cap-side association uses shared native edge IDs within this live
+object readback, then compares linked geometry under the coordinate policy.
+Missing, duplicate or mismatched incidence reports only the involved edges.
 """
 
 from __future__ import annotations
@@ -2137,6 +2138,7 @@ def _native_face_edges(face, name):
         edges.append((a, b))
         edge_observations.append(
             {
+                "edge_id": getattr(edge, "__dict__", {}).get("id"),
                 "vertices_um": [list(map(float, point)) for point in vertices],
                 "midpoint_um": list(map(float, midpoint)),
                 "native_length_um": float(length),
@@ -2184,6 +2186,9 @@ def _native_planar_loops(obj: Any, z_um: float, observations=None) -> list[tuple
             observations.append(
                 {
                     "object_name": obj.name,
+                    "face_id": getattr(face, "__dict__", {}).get(
+                        "_id", getattr(face, "__dict__", {}).get("id")
+                    ),
                     "requested_plane_z_um": z_um,
                     "maximum_plane_coordinate_deviation_um": max(
                         abs(float(point[2]) - z_um) for point in positions
@@ -2213,23 +2218,28 @@ def _native_planar_loops(obj: Any, z_um: float, observations=None) -> list[tuple
 def _native_extrusion_sides(obj, bottom, top, z_range, thickness, observations):
     """Verify straight prism sides against actual caps, independent of subdivision.
 
-    Side faces remain simple vertical quadrilaterals after comparison-only
-    straight-chain reduction. This does not support general face tessellation.
+    Each actual cap edge must belong to exactly one side face by native ID;
+    only associated endpoints are compared under the coordinate policy. IDs are
+    scoped to this live object, never source geometry or another session. Raw
+    subdivision edges retain their own incidence. Side faces remain simple
+    vertical quadrilaterals after comparison-only straight-chain reduction;
+    general face tessellation is unsupported.
     """
     from scgsim.sgb.planning import (
         _cancel_reversed_planar_edges,
         _simple_planar_loops_from_edges,
     )
 
-    caps = (bottom, top)
-    strips = ([], [])
+    cap_observations = observations[-2:]
+    cap_edges = ({}, {})
+    side_owners = ({}, {})
     cap_z = [
         [p[2] for p in observation["face_vertices_um"]]
-        for observation in observations[-2:]
+        for observation in cap_observations
     ]
     boundary_edges = [
         tuple(tuple(Fraction(str(v)) for v in p) for p in edge["vertices_um"])
-        for observation in observations[-2:] for edge in observation["edges"]
+        for observation in cap_observations for edge in observation["edges"]
     ]
     if any(
         not _native_coordinates_close((height,), (thickness,))
@@ -2251,12 +2261,32 @@ def _native_extrusion_sides(obj, bottom, top, z_range, thickness, observations):
             raise RuntimeError("native junction actual extrusion vertex Z differs")
         return found[0]
 
-    def on_cap(point, n):
-        return any(
-            _native_on_segment(point[:2], a, b)
-            for rings in caps[n] for ring in rings
-            for a, b in zip(ring, (*ring[1:], ring[0]))
+    def incidence_error(condition, n, cap_edge=None, side_edge=None,
+                        side_face_id=None, prior_side_face_id=None):
+        diagnostic = {
+            "object_name": obj.name, "condition": condition, "cap_index": n,
+            "cap_face_id": cap_observations[n].get("face_id"),
+            "edge_id": (cap_edge or side_edge or {}).get("edge_id"),
+            "cap_edge_endpoints_um": (cap_edge or {}).get("vertices_um"),
+            "side_edge_endpoints_um": (side_edge or {}).get("vertices_um"),
+            "side_face_id": side_face_id, "prior_side_face_id": prior_side_face_id,
+            "model_units": "um",
+            "absolute_tolerance_um": _NATIVE_JUNCTION_COORDINATE_ABS_TOL_UM,
+            "relative_tolerance": 0.0,
+        }
+        return RuntimeError(
+            "native junction extrusion cap-side incidence differs"
+            + "; extrusion_incidence_diagnostic=" + json.dumps(diagnostic, allow_nan=False)
         )
+
+    for n, observation in enumerate(cap_observations):
+        for edge in observation["edges"]:
+            edge_id = edge.get("edge_id")
+            if isinstance(edge_id, bool) or not isinstance(edge_id, int):
+                raise incidence_error("missing_cap_edge_id", n, cap_edge=edge)
+            if edge_id in cap_edges[0] or edge_id in cap_edges[1]:
+                raise incidence_error("duplicate_cap_edge_id", n, cap_edge=edge)
+            cap_edges[n][edge_id] = edge
 
     for face in obj.faces:
         positions = [vertex.position for vertex in face.vertices]
@@ -2269,7 +2299,7 @@ def _native_extrusion_sides(obj, bottom, top, z_range, thickness, observations):
         rings = _simple_planar_loops_from_edges(_cancel_reversed_planar_edges(edges))
         if len(rings) != 1:
             raise RuntimeError("native junction extrusion side has unsupported loops")
-        corners, _ = _native_straight_ring(rings[0])
+        corners, chains = _native_straight_ring(rings[0])
         sides = [[p for p in corners if layer(p) == n] for n in (0, 1)]
         if len(corners) != 4 or any(len(side) != 2 for side in sides):
             raise RuntimeError("native junction extrusion side is not a vertical quadrilateral")
@@ -2284,15 +2314,40 @@ def _native_extrusion_sides(obj, bottom, top, z_range, thickness, observations):
                 (float(mates[0][2] - point[2]),), (thickness,)
             ):
                 raise RuntimeError("native junction actual top/bottom extrusion differs")
-        for n, side in enumerate(sides):
-            strip = tuple(p[:2] for p in side)
-            if not all(
-                on_cap(p, n) for p in rings[0]
-                if _native_coordinates_close((p[2],), (z_range[n],))
-            ) or not _native_edge_covered(caps[n], *strip):
-                raise RuntimeError("native junction side differs from actual cap boundary")
-            face_state = getattr(face, "__dict__", {})
-            strips[n].append(((strip,), face_state.get("_id", face_state.get("id"))))
+        edge_records = {
+            tuple(sorted(edge)): observation
+            for edge, observation in zip(edges, edge_observations)
+        }
+        if len(edge_records) != len(edges):
+            raise RuntimeError("native junction extrusion side has repeated boundary edges")
+        face_state = getattr(face, "__dict__", {})
+        face_id = face_state.get("_id", face_state.get("id"))
+        for chain in chains:
+            n = layer(chain[0])
+            if layer(chain[-1]) != n:
+                continue  # Existing vertical-chain checks retain intermediate nodes.
+            for a, b in pairwise(chain):
+                side_edge = edge_records[tuple(sorted((a, b)))]
+                edge_id = side_edge.get("edge_id")
+                cap_edge = (
+                    cap_edges[n].get(edge_id)
+                    if isinstance(edge_id, int) and not isinstance(edge_id, bool) else None
+                )
+                if cap_edge is None:
+                    raise incidence_error("unmatched_side_edge", n,
+                                          side_edge=side_edge, side_face_id=face_id)
+                wanted = cap_edge["vertices_um"]
+                actual = side_edge["vertices_um"]
+                if not any(
+                    all(_native_coordinates_close(p, q) for p, q in zip(actual, ordering))
+                    for ordering in (wanted, wanted[::-1])
+                ):
+                    raise incidence_error("linked_edge_geometry_mismatch", n,
+                                          cap_edge, side_edge, face_id)
+                if edge_id in side_owners[n]:
+                    raise incidence_error("duplicate_side_incidence", n,
+                                          cap_edge, side_edge, face_id, side_owners[n][edge_id])
+                side_owners[n][edge_id] = face_id
         boundary_edges.extend(zip(corners, (*corners[1:], corners[0])))
         observations.append({
             "object_name": obj.name,
@@ -2309,74 +2364,10 @@ def _native_extrusion_sides(obj, bottom, top, z_range, thickness, observations):
             or not any(_native_on_segment(position, a, b) for a, b in boundary_edges)
         ):
             raise RuntimeError("native solid vertex differs from actual extrusion boundary")
-    def interval_record(interval):
-        if interval is None:
-            return None
-        lo, hi, strip, face_id = interval
-        return {
-            "lo": float(lo), "hi": float(hi), "side_face_id": face_id,
-            "strip_endpoints_um": [list(map(float, p)) for p in strip[0]],
-        }
-
-    for n, cap in enumerate(caps):
-        for component_index, rings in enumerate(cap):
-            for ring_index, ring in enumerate(rings):
-                corners, _ = _native_straight_ring(ring)
-                for edge_index, (a, b) in enumerate(zip(corners, (*corners[1:], corners[0]))):
-                    intervals = []
-                    for strip, face_id in strips[n]:
-                        spans, _ = _native_edge_section([strip], a, b, boundary_only=True)
-                        intervals.extend(
-                            (lo, hi, strip, face_id) for lo, hi in set(spans)
-                        )  # Two-node strip has two directions; keep different faces.
-                    reached = Fraction(0)
-                    reached_owner = None
-
-                    condition = None
-                    current_interval = None
-                    for interval in sorted(intervals, key=lambda v: (v[0], v[1])):
-                        lo, hi, _, _ = interval
-                        left = tuple(p + lo * (q - p) for p, q in zip(a, b))
-                        previous = tuple(p + reached * (q - p) for p, q in zip(a, b))
-                        if lo != reached and not _native_coordinates_close(left, previous):
-                            condition = "gap" if lo > reached else "overlap"
-                            current_interval = interval
-                            break
-                        if hi > reached:
-                            reached_owner = interval
-                        reached = max(reached, hi)
-                    if condition is None and reached != 1:
-                        condition = "incomplete"
-                    if condition is not None:
-                        target = current_interval[0] if current_interval is not None else Fraction(1)
-                        left = tuple(p + target * (q - p) for p, q in zip(a, b))
-                        previous = tuple(p + reached * (q - p) for p, q in zip(a, b))
-                        diagnostic = {
-                            "object_name": obj.name,
-                            "cap_index": n, "cap_component_index": component_index,
-                            "cap_ring_index": ring_index, "cap_edge_index": edge_index,
-                            "cap_edge_endpoints_um": [list(map(float, p)) for p in (a, b)],
-                            "condition": condition,
-                            "current_interval": interval_record(current_interval),
-                            "previous_reached_owner": interval_record(reached_owner),
-                            "reached": float(reached), "total_interval_count": len(intervals),
-                            "projected_target_um": list(map(float, left)),
-                            "projected_reached_um": list(map(float, previous)),
-                            "coordinate_residual_um": [float(p - q) for p, q in zip(left, previous)],
-                            "signed_span_discrepancy_um": float(target - reached) * math.dist(a, b),
-                            "model_units": "um",
-                            "absolute_tolerance_um": _NATIVE_JUNCTION_COORDINATE_ABS_TOL_UM,
-                            "relative_tolerance": 0.0,
-                        }
-                        message = (
-                            "native junction extrusion side coverage is incomplete"
-                            if condition == "incomplete"
-                            else "native junction extrusion sides gap or overlap"
-                        )
-                        raise RuntimeError(
-                            message + "; extrusion_coverage_diagnostic="
-                            + json.dumps(diagnostic, allow_nan=False)
-                        )
+    for n, edges in enumerate(cap_edges):
+        for edge_id, edge in edges.items():
+            if edge_id not in side_owners[n]:
+                raise incidence_error("missing_side_incidence", n, cap_edge=edge)
 
 
 def _native_junction_readback(
