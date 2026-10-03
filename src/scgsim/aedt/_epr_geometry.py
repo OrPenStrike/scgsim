@@ -7,10 +7,13 @@ policy without moving CAD, changing prepared geometry or asserting exact contact
 below the readback resolution. Conductor comparison permits redundant straight
 boundary subdivisions; contacts retain the raw observed loops. Extrusion checks
 use actual cap and side boundaries rather than authored vertex or face counts.
+Failed straight-edge readback includes only the offending edge's observations
+in the existing exception/receipt channel, without additional native getters.
 """
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import time
@@ -2042,7 +2045,7 @@ def _native_z_contact(left, left_solid, right, right_solid) -> bool:
 
 
 def _native_face_edges(face, name):
-    """Read straight face edges in actual XYZ for both caps and sides."""
+    """Read straight edges once; failed observations stay in the private receipt."""
     edges = []
     edge_observations = []
     for edge in face.edges:
@@ -2055,15 +2058,70 @@ def _native_face_edges(face, name):
         expected_midpoint = [(float(a) + float(b)) / 2 for a, b in zip(*vertices)]
         length = edge.length
         chord = math.dist(*vertices)
-        if (
-            midpoint is None
-            or not _native_coordinates_close(midpoint, expected_midpoint)
-            or isinstance(length, bool)
-            or not isinstance(length, (int, float))
-            or not _native_coordinates_close((length,), (chord,))
-        ):
+        try:
+            midpoint_values = [float(v) for v in midpoint]
+        except (TypeError, ValueError, OverflowError):
+            midpoint_values = []
+        midpoint_valid = len(midpoint_values) == 3 and all(
+            math.isfinite(v) for v in midpoint_values
+        )
+        midpoint_matches = midpoint_valid and _native_coordinates_close(
+            midpoint_values, expected_midpoint
+        )
+        try:
+            length_valid = (
+                not isinstance(length, bool)
+                and isinstance(length, (int, float))
+                and math.isfinite(float(length))
+            )
+        except OverflowError:
+            length_valid = False
+        length_matches = length_valid and _native_coordinates_close((length,), (chord,))
+        if not midpoint_matches or not length_matches:
+            def observed(value):
+                if isinstance(value, float) and not math.isfinite(value):
+                    return str(value)
+                if isinstance(value, (list, tuple)):
+                    return [observed(v) for v in value]
+                if value is None or isinstance(value, (str, bool, int, float)):
+                    return value
+                return repr(value)
+
+            residuals = (
+                [a - b for a, b in zip(midpoint_values, expected_midpoint)]
+                if midpoint_valid else None
+            )
+            diagnostic = {
+                "object_name": name,
+                "edge_id": getattr(edge, "__dict__", {}).get("id"),
+                "face_id": getattr(face, "__dict__", {}).get(
+                    "_id", getattr(face, "__dict__", {}).get("id")
+                ),
+                "model_units": "um",
+                "absolute_tolerance_um": _NATIVE_JUNCTION_COORDINATE_ABS_TOL_UM,
+                "relative_tolerance": 0.0,
+                "endpoints_um": vertices,
+                "observed_midpoint_um": midpoint,
+                "midpoint_type": type(midpoint).__name__,
+                "expected_midpoint_um": expected_midpoint,
+                "native_length_um": length,
+                "native_length_type": type(length).__name__,
+                "chord_length_um": chord,
+                "midpoint_residuals_um": residuals,
+                "length_residual_um": float(length) - chord if length_valid else None,
+                "failed_conditions": [
+                    key for key, failed in (
+                        ("midpoint_invalid", not midpoint_valid),
+                        ("midpoint_mismatch", midpoint_valid and not midpoint_matches),
+                        ("native_length_invalid", not length_valid),
+                        ("native_length_mismatch", length_valid and not length_matches),
+                    ) if failed
+                ],
+            }
             raise RuntimeError(
                 f"native junction edge is curved or its linear readback differs: {name!r}"
+                + "; edge_diagnostic="
+                + json.dumps({key: observed(value) for key, value in diagnostic.items()}, allow_nan=False)
             )
         a, b = [tuple(Fraction(str(float(v))) for v in p) for p in vertices]
         edges.append((a, b))

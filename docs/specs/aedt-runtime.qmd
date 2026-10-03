@@ -509,6 +509,20 @@ overlaps, and curvature remain subject to the existing checks. Inductance and
 capacitance use their own dimensionally appropriate value comparisons, not this
 length tolerance.
 
+If native edge readback fails, the existing run receipt's `error` field
+preserves the `RuntimeError` text. It distinguishes invalid or mismatched
+midpoint and native-length checks, with per-condition codes and residuals,
+edge/face identifiers, endpoint coordinates, observed and expected midpoint,
+native length, straight-line chord, and the `model_units` value (`um`). Treat
+its coordinate values as consumer-private run evidence.
+A failed length/chord or midpoint comparison is a readback inconsistency, not
+proof that the CAD edge is curved. PyAEDT's [`EdgePrimitive.length` API](https://aedt.docs.pyansys.com/version/stable/API/_autosummary/ansys.aedt.core.modeler.cad.elements_3d.EdgePrimitive.length.html)
+documents lengths in model units for edges with two vertices and `False`
+otherwise; the installed 1.3 wrapper converts `GetEdgeLength` to `float` and
+returns `False` if that call raises. The API gives no numerical precision
+bound. SCGSim's `1e-9 µm` coordinate policy remains unchanged and is not a
+guarantee of AEDT edge-length accuracy.
+
 Boundary comparison also tolerates equivalent straight-edge subdivisions: an
 otherwise matching straight chain may contain different numbers of collinear
 vertices. This comparison does not rewrite the prepared source, the actual
