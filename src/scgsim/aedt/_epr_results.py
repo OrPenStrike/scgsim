@@ -592,7 +592,10 @@ def _surface_contributions(
             values = _exact_mapping(surface[group_id], "grouped surface integral")
             normal = _quantity(values.get("normal"), "normal group integral", "V^2")
             tangential = _quantity(
-                values.get("tangential"), "tangential group integral", "V^2"
+                values.get("tangential"),
+                "tangential group integral",
+                "V^2",
+                nonnegative=False,
             )
             energy = _surface_energy_j(
                 group["interface_kind"],
@@ -710,7 +713,10 @@ def _surface_contributions(
                     values.get("normal"), "normal surface integral", "V^2"
                 )
                 tangential += _quantity(
-                    values.get("tangential"), "tangential surface integral", "V^2"
+                    values.get("tangential"),
+                    "tangential surface integral",
+                    "V^2",
+                    nonnegative=False,
                 )
                 binding_ids.append(binding_id)
             energy = _surface_energy_j(
