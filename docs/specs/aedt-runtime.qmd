@@ -587,14 +587,32 @@ evidence plus source/model hashes bind the derived geometry to its source; this
 does not add a scientific result schema. The native RLC
 object, lumped line, and area-integral selection stay on the central rectangle;
 the existing width-based voltage and energy normalization do not change.
-Native creation and saved-model rebinding must read back the central shape,
-contacts, PEC/RLC assignments, and targets before cache installation.
-The candidate fails closed when a required native field is unavailable instead
-of substituting cached requested properties. Live native shape, contact, and
-property readback needs separate AEDT validation. Native creation and
-saved-project reopen/readback remain unexecuted; current evidence covers offline
-geometry preparation only, with no solver result claimed. Historical artifacts
-keep their recorded geometry.
+During geometry binding, before EPR expressions or caches are authored,
+`_native_junction_live_readback()` checks the central shape, terminal contacts,
+PEC/RLC assignments and targets, plus the live `RLC Type`, `Use Induct`,
+`Use Resist`, and `Use Cap` properties and electrical values. After the
+existing project save,
+`_read_saved_junction_lines()` makes one fresh `load_entire_aedt_file()` parse
+for all junctions, before `PreparedEprHfss` is returned or a solve can start. It
+compares each saved endpoint with both the source-derived line and the actual
+central terminal-edge midpoint. For an attached `EdgeCenter`, its recorded
+entity ID must match an edge freshly enumerated from the actual central face;
+that edge's midpoint supplies the endpoint, and the record's XYZ fields are
+ignored. An unattached `AbsolutePosition` uses its recorded XYZ coordinates in
+project model units. Missing or ambiguous edges, other attachment kinds, and
+endpoint mismatches fail closed. Saved-field analysis repeats the check on its
+verified working copy before expression authoring. Neither path substitutes the
+creation dictionary or cached boundary properties for saved-file evidence, and
+this check adds no save/reopen cycle.
+
+This reads the saved file with PyAEDT 1.3.0's [`load_entire_aedt_file()` parser](https://github.com/ansys/pyaedt/blob/7084127f52679a70b52e0a550d039673171caefe/src/ansys/aedt/core/internal/load_aedt_file.py).
+A [public saved-project example](https://github.com/zlatko-minev/pyEPR/blob/97be9f15212e6ddd427e7ee310dacfa778240fe0/_example_files/pyEPR_tutorial1.aedt)
+shows `CurrentLine` stored as entity-attached `GeometryPosition` records. That
+example is format evidence only, not proof of an SCGSim consumer run or a
+version-independent AEDT serialization contract. Native geometry, contact, and
+property readback still require separate AEDT validation; no consumer project
+or solver result has been validated here. Historical artifacts keep their
+recorded geometry.
 
 ![Authored source sheet and the prepared conductor pieces: pale existing A and B terminals, darker added A- and B-side conductor ends, and the central RLC rectangle.](../assets/junction-partition-generic.svg){fig-alt="Generic authored sheet with pale existing terminal metal, darker added conductor ends, and the central RLC rectangle." fig-cap="Generic solver-free prepared geometry; the lighter terminal fills remain part of each complete conductor. This is not native AEDT readback or solver evidence." width="95%"}
 

@@ -12,6 +12,10 @@ in the existing exception/receipt channel, without additional native getters.
 Extrusion cap-side association uses shared native edge IDs within this live
 object readback, then compares linked geometry under the coordinate policy.
 Missing, duplicate or mismatched incidence reports only the involved edges.
+Live geometry/electrical checks precede authoring. Assigned line verification
+uses the actual native project after its existing save, or the verified reopened
+workcopy, before successful preparation/analysis. Attached EdgeCenter positions
+resolve only to fresh actual terminal edge IDs; their stored XYZ is not used.
 """
 
 from __future__ import annotations
@@ -23,10 +27,12 @@ import time
 from collections.abc import Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from dataclasses import replace
+from decimal import Decimal
 from fractions import Fraction
 from importlib.metadata import version
 from itertools import pairwise
 from multiprocessing import get_context
+from pathlib import Path
 from typing import Any
 
 from scgsim.semantics.route_a import (
@@ -66,6 +72,7 @@ from ._native_common import (
     _resolve_native_assignment,
     native_object_property,
 )
+from .util import file_sha256
 
 
 def _plain(value: Any) -> Any:
@@ -2370,19 +2377,21 @@ def _native_extrusion_sides(obj, bottom, top, z_range, thickness, observations):
                 raise incidence_error("missing_side_incidence", n, cap_edge=edge)
 
 
-def _native_junction_readback(
+def _native_junction_live_readback(
     app: Any, source: Mapping[str, Any], junction: PlanarJunction
 ) -> dict[str, Any]:
-    """Verify partitioned CAD and live boundary targets before expression caches.
+    """Verify live CAD/electrical state before authoring; line awaits native save.
 
     Face edges supply complete planar footprints, rather than bounding-box
     contact guesses. Actual returned geometry is preserved. Coordinate identity,
     straightness, Z and contact comparisons use absolute 1e-5 um, rel_tol=0;
     correspondence never substitutes source vertices into contact geometry.
     Below-resolution gaps/curvature remain numerically unresolved. Missing live
-    RLC properties or ambiguous topology are explicit readback failures.
+    RLC properties or ambiguous topology are explicit readback failures. The
+    transaction-local result is not a completed partition_readback; the owned
+    runtime must verify the saved assigned line before publishing that record.
     """
-    from ansys.aedt.core.generic.constants import AEDT_UNITS, unit_converter
+    from ansys.aedt.core.generic.constants import AEDT_UNITS
     from ansys.aedt.core.generic.numbers_utils import decompose_variable_value
     from ansys.aedt.core.modules.boundary.common import BoundaryObject
 
@@ -2648,11 +2657,10 @@ def _native_junction_readback(
     available = [str(v) for v in live.GetPropNames()]
     required = (
         "RLC Type",
-        "UseInduct",
+        "Use Induct",
         "Inductance",
-        "UseCap",
-        "UseResist",
-        "CurrentLine",
+        "Use Cap",
+        "Use Resist",
     )
     if any(name not in available for name in required):
         raise RuntimeError(
@@ -2668,8 +2676,10 @@ def _native_junction_readback(
         raise RuntimeError("native RLC enabled property is invalid")
 
     def scalar(value, unit):
+        # Exact decimal SI equality avoids binary unit-conversion roundoff;
+        # the length comparison policy never applies to electrical parameters.
         number, observed_unit = decompose_variable_value(value)
-        system = {"H": "Inductance", "F": "Capacitance", "um": "Length"}[unit]
+        system = {"H": "Inductance", "F": "Capacitance"}[unit]
         if (
             observed_unit not in AEDT_UNITS[system]
             or not isinstance(number, (int, float))
@@ -2677,73 +2687,28 @@ def _native_junction_readback(
             or not math.isfinite(number)
         ):
             raise RuntimeError("native RLC scalar unit/value unavailable")
-        return float(
-            unit_converter(
-                number, unit_system=system, input_units=observed_unit, output_units=unit
-            )
-        )
+        return Decimal(str(number)) * Decimal(str(AEDT_UNITS[system][observed_unit]))
 
     if (
         values["RLC Type"] != "Parallel"
-        or not enabled(values["UseInduct"])
-        or enabled(values["UseResist"])
-        or scalar(values["Inductance"], "H") != junction.inductance_h
+        or not enabled(values["Use Induct"])
+        or enabled(values["Use Resist"])
+        or scalar(values["Inductance"], "H") != Decimal(str(junction.inductance_h))
     ):
         raise RuntimeError("native junction parallel L/R parameters differ")
-    if enabled(values["UseCap"]) != bool(junction.capacitance_f):
+    if enabled(values["Use Cap"]) != bool(junction.capacitance_f):
         raise RuntimeError("native junction capacitance enable state differs")
     if junction.capacitance_f and (
         "Capacitance" not in available
-        or scalar(live.GetPropValue("Capacitance"), "F") != junction.capacitance_f
+        or scalar(live.GetPropValue("Capacitance"), "F") != Decimal(str(junction.capacitance_f))
     ):
         raise RuntimeError("native junction capacitance differs")
-    line, _ = _junction_terminal_line(expected, junction, z_um)
-    actual_line = values["CurrentLine"]
-    if not isinstance(actual_line, Mapping) or set(actual_line) != {"Start", "End"}:
-        raise RuntimeError("native live RLC CurrentLine format is unavailable")
-    observed_line = [
-        [scalar(value, "um") for value in actual_line[key]] for key in ("Start", "End")
-    ]
-    if any(
-        not _native_coordinates_close(actual, wanted)
-        for actual, wanted in zip(observed_line, line)
-    ) or len(observed_line) != len(line):
-        raise RuntimeError("native junction integration line differs")
-    actual_midpoints = []
-    for a, b in ((points[3], points[0]), (points[1], points[2])):
-        matches = [
-            edge["midpoint_um"]
-            for edge in observations[0]["edges"]
-            if {
-                tuple(Fraction(str(v)) for v in point[:2])
-                for point in edge["vertices_um"]
-            }
-            == {a, b}
-        ]
-        if len(matches) != 1:
-            raise RuntimeError(
-                "native junction actual terminal-edge midpoint is ambiguous"
-            )
-        actual_midpoints.append(matches[0])
-    if any(
-        not _native_coordinates_close(actual, midpoint)
-        for actual, midpoint in zip(observed_line, actual_midpoints)
-    ):
-        raise RuntimeError(
-            "native junction integration line differs from actual terminal edges"
-        )
-    deviations.extend(
-        abs(a - b)
-        for actual, wanted in zip(observed_line, line)
-        for a, b in zip(actual, wanted)
-    )
     deviations.extend(
         observation["maximum_plane_coordinate_deviation_um"]
         for observation in observations
         if "maximum_plane_coordinate_deviation_um" in observation
     )
     return {
-        "method": "native_face_edges_and_live_boundary_properties.v2",
         "coordinate_comparison_policy": {
             "absolute_tolerance_um": _NATIVE_JUNCTION_COORDINATE_ABS_TOL_UM,
             "relative_tolerance": 0.0,
@@ -2753,11 +2718,137 @@ def _native_junction_readback(
         "maximum_source_coordinate_deviation_um": max(deviations, default=0.0),
         "native_geometry_observations": observations,
         "edge_contacts": edge_evidence,
-        "integration_line_um": observed_line,
-        "actual_terminal_edge_midpoints_um": actual_midpoints,
-        "raw_integration_line": detached(actual_line),
         "boundary_name": boundary_name,
     }
+
+
+def _read_saved_junction_lines(app, project_path, design_name, prepared, geometry):
+    """Complete junction evidence from one uncached, identity-bound native save.
+
+    PyAEDT1.3 configurations._update_boundaries interprets GeometryPosition XYZ
+    in global model units. Attached EdgeCenter instead references actual edges;
+    XYZ can be zero placeholders. Only these two position kinds are supported.
+    IDs are resolved against freshly read central edges in the current object,
+    with no cross-session ID persistence assumption or geometry guess.
+    """
+    from ansys.aedt.core.internal.load_aedt_file import load_entire_aedt_file
+
+    source = detached(prepared.source)
+    partitions = source.get("junction_partitions", {})
+    if not partitions:
+        return  # Historical geometry retains its existing binding contract.
+    path = Path(project_path).resolve(strict=True)
+    if (
+        Path(app.project_file).resolve(strict=True) != path
+        or app.design_name != design_name or app.design_type != "HFSS"
+    ):
+        raise RuntimeError("saved junction project/design identity differs")
+    digest = file_sha256(path)
+    native = load_entire_aedt_file(path)
+    if file_sha256(path) != digest:
+        raise RuntimeError("saved junction native project changed during readback")
+    project = native.get("AnsoftProject")
+    designs = project.get("HFSSModel") if isinstance(project, Mapping) else None
+    if isinstance(designs, Mapping):
+        designs = [designs]
+    if not isinstance(designs, list):
+        raise TypeError("saved junction design records are unavailable")
+    matching = [d for d in designs if isinstance(d, Mapping) and d.get("Name") == design_name]
+    if len(matching) != 1:
+        raise RuntimeError("saved junction design is missing or ambiguous")
+    design = matching[0]
+    model_setup = design.get("ModelSetup")
+    model = model_setup.get("GeometryCore") if isinstance(model_setup, Mapping) else None
+    if not isinstance(model, Mapping) or model.get("Units") != app.modeler.model_units or model.get("Units") != "um":
+        raise RuntimeError("saved junction model units differ from live micrometre geometry")
+    boundary_setup = design.get("BoundarySetup")
+    boundaries = boundary_setup.get("Boundaries") if isinstance(boundary_setup, Mapping) else None
+    if not isinstance(boundaries, Mapping):
+        raise TypeError("saved junction boundary records are unavailable")
+    polygons = {p["polygon_id"]: p for p in source["polygons"]}
+    bindings = {j["junction_id"]: j for j in geometry["junctions"]}
+    completed = []
+    for junction in prepared.junctions:
+        if junction.junction_id not in partitions:
+            continue
+        binding = bindings[junction.junction_id]
+        evidence = binding["_partition_live_readback"]
+        boundary = boundaries.get(binding["boundary_name"])
+        if not isinstance(boundary, Mapping) or boundary.get("BoundType") != "Lumped RLC":
+            raise RuntimeError("saved junction boundary identity/type differs")
+        raw_line = boundary.get("CurrentLine")
+        positions = raw_line.get("GeometryPosition") if isinstance(raw_line, Mapping) else None
+        if not isinstance(positions, list) or len(positions) != 2:
+            raise RuntimeError("saved junction line requires two ordered GeometryPosition records")
+        record = partitions[junction.junction_id]
+        z_um = float(record["z_um"])
+        expected = polygons[record["central_polygon_id"]]
+        central = app.modeler.get_object_from_name(binding["object_name"])
+        if central is None or len(central.faces) != 1 or len(central.faces[0].edges) != 4:
+            raise RuntimeError("saved junction central face/edge topology differs")
+        central_id = int(app.modeler.oeditor.GetObjectIDByName(central.name))
+        if boundary.get("Objects") != [central_id]:
+            raise RuntimeError("saved junction boundary target differs from actual central object")
+        observations, deviations = [], []
+        loops = _native_planar_loops(central, z_um, observations)
+        matches = _native_polygon_correspondence(loops, expected, central.name, deviations,
+                                                  subdivisions=False)
+        points = [matches[tuple(Fraction(str(float(v))) for v in p)] for p in expected["exterior"]]
+        edge_ids = [edge["edge_id"] for edge in observations[0]["edges"]]
+        if len(edge_ids) != len(set(edge_ids)):
+            raise RuntimeError("saved junction native central edge IDs are ambiguous")
+        terminal_edges = []
+        for a, b in ((points[3], points[0]), (points[1], points[2])):
+            found = [edge for edge in observations[0]["edges"] if {
+                tuple(Fraction(str(v)) for v in p[:2]) for p in edge["vertices_um"]
+            } == {a, b}]
+            if len(found) != 1:
+                raise RuntimeError("saved junction actual terminal edge identity is unavailable")
+            if isinstance(found[0]["edge_id"], bool) or not isinstance(found[0]["edge_id"], int):
+                raise TypeError("saved junction actual terminal edge ID is invalid")
+            terminal_edges.append(found[0])
+        observed_line = []
+        for position, edge in zip(positions, terminal_edges):
+            if not isinstance(position, Mapping):
+                raise TypeError("saved junction line position is malformed")
+            if position.get("IsAttachedToEntity") is True and position.get("PositionType") == "EdgeCenter":
+                entity_id = position.get("EntityID")
+                if isinstance(entity_id, bool) or not isinstance(entity_id, int) or entity_id != edge["edge_id"]:
+                    raise RuntimeError("saved junction line attachment references wrong terminal edge")
+                observed_line.append(list(edge["midpoint_um"]))
+            elif position.get("IsAttachedToEntity") is False and position.get("PositionType") == "AbsolutePosition":
+                raw = [position.get(axis + "Position") for axis in "XYZ"]
+                try:
+                    coordinate = [float(v) for v in raw]
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise RuntimeError("saved junction absolute line coordinates are invalid") from exc
+                if any(isinstance(v, bool) or not isinstance(v, (str, int, float)) for v in raw) or not all(math.isfinite(v) for v in coordinate):
+                    raise RuntimeError("saved junction absolute line coordinates are invalid")
+                observed_line.append(coordinate)
+            else:
+                raise RuntimeError("saved junction line attachment kind is unsupported")
+        line, _ = _junction_terminal_line(expected, junction, z_um)
+        actual_midpoints = [edge["midpoint_um"] for edge in terminal_edges]
+        if any(not _native_coordinates_close(a, b) for a, b in zip(observed_line, line)):
+            raise RuntimeError("saved junction integration line differs")
+        if any(not _native_coordinates_close(a, b) for a, b in zip(observed_line, actual_midpoints)):
+            raise RuntimeError("saved junction integration line differs from actual terminal edges")
+        deviations.extend(abs(a - b) for actual, wanted in zip(observed_line, line) for a, b in zip(actual, wanted))
+        completed.append((binding, {
+            **evidence,
+            "method": "native_face_edges_live_electrical_and_saved_line.v3",
+            "maximum_source_coordinate_deviation_um": max(evidence["maximum_source_coordinate_deviation_um"], *deviations),
+            "integration_line_um": observed_line,
+            "actual_terminal_edge_midpoints_um": actual_midpoints,
+            "raw_integration_line": detached(raw_line),
+            "saved_line_verification_project_sha256": digest,
+            "saved_line_native_geometry_observations": observations,
+        }))
+    for binding, readback in completed:
+        binding.pop("_partition_live_readback")
+        binding["partition_readback"] = readback
+
+
 def _junction_terminal_line(
     polygon: Mapping[str, Any], junction: PlanarJunction, z_um: float
 ) -> tuple[list[list[float]], float]:
@@ -3028,7 +3119,7 @@ def _implicit_closed_enclosure(app: Any, source: Mapping[str, Any]) -> dict[str,
 
 
 def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -> dict[str, Any]:
-    """Create and read back the body-first HFSS geometry for one prepared request."""
+    """Create bodies and live evidence; runtime completes lines after native save."""
 
     if not isinstance(prepared, PreparedPlanarGeometry):
         raise TypeError("prepared must be PreparedPlanarGeometry")
@@ -3208,7 +3299,7 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
             raise RuntimeError(f"failed to assign junction {junction.junction_id!r}")
         evidence = _native_object_evidence(app, sheet.name)
         partition_readback = (
-            _native_junction_readback(app, source, junction)
+            _native_junction_live_readback(app, source, junction)
             if partition is not None
             else None
         )
@@ -3226,7 +3317,7 @@ def prepare_native_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -
                 "inductance_h": junction.inductance_h,
                 "capacitance_f": junction.capacitance_f,
                 **(
-                    {"partition_readback": partition_readback}
+                    {"_partition_live_readback": partition_readback}
                     if partition_readback is not None
                     else {}
                 ),
@@ -3458,7 +3549,7 @@ def bind_saved_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -> di
         if evidence["native_object_type"] != "Sheet":
             raise RuntimeError(f"saved junction {name!r} is not a sheet")
         partition_readback = (
-            _native_junction_readback(app, source, junction)
+            _native_junction_live_readback(app, source, junction)
             if junction.junction_id in source.get("junction_partitions", {})
             else None
         )
@@ -3467,8 +3558,9 @@ def bind_saved_planar_geometry(app: Any, prepared: PreparedPlanarGeometry) -> di
                 "junction_id": junction.junction_id,
                 "source_polygon_id": junction.source_polygon_id,
                 "object_name": name,
+                "boundary_name": _native_name("junction_rlc", junction.junction_id),
                 **(
-                    {"partition_readback": partition_readback}
+                    {"_partition_live_readback": partition_readback}
                     if partition_readback is not None
                     else {}
                 ),

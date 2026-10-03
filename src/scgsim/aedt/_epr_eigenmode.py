@@ -1,4 +1,9 @@
-"""Native Eigenmode preparation and EPR orchestration inside run.py ownership."""
+"""Native Eigenmode preparation and EPR orchestration inside run.py ownership.
+
+Live geometry/electrical checks precede authoring. Assigned junction lines are
+verified from the existing native save before preparation returns or solves;
+saved analysis verifies the immutable workcopy before expression authoring.
+"""
 
 from __future__ import annotations
 
@@ -24,6 +29,7 @@ from ._epr_fields import (
     parse_native_scalar,
 )
 from ._epr_geometry import (
+    _read_saved_junction_lines,
     bind_inset_surface_selections,
     bind_saved_planar_geometry,
     plan_inset_sheet_names,
@@ -40,9 +46,8 @@ from ._native_common import (
     pyaedt_version,
     saved_setup_properties,
 )
-from .spec import AedtResources, REQUIRED_AEDT_VERSION, HfssEprAnalysisSpec, HfssEprSpec
+from .spec import REQUIRED_AEDT_VERSION, AedtResources, HfssEprAnalysisSpec, HfssEprSpec
 from .util import file_sha256, write_json
-
 
 _SURFACE_ANALYSIS_SCOPE = {
     "included_field_sides": ["top", "bottom"],
@@ -182,6 +187,7 @@ def prepare_epr_hfss(
         raise RuntimeError("HFSS EPR project was not saved after preparation")
     timings["save_seconds"] = round(time.perf_counter() - started, 6)
     started = time.perf_counter()
+    _read_saved_junction_lines(app, project_path, bound.design_name, bound.geometry, geometry)
     setup = _read_setup(app, bound)
     if bound.epr_request is not None:
         cache["serialized_readback"] = _read_cache(app, bound, cache["items"])
@@ -625,6 +631,7 @@ def analyze_saved_epr(
         raise RuntimeError("saved EPR field solution is unavailable on the workcopy")
     started = time.perf_counter()
     geometry = bind_saved_planar_geometry(app, spec.geometry)
+    _read_saved_junction_lines(app, project_path, spec.design_name, spec.geometry, geometry)
     timings["geometry_rebind_seconds"] = round(time.perf_counter() - started, 6)
     started = time.perf_counter()
     expressions, authoring, phase_timings = _author_epr_expressions(
