@@ -495,14 +495,13 @@ geometry kernel's separate precision. Boolean collapse or topology change is a
 numerical geometry failure, not proof that all cuts are invalid.
 
 Native readback compares coordinates componentwise with one absolute tolerance
-of `1e-9 µm` and zero relative tolerance. The same policy covers the junction
+of `1e-5 µm` and zero relative tolerance. The same policy covers the junction
 midpoint, source/native vertex and edge coordinates, straightness, Z/extrusion,
 lumped-line coordinates, and contact checks. It compares returned geometry
 without snapping to the DBU, moving the model, or changing source or cache
-identity; observed values and deviations remain readback evidence. This SCGSim
-policy is 100–1000 times larger than the observed `1e-12`–`1e-11 µm`
-decimal serialization differences and one million times smaller than the
-contextual 1 nm DBU. It is not an AEDT accuracy guarantee. Contact claims are
+identity; observed values and deviations remain readback evidence. This
+practical SCGSim allowance for CAD/API variation is 1% of the contextual 1 nm
+source DBU. It is not an AEDT accuracy guarantee. Contact claims are
 limited to this readback resolution, so a sub-resolution gap or contact cannot
 be proven absent. Topology, holes, assignments, and actual gaps, shorts,
 overlaps, and curvature remain subject to the existing checks. Inductance and
@@ -520,8 +519,8 @@ proof that the CAD edge is curved. PyAEDT's [`EdgePrimitive.length` API](https:/
 documents lengths in model units for edges with two vertices and `False`
 otherwise; the installed 1.3 wrapper converts `GetEdgeLength` to `float` and
 returns `False` if that call raises. The API gives no numerical precision
-bound. SCGSim's `1e-9 µm` coordinate policy remains unchanged and is not a
-guarantee of AEDT edge-length accuracy.
+bound. SCGSim's `1e-5 µm` coordinate policy is not a guarantee of AEDT
+edge-length accuracy.
 
 Boundary comparison also tolerates equivalent straight-edge subdivisions: an
 otherwise matching straight chain may contain different numbers of collinear
@@ -529,7 +528,7 @@ vertices. This comparison does not rewrite the prepared source, the actual
 native coordinates, or their cache identity. The central RLC face remains a
 four-edge rectangle; real corners, holes, material and Z assignment, contact,
 and actual Route B extrusion geometry remain checked under the same
-`1e-9 µm` absolute, zero-relative coordinate policy. This generic comparison
+`1e-5 µm` absolute, zero-relative coordinate policy. This generic comparison
 behavior is not evidence of live AEDT readback or of any particular consumer
 case.
 

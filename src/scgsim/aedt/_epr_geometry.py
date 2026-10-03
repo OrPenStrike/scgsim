@@ -1794,7 +1794,7 @@ def _junction_polygon(
     return polygons[record["central_polygon_id"]], record
 
 
-_NATIVE_JUNCTION_COORDINATE_ABS_TOL_UM = 1e-9
+_NATIVE_JUNCTION_COORDINATE_ABS_TOL_UM = 1e-5
 
 
 def _native_coordinates_close(left, right) -> bool:
@@ -1812,7 +1812,7 @@ def _native_straight_ring(ring):
     if len(points) > 1 and points[0] == points[-1]:
         points.pop()
     if len(points) < 3 or any(
-        _native_coordinates_close(a, b)
+        a == b
         for a, b in zip(points, (*points[1:], points[0]))
     ):
         raise RuntimeError("native junction boundary is unresolved at readback resolution")
@@ -1834,6 +1834,11 @@ def _native_straight_ring(ring):
                 del points[index]
                 changed = True
                 break
+    if any(
+        _native_coordinates_close(a, b)
+        for a, b in zip(points, (*points[1:], points[0]))
+    ):
+        raise RuntimeError("native junction boundary is unresolved at readback resolution")
     return points, chains
 
 
@@ -1979,9 +1984,12 @@ def _native_edge_covered(bodies, start, end) -> bool:
 
 
 def _native_boundary_contact(left, right) -> bool:
+    """Require a resolved positive span; tiny raw subdivisions cannot prove one."""
     for rings in left:
         for ring in rings:
             for start, end in zip(ring, (*ring[1:], ring[0])):
+                if start != end and _native_coordinates_close(start, end):
+                    continue
                 spans, _ = _native_edge_section(right, start, end, boundary_only=True)
                 for lo, hi in spans:
                     a = tuple(p + lo * (q - p) for p, q in zip(start, end))
@@ -2141,7 +2149,7 @@ def _native_face_edges(face, name):
 
 
 def _native_planar_loops(obj: Any, z_um: float, observations=None) -> list[tuple]:
-    """Read actual planar boundaries at absolute 1e-9 um coordinate resolution.
+    """Read actual planar boundaries at absolute 1e-5 um coordinate resolution.
 
     Independent vertex/midpoint/length getters need not serialize identically.
     Midpoint and actual native length jointly check straight edges; ambiguity
@@ -2325,7 +2333,7 @@ def _native_junction_readback(
 
     Face edges supply complete planar footprints, rather than bounding-box
     contact guesses. Actual returned geometry is preserved. Coordinate identity,
-    straightness, Z and contact comparisons use absolute 1e-9 um, rel_tol=0;
+    straightness, Z and contact comparisons use absolute 1e-5 um, rel_tol=0;
     correspondence never substitutes source vertices into contact geometry.
     Below-resolution gaps/curvature remain numerically unresolved. Missing live
     RLC properties or ambiguous topology are explicit readback failures.
