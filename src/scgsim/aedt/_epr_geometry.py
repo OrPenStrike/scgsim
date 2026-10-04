@@ -46,6 +46,7 @@ from scgsim.sgb import (
     validate_selected_route,
 )
 from scgsim.sgb.planning import (
+    _geometry_ref_surface_z_um,
     plan_surface_contribution_patches,
     verified_route_a_substrate_support,
 )
@@ -579,13 +580,23 @@ def _surface_mask_plane(geometry_ref: Mapping[str, Any]) -> dict[str, Any]:
     outer = geometry_ref.get("outer_loop")
     plane = geometry_ref.get("plane")
     if isinstance(outer, Sequence) and not isinstance(outer, (str, bytes)):
-        if not isinstance(plane, Mapping) or plane.get("axis") != "z":
+        if (
+            not isinstance(plane, Mapping) or plane.get("axis") != "z"
+        ) and geometry_ref.get("shell_part") not in {"top", "bottom"}:
             raise ValueError("planar EPR surface loop requires an explicit Z plane")
-        z_um = plane.get("value_um")
-        if isinstance(z_um, bool) or not isinstance(z_um, (int, float)):
+        if (
+            geometry_ref.get("shell_part") not in {"top", "bottom"}
+            and (
+                isinstance(plane.get("value_um"), bool)
+                or not isinstance(plane.get("value_um"), (int, float))
+            )
+        ):
+            raise ValueError("planar EPR surface requires finite plane Z")
+        z_um = _geometry_ref_surface_z_um(geometry_ref)
+        if not math.isfinite(z_um):
             raise ValueError("planar EPR surface requires finite plane Z")
         return {
-            "origin_um": [0.0, 0.0, float(z_um)],
+            "origin_um": [0.0, 0.0, z_um],
             "u": [1.0, 0.0, 0.0],
             "v": [0.0, 1.0, 0.0],
             "exterior": _plain(outer),
@@ -1530,9 +1541,11 @@ def _analysis_surface_sheet(
             for ring in local_region.get("holes", ())
         ]
     elif isinstance(outer, Sequence) and not isinstance(outer, (str, bytes)):
-        if not isinstance(plane, Mapping) or plane.get("axis") != "z":
+        if (
+            not isinstance(plane, Mapping) or plane.get("axis") != "z"
+        ) and geometry_ref.get("shell_part") not in {"top", "bottom"}:
             raise ValueError("analysis surface loop requires an explicit Z plane")
-        z_um = float(plane["value_um"])
+        z_um = _geometry_ref_surface_z_um(geometry_ref)
         points = [[float(x), float(y), z_um] for x, y in outer]
         holes = [
             [[float(x), float(y), z_um] for x, y in ring]

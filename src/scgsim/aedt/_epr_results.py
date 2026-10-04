@@ -188,6 +188,29 @@ def _surface_energy_j(
     raise ValueError(f"unsupported surface interface {interface_kind!r}")
 
 
+def _surface_energy_coefficients(
+    interface_kind: str,
+    thickness_m: float,
+    film_epsilon: float,
+    substrate_epsilon: float,
+) -> tuple[float, float]:
+    """Return the existing normal and tangential peak-phasor energy factors."""
+    if interface_kind == "MA":
+        return _EPSILON_0_F_PER_M * thickness_m / (2.0 * film_epsilon), 0.0
+    if interface_kind == "MS":
+        return (
+            _EPSILON_0_F_PER_M * thickness_m * substrate_epsilon**2
+            / (2.0 * film_epsilon),
+            0.0,
+        )
+    if interface_kind == "SA":
+        return (
+            _EPSILON_0_F_PER_M * thickness_m / (2.0 * film_epsilon),
+            _EPSILON_0_F_PER_M * thickness_m * film_epsilon / 2.0,
+        )
+    raise ValueError(f"unsupported surface interface {interface_kind!r}")
+
+
 def resolve_saved_solution(manifest_path: str | Path) -> SavedSolution:
     """Verify one explicitly sealed saved-field cohort without opening AEDT."""
 
@@ -487,6 +510,17 @@ def _electric_domain_energy(
     )
     energy = _EPSILON_0_F_PER_M * epsilon_r * integral / 2.0
     return epsilon_r, integral, energy
+
+
+def _electric_domain_energy_coefficient(relative_permittivity: float) -> float:
+    return _EPSILON_0_F_PER_M * relative_permittivity / 2.0
+
+
+def _junction_capacitive_energy_coefficient(
+    capacitance_f: float, width_um: float
+) -> float:
+    width_m = width_um * 1e-6
+    return capacitance_f / (2.0 * width_m**2)
 
 
 def _junction_capacitive_energies(

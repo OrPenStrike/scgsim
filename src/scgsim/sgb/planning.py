@@ -109,6 +109,7 @@ from scgsim.sgb.models import (
     GeometryBuildInput,
     InnerPecVoidShellRecord,
     InterfacePlanRecord,
+    LayoutPolygonSpec,
     MMContactRecord,
     PointPlanRecord,
     PortSheetRegionRecord,
@@ -157,6 +158,8 @@ _GEOMETRY_REF_METADATA_KEYS = (
     "hole_loops",
     "loop_geometry_ref",
     "z_um",
+    "z_min_um",
+    "z_max_um",
     "thickness_um",
 )
 _INTERFACE_KIND_ORDER = ("MM", "SS", "AA", "MS", "MA", "SA")
@@ -1101,6 +1104,8 @@ def plan_surface_contribution_patches(
     """
 
     build_input = _prepare_auto_vacuum_solution_regions(build_input, route=route)
+    if route == "A":
+        build_input = _refresh_generated_route_a_sheet_interfaces(build_input)
     validate_selected_route(build_input, route)
     semantic_facts = build_semantic_evidence_facade(build_input, route=route)
     interfaces = recognize_route_interfaces(build_input, route=route)
@@ -1132,6 +1137,87 @@ def plan_surface_contribution_patches(
         surfaces=surfaces,
         semantic_facts=semantic_facts,
     )
+
+
+def _refresh_generated_route_a_sheet_interfaces(
+    build_input: GeometryBuildInput,
+) -> GeometryBuildInput:
+    """Rebuild adapter-generated Route A sheet footprints from final geometry.
+
+    Junction partitioning can replace authored conductor polygons with PEC
+    ends. Refresh only the generated sheet intents so their footprints follow
+    that final geometry; caller-authored interface declarations stay intact.
+    """
+    intents_value = build_input.metadata.get("interface_intents_2d", {})
+    if not isinstance(intents_value, Mapping):
+        return build_input
+    intents = dict(intents_value)
+    existing = tuple(intents.get("interfaces", ()))
+    generated_owner_ids = {
+        str(owners[0])
+        for intent in existing
+        if isinstance(intent, Mapping)
+        and intent.get("intent_origin") == "generated_route_a_surface_sheet"
+        and isinstance((owners := intent.get("owner_semantic_ids")), Sequence)
+        and not isinstance(owners, (str, bytes))
+        and owners
+    }
+    explicit = tuple(
+        intent
+        for intent in existing
+        if not (
+            isinstance(intent, Mapping)
+            and intent.get("intent_origin") == "generated_route_a_surface_sheet"
+        )
+    )
+    generated = tuple(
+        intent
+        for intent in _route_a_sheet_interfaces(
+            build_input.entities, build_input.polygons
+        )["interfaces"]
+        if intent["owner_semantic_ids"][0] in generated_owner_ids
+    )
+    intents["interfaces"] = (*explicit, *generated)
+    return replace(
+        build_input,
+        metadata={**build_input.metadata, "interface_intents_2d": intents},
+    )
+
+
+def _route_a_sheet_interfaces(
+    entities: Sequence[SemanticEntitySpec],
+    polygons: Sequence[LayoutPolygonSpec],
+) -> dict[str, tuple[Mapping[str, Any], ...]]:
+    """Build automatic Route A sheet intents from current source polygons."""
+    polygons_by_id = {polygon.polygon_id: polygon for polygon in polygons}
+    interfaces: list[Mapping[str, Any]] = []
+    for entity in entities:
+        if entity.route_representations.get("A") != "surface_sheet":
+            continue
+        for index, polygon_id in enumerate(entity.polygon_ids):
+            polygon = polygons_by_id.get(polygon_id)
+            if polygon is None:
+                raise ValueError(
+                    f"{entity.semantic_id} Route A sheet references missing "
+                    f"polygon {polygon_id!r}"
+                )
+            z_um = float(entity.geometry.get("z_um", 0.0))
+            interfaces.append(
+                {
+                    "interface_id": f"MA__{entity.semantic_id}__AIR__{index:04d}",
+                    "kind": "MA",
+                    "owner_semantic_ids": (entity.semantic_id, "AIR"),
+                    "interface_kinds": ("MS", "MA"),
+                    "recognition_rule": "route_a_surface_sheet_polygon",
+                    "intent_origin": "generated_route_a_surface_sheet",
+                    "source_polygon_ids": (polygon_id,),
+                    "valid_routes": ("A",),
+                    "plane": {"axis": "z", "value_um": z_um},
+                    "outer_loop": polygon.exterior,
+                    "hole_loops": polygon.holes,
+                }
+            )
+    return {"interfaces": tuple(interfaces)}
 
 
 def _timed(
@@ -1561,9 +1647,13 @@ def _canonical_planar_loop_orientation(
 
 def _geometry_ref_surface_z_um(geometry_ref: Mapping[str, Any]) -> float:
     z_min_um = float(geometry_ref.get("z_min_um", geometry_ref.get("z_um", 0.0)))
-    if geometry_ref.get("shell_part") == "top":
+    shell_part = geometry_ref.get("shell_part")
+    if shell_part == "top":
+        z_max_um = geometry_ref.get("z_max_um")
+        if z_max_um is not None:
+            return float(z_max_um)
         return z_min_um + float(geometry_ref.get("thickness_um", 0.0))
-    if geometry_ref.get("shell_part") == "bottom":
+    if shell_part == "bottom":
         return z_min_um
     plane = geometry_ref.get("plane") or geometry_ref.get("contact_plane")
     if isinstance(plane, Mapping) and plane.get("axis") == "z":
@@ -2680,8 +2770,8 @@ def _conductor_face_solution_pieces(
     shell_part: str,
     geometry_refs: Sequence[Mapping[str, Any]],
 ) -> tuple[tuple[str, dict[str, Any]], ...]:
-    """Partition Route-B planar faces by exact local solution adjacency."""
-    if route != "B":
+    """Partition Route-A/B planar faces by exact local solution adjacency."""
+    if route not in {"A", "B"}:
         adjacent_id = _conductor_face_adjacent_solution_id(
             build_input,
             entity,
@@ -7535,25 +7625,21 @@ def _conductor_entities_on_solution_plane(
         raise ValueError("pass at most one of base_loop or base_region")
     if base_loop is None and base_region is None:
         raise ValueError("base_loop or base_region is required")
+    patch_region = (
+        base_region
+        if base_region is not None
+        else (gdstk.Polygon(_clean_loop(base_loop)),)
+    )
     for entity in build_input.entities:
         if (
             _is_solution_entity(entity)
             or entity.route_representations.get(route) is None
             or "outer_loop" not in entity.geometry
-            or (
-                (
-                    base_loop is not None
-                    and not _loop_inside_loop(entity.geometry["outer_loop"], base_loop)
-                )
-                or (
-                    base_region is not None
-                    and not _boolean_gdstk_region(
-                        gdstk,
-                        _entity_occupied_region(gdstk, entity),
-                        base_region,
-                        "and",
-                    )
-                )
+            or not _boolean_gdstk_region(
+                gdstk,
+                _entity_occupied_region(gdstk, entity),
+                patch_region,
+                "and",
             )
         ):
             continue
@@ -7569,21 +7655,29 @@ def _conductor_entities_on_solution_plane(
             ):
                 records.append(entity)
             continue
-        if any(
-            _same_z(face_z, z_um)
-            and _conductor_face_adjacent_solution_id(
-                build_input,
-                entity,
-                face,
-            )
-            in pair_ids
-            for face, face_z in zip(
-                ("bottom", "top"),
-                _entity_z_range_um(entity),
-                strict=True,
-            )
+        entity_region = _entity_occupied_region(gdstk, entity)
+        local_overlap = _boolean_gdstk_region(
+            gdstk, entity_region, patch_region, "and"
+        )
+        if not local_overlap:
+            continue
+        for face, face_z in zip(
+            ("bottom", "top"),
+            _entity_z_range_um(entity),
+            strict=True,
         ):
-            records.append(entity)
+            if not _same_z(face_z, z_um):
+                continue
+            local_domains = _planar_side_solution_regions(
+                build_input,
+                owner_id=entity.semantic_id,
+                occupied_region=local_overlap,
+                plane_z_um=face_z,
+                side=face,
+            )
+            if any(domain_id in pair_ids for domain_id, _ in local_domains):
+                records.append(entity)
+                break
     return tuple(records)
 
 
@@ -7802,6 +7896,7 @@ def _route_entity_geometry_ref(
     ):
         geometry_ref["z_um"] = z_min_um
         geometry_ref["z_min_um"] = z_min_um
+        geometry_ref["z_max_um"] = z_max_um
         geometry_ref["thickness_um"] = z_max_um - z_min_um
         geometry_ref["route_a_cutout_z_range_um"] = (z_min_um, z_max_um)
     return geometry_ref

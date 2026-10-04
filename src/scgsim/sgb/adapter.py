@@ -262,9 +262,10 @@ def build_gds_stack_geometry_input(
         "cell_bounds_um": cell_bounds,
         "source_dbu_um": float(library.precision) * 1e6,
     }
+    from scgsim.sgb.planning import _route_a_sheet_interfaces
+
     combined_metadata["interface_intents_2d"] = _route_a_sheet_interfaces(
-        entities,
-        polygons,
+        entities, polygons
     )
     port_sheet_regions = _port_sheet_regions_from_stack_metadata(
         stack_metadata,
@@ -1607,36 +1608,6 @@ def _layout_polygon_region(gdstk: Any, polygon: LayoutPolygonSpec) -> tuple[Any,
     if not holes:
         return (outer,)
     return tuple(gdstk.boolean((outer,), holes, "not", precision=1e-9) or ())
-
-
-def _route_a_sheet_interfaces(
-    entities: Sequence[SemanticEntitySpec],
-    polygons: Sequence[LayoutPolygonSpec],
-) -> dict[str, tuple[Mapping[str, Any], ...]]:
-    polygons_by_id = {polygon.polygon_id: polygon for polygon in polygons}
-    interfaces: list[Mapping[str, Any]] = []
-    for entity in entities:
-        if entity.route_representations.get("A") != "surface_sheet":
-            continue
-        for index, polygon_id in enumerate(entity.polygon_ids):
-            polygon = polygons_by_id[polygon_id]
-            z_um = float(entity.geometry.get("z_um", 0.0))
-            interfaces.append(
-                {
-                    "interface_id": f"MA__{entity.semantic_id}__AIR__{index:04d}",
-                    "kind": "MA",
-                    "owner_semantic_ids": (entity.semantic_id, "AIR"),
-                    "interface_kinds": ("MS", "MA"),
-                    "recognition_rule": "route_a_surface_sheet_polygon",
-                    "intent_origin": "generated_route_a_surface_sheet",
-                    "source_polygon_ids": (polygon_id,),
-                    "valid_routes": ("A",),
-                    "plane": {"axis": "z", "value_um": z_um},
-                    "outer_loop": polygon.exterior,
-                    "hole_loops": polygon.holes,
-                }
-            )
-    return {"interfaces": tuple(interfaces)}
 
 
 def _ring_from_gdstk_polygon(polygon: Any) -> tuple[tuple[float, float], ...]:

@@ -18,6 +18,7 @@ EIGENMODE_SCHEMA_VERSION = "scgsim.aedt.hfss-eigenmode.v1"
 EPR_EIGENMODE_SCHEMA_VERSION = "scgsim.aedt.hfss-eigenmode-epr.v1"
 EPR_ANALYSIS_SCHEMA_VERSION = "scgsim.aedt.hfss-eigenmode-epr-analysis.v1"
 EPR_EIGENMODE_SCHEMA_VERSION_V2 = "scgsim.aedt.hfss-eigenmode-epr.v2"
+EPR_EIGENMODE_SCHEMA_VERSION_V3 = "scgsim.aedt.hfss-eigenmode-epr.v3"
 EPR_ANALYSIS_SCHEMA_VERSION_V2 = "scgsim.aedt.hfss-eigenmode-epr-analysis.v2"
 Q3D_SCHEMA_VERSION = "scgsim.aedt.q3d.v1"
 Q2D_SCHEMA_VERSION = "scgsim.aedt.q2d.v1"
@@ -830,13 +831,18 @@ class HfssEprSpec:
     aedt_version: str = REQUIRED_AEDT_VERSION
     pyaedt_version: str = LOCKED_PYAEDT
     _legacy_payload: bool = False
+    expression_convergence: Any = None
 
     @property
     def mode(self) -> Literal["eigenmode"]:
         return "eigenmode"
 
     def __post_init__(self) -> None:
-        from ._epr_models import EprAnalysisRequest, PreparedPlanarGeometry
+        from ._epr_models import (
+            EprAnalysisRequest,
+            ExpressionCacheConvergence,
+            PreparedPlanarGeometry,
+        )
 
         if (
             str(self.aedt_version) != REQUIRED_AEDT_VERSION
@@ -854,14 +860,28 @@ class HfssEprSpec:
             self.epr_request, EprAnalysisRequest
         ):
             raise TypeError("epr_request must be EprAnalysisRequest or None")
+        if self.expression_convergence is not None and not isinstance(
+            self.expression_convergence, ExpressionCacheConvergence
+        ):
+            raise TypeError(
+                "expression_convergence must be ExpressionCacheConvergence or None"
+            )
+        if self._legacy_payload and self.expression_convergence is not None:
+            raise ValueError("legacy EPR payload cannot add expression convergence")
         _validate_epr_selection(self)
 
     def to_payload(self) -> dict[str, Any]:
+        schema_version = (
+            EPR_EIGENMODE_SCHEMA_VERSION
+            if self._legacy_payload
+            else (
+                EPR_EIGENMODE_SCHEMA_VERSION_V3
+                if self.expression_convergence is not None
+                else EPR_EIGENMODE_SCHEMA_VERSION_V2
+            )
+        )
         return {
-            "schema_version": (
-                EPR_EIGENMODE_SCHEMA_VERSION
-                if self._legacy_payload else EPR_EIGENMODE_SCHEMA_VERSION_V2
-            ),
+            "schema_version": schema_version,
             "mode": self.mode,
             "aedt": {"requested_version": self.aedt_version},
             "pyaedt": {
@@ -874,16 +894,29 @@ class HfssEprSpec:
             "epr": (
                 None if self.epr_request is None else self.epr_request.to_payload()
             ),
+            **(
+                {"expression_convergence": self.expression_convergence.to_payload()}
+                if self.expression_convergence is not None
+                else {}
+            ),
         }
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> HfssEprSpec:
-        from ._epr_models import EprAnalysisRequest, PreparedPlanarGeometry
+        from ._epr_models import (
+            EprAnalysisRequest,
+            ExpressionCacheConvergence,
+            PreparedPlanarGeometry,
+        )
 
         schema = payload.get("schema_version")
-        if schema not in {EPR_EIGENMODE_SCHEMA_VERSION, EPR_EIGENMODE_SCHEMA_VERSION_V2}:
+        if schema not in {
+            EPR_EIGENMODE_SCHEMA_VERSION,
+            EPR_EIGENMODE_SCHEMA_VERSION_V2,
+            EPR_EIGENMODE_SCHEMA_VERSION_V3,
+        }:
             raise ValueError("unsupported HFSS EPR schema")
-        if set(payload) != {
+        expected = {
             "schema_version",
             "mode",
             "aedt",
@@ -892,7 +925,14 @@ class HfssEprSpec:
             "run_control",
             "geometry",
             "epr",
-        } or payload.get("mode") != "eigenmode":
+        }
+        if schema == EPR_EIGENMODE_SCHEMA_VERSION_V3:
+            expected.add("expression_convergence")
+            if payload.get("expression_convergence") is None:
+                raise ValueError(
+                    "HFSS EPR V3 requires an expression convergence configuration"
+                )
+        if set(payload) != expected or payload.get("mode") != "eigenmode":
             raise ValueError("HFSS EPR payload members are not canonical")
         run = payload.get("run_control")
         if not isinstance(run, dict):
@@ -909,6 +949,13 @@ class HfssEprSpec:
                 None
                 if payload.get("epr") is None
                 else EprAnalysisRequest.from_payload(payload.get("epr"))
+            ),
+            expression_convergence=(
+                None
+                if schema != EPR_EIGENMODE_SCHEMA_VERSION_V3
+                else ExpressionCacheConvergence.from_payload(
+                    payload.get("expression_convergence")
+                )
             ),
             aedt_version=_text(
                 payload.get("aedt", {}).get("requested_version"),
@@ -1041,10 +1088,13 @@ class HfssEprAnalysisSpec:
 
 
 def _validate_epr_selection(spec: HfssEprSpec | HfssEprAnalysisSpec) -> None:
+    from ._epr_models import NormalizedSurfaceEprTotal
     from ._epr_results import surface_integral_groups
 
     request = spec.epr_request
     if request is None:
+        if getattr(spec, "expression_convergence", None) is not None:
+            raise ValueError("expression convergence requires an EPR analysis request")
         return
     if any(item.field_side == "sidewall" for item in spec.geometry.contributions) or any(
         item["contribution"]["side"] == "sidewall"
@@ -1084,7 +1134,26 @@ def _validate_epr_selection(spec: HfssEprSpec | HfssEprAnalysisSpec) -> None:
         source_domains.add("Region")
     if request.bulk_domain_ids is not None and not set(request.bulk_domain_ids) <= source_domains:
         raise ValueError("EPR request selects an unknown bulk domain")
-    surface_integral_groups(spec.geometry, request)
+    groups = surface_integral_groups(spec.geometry, request)
+    convergence = getattr(spec, "expression_convergence", None)
+    if convergence is None:
+        return
+    if convergence.mode not in modes:
+        raise ValueError("expression convergence mode must be selected for EPR")
+    target = convergence.target
+    if isinstance(target, NormalizedSurfaceEprTotal):
+        selected_groups = [
+            group
+            for group in groups
+            if group["interface_kind"] == target.interface_kind
+            and group.get("evaluation_kind", "requested_margin")
+            == target.evaluation_kind
+            and float(group["margin_um"]) == target.margin_um
+        ]
+        if not selected_groups:
+            raise ValueError(
+                "normalized surface convergence target selects no prepared owner groups"
+            )
 
 
 HfssSpec = HfssDrivenSpec | HfssEigenmodeSpec | HfssEprSpec | HfssEprAnalysisSpec
@@ -1549,7 +1618,11 @@ def parse_aedt_spec(
         return HfssDrivenSpec.from_payload(payload, base_dir=base_dir)
     if payload.get("schema_version") == EIGENMODE_SCHEMA_VERSION:
         return HfssEigenmodeSpec.from_payload(payload, base_dir=base_dir)
-    if payload.get("schema_version") in {EPR_EIGENMODE_SCHEMA_VERSION, EPR_EIGENMODE_SCHEMA_VERSION_V2}:
+    if payload.get("schema_version") in {
+        EPR_EIGENMODE_SCHEMA_VERSION,
+        EPR_EIGENMODE_SCHEMA_VERSION_V2,
+        EPR_EIGENMODE_SCHEMA_VERSION_V3,
+    }:
         return HfssEprSpec.from_payload(payload)
     if payload.get("schema_version") in {EPR_ANALYSIS_SCHEMA_VERSION, EPR_ANALYSIS_SCHEMA_VERSION_V2}:
         return HfssEprAnalysisSpec.from_payload(payload, base_dir=base_dir)

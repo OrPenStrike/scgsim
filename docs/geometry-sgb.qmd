@@ -186,12 +186,24 @@ contact cut. Port footprints select the intersecting child and fail if they
 cross incompatible local domain pairs. Fully freestanding sheets remain
 unsupported.
 
+The same local-domain partition is used when conductor faces are removed from
+an SA patch. The planner subtracts only the face overlap with that exact
+solution-pair patch, even when one conductor spans several adjacent domains.
+After AEDT junction partitioning, only adapter-generated Route-A sheet
+footprints are rebuilt from the final conductor polygons; caller-authored
+interface declarations remain intact.
+
 Route B keeps finite geometry and records local top, bottom, and sidewall
 material-side evidence. Geometry adjacency remains a set, whereas the additive
 contribution ledger preserves semantic multiplicity. Two same-kind MA sides
 on one Route-A child share one native surface and one aggregate Palace row;
 they are not duplicated or multiplied. That aggregate requires Palace's
 internal-boundary cracking and does not imply side-resolved numeric output.
+The AEDT contribution catalogue is sourced from physically planned ledger
+entries and groups one catalogue row by contribution identity while retaining
+each distinct patch binding. A generic declaration without physical ledger
+evidence remains semantic metadata and does not create an additional numeric
+EPR contribution.
 
 ## Identity requirements
 
