@@ -22,6 +22,7 @@ from ._epr_geometry import prepare_planar_geometry_input, validate_geometry_work
 from ._epr_models import (
     EprAnalysisRequest,
     EprResult,
+    ExpressionCacheConvergence,
     PlanarJunction,
     PreparedPlanarGeometry,
     SurfaceEprSpec,
@@ -51,6 +52,7 @@ class EigenmodeSim:
     surface_defaults: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     junctions: tuple[PlanarJunction, ...] = ()
     epr_request: EprAnalysisRequest | None = None
+    expression_convergence: ExpressionCacheConvergence | None = None
     prepared_geometry: PreparedPlanarGeometry | None = field(default=None, init=False)
     handoff_plan: HandoffPlan | None = field(default=None, init=False)
     _plan_snapshot: GeometryPlanSnapshot | None = field(default=None, init=False, repr=False)
@@ -236,6 +238,14 @@ class EigenmodeSim:
         self.epr_request = request
         self.handoff_plan = None
 
+    def set_expression_cache_convergence(
+        self, control: ExpressionCacheConvergence | None
+    ) -> None:
+        if control is not None and not isinstance(control, ExpressionCacheConvergence):
+            raise TypeError("control must be ExpressionCacheConvergence or None")
+        self.expression_convergence = control
+        self.handoff_plan = None
+
     def _source_input(self) -> GeometryBuildInput:
         if self._plan_snapshot is not None:
             return self._plan_snapshot.geometry_input
@@ -295,6 +305,11 @@ class EigenmodeSim:
             "epr_request": (
                 None if self.epr_request is None else self.epr_request.to_payload()
             ),
+            "expression_convergence": (
+                None
+                if self.expression_convergence is None
+                else self.expression_convergence.to_payload()
+            ),
         }
         return InputSummary(data)
 
@@ -328,6 +343,7 @@ class EigenmodeSim:
             run_control=self.run_control,
             output_dir=self.output_dir,
             epr_request=self.epr_request,
+            expression_convergence=self.expression_convergence,
             geometry_workers=self.geometry_workers,
             resources=self.resources,
         )

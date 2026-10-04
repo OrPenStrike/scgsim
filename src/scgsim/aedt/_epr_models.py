@@ -334,6 +334,144 @@ class EprAnalysisRequest:
 
 
 @dataclass(frozen=True)
+class NativeExpressionDefinition:
+    """One caller-authored Field Calculator operation sequence."""
+
+    name: str
+    operations: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "name", _text(self.name, "expression name"))
+        if isinstance(self.operations, (str, bytes)) or not isinstance(
+            self.operations, Sequence
+        ):
+            raise TypeError("expression operations must be a sequence of strings")
+        operations = tuple(self.operations)
+        if not operations or any(
+            not isinstance(item, str) or not item or "\n" in item or "\0" in item
+            for item in operations
+        ):
+            raise ValueError("expression operations must be non-empty native commands")
+        object.__setattr__(self, "operations", operations)
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "kind": "native_expression",
+            "name": self.name,
+            "operations": list(self.operations),
+        }
+
+    @classmethod
+    def from_payload(cls, value: Any) -> NativeExpressionDefinition:
+        if (
+            not isinstance(value, Mapping)
+            or set(value) != {"kind", "name", "operations"}
+            or value.get("kind") != "native_expression"
+        ):
+            raise ValueError("native expression definition members are not canonical")
+        return cls(name=value["name"], operations=value["operations"])
+
+
+@dataclass(frozen=True)
+class NormalizedSurfaceEprTotal:
+    """Select one interface/evaluation/margin total for a single mode."""
+
+    interface_kind: Literal["MA", "MS", "SA"]
+    evaluation_kind: Literal["unmasked_baseline", "requested_margin"]
+    margin_um: float
+
+    def __post_init__(self) -> None:
+        if self.interface_kind not in {"MA", "MS", "SA"}:
+            raise ValueError("surface EPR total interface must be MA, MS, or SA")
+        if self.evaluation_kind not in {"unmasked_baseline", "requested_margin"}:
+            raise ValueError("surface EPR total evaluation kind is invalid")
+        margin = _number(self.margin_um, "surface EPR total margin")
+        if self.evaluation_kind == "unmasked_baseline" and margin != 0.0:
+            raise ValueError("unmasked baseline margin must be exactly 0 um")
+        object.__setattr__(self, "margin_um", margin)
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "kind": "normalized_surface_epr_total",
+            "interface_kind": self.interface_kind,
+            "evaluation_kind": self.evaluation_kind,
+            "margin_um": self.margin_um,
+        }
+
+    @classmethod
+    def from_payload(cls, value: Any) -> NormalizedSurfaceEprTotal:
+        if (
+            not isinstance(value, Mapping)
+            or set(value) != {"kind", "interface_kind", "evaluation_kind", "margin_um"}
+            or value.get("kind") != "normalized_surface_epr_total"
+        ):
+            raise ValueError("normalized surface total members are not canonical")
+        return cls(
+            interface_kind=value["interface_kind"],
+            evaluation_kind=value["evaluation_kind"],
+            margin_um=value["margin_um"],
+        )
+
+
+@dataclass(frozen=True)
+class ExpressionCacheConvergence:
+    """Select one native expression and its explicit convergence criterion."""
+
+    mode: int
+    target: NativeExpressionDefinition | NormalizedSurfaceEprTotal
+    criterion: float
+    use_relative_convergence: bool = True
+
+    def __post_init__(self) -> None:
+        if type(self.mode) is not int or self.mode <= 0:
+            raise ValueError("convergence mode must be a positive integer")
+        if not isinstance(
+            self.target, (NativeExpressionDefinition, NormalizedSurfaceEprTotal)
+        ):
+            raise TypeError(
+                "convergence target must be a native expression or normalized surface total"
+            )
+        criterion = _number(self.criterion, "convergence criterion", minimum=-math.inf)
+        if type(self.use_relative_convergence) is not bool:
+            raise TypeError("use_relative_convergence must be a bool")
+        object.__setattr__(self, "criterion", criterion)
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "target": self.target.to_payload(),
+            "criterion": self.criterion,
+            "use_relative_convergence": self.use_relative_convergence,
+        }
+
+    @classmethod
+    def from_payload(cls, value: Any) -> ExpressionCacheConvergence:
+        if not isinstance(value, Mapping) or set(value) != {
+            "mode",
+            "target",
+            "criterion",
+            "use_relative_convergence",
+        }:
+            raise ValueError("expression convergence members are not canonical")
+        target = value["target"]
+        if not isinstance(target, Mapping):
+            raise TypeError("expression convergence target must be a mapping")
+        kind = target.get("kind")
+        if kind == "native_expression":
+            parsed_target = NativeExpressionDefinition.from_payload(target)
+        elif kind == "normalized_surface_epr_total":
+            parsed_target = NormalizedSurfaceEprTotal.from_payload(target)
+        else:
+            raise ValueError("unsupported expression convergence target")
+        return cls(
+            mode=value["mode"],
+            target=parsed_target,
+            criterion=value["criterion"],
+            use_relative_convergence=value["use_relative_convergence"],
+        )
+
+
+@dataclass(frozen=True)
 class PreparedPlanarGeometry:
     """Detached source request before any native AEDT object exists."""
 
@@ -732,6 +870,9 @@ def _contained_relative_path(value: Any, name: str) -> Path:
 __all__ = [
     "EprAnalysisRequest",
     "EprResult",
+    "ExpressionCacheConvergence",
+    "NativeExpressionDefinition",
+    "NormalizedSurfaceEprTotal",
     "PlanarJunction",
     "PreparedPlanarGeometry",
     "SavedSolution",

@@ -9,25 +9,26 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ._epr_geometry import validate_geometry_workers
+from ._epr_models import (
+    EprAnalysisRequest,
+    ExpressionCacheConvergence,
+    PreparedPlanarGeometry,
+    SavedSolution,
+    detached,
+)
 from ._runtime_provenance import (
     RECEIPT_V3,
     encode_initial_receipt,
     initial_receipt_payload,
     prepared_runtime_source,
 )
-from ._epr_models import (
-    EprAnalysisRequest,
-    PreparedPlanarGeometry,
-    SavedSolution,
-    detached,
-)
-from ._epr_geometry import validate_geometry_workers
 from .spec import (
     LOCKED_PYAEDT,
     OFFICIAL_PYAEDT_SOURCE_URL,
     REQUIRED_AEDT_VERSION,
-    AedtSpec,
     AedtResources,
+    AedtSpec,
     EigenmodeRunControl,
     HfssEprAnalysisSpec,
     HfssEprSpec,
@@ -202,6 +203,7 @@ def prepare_hfss_eigenmode_from_geometry(
     run_control: EigenmodeRunControl,
     output_dir: str | Path,
     epr_request: EprAnalysisRequest | None = None,
+    expression_convergence: ExpressionCacheConvergence | None = None,
     geometry_workers: int | None = None,
     resources: AedtResources | None = None,
 ) -> HandoffPlan:
@@ -213,6 +215,7 @@ def prepare_hfss_eigenmode_from_geometry(
         geometry=geometry,
         run_control=run_control,
         epr_request=epr_request,
+        expression_convergence=expression_convergence,
     )
     validate_geometry_workers(geometry_workers)
     if resources is not None and not isinstance(resources, AedtResources):
@@ -658,8 +661,8 @@ def _utc_now() -> str:
 
 
 __all__ = [
-    "analyze_epr",
     "HandoffPlan",
+    "analyze_epr",
     "prepare_handoff",
     "prepare_hfss_eigenmode_from_geometry",
 ]

@@ -433,7 +433,11 @@ def compile_named_expression(
     }
     identity["sha256"] = _digest(identity)
     # AEDT resolves one-file CLC dependencies by native-name order, not file order.
-    rank = "20" if selection.get("kind") == "surface_group" else "10"
+    rank = {
+        "surface_group": "20",
+        "normalized_surface_total": "30",
+        "custom_convergence": "30",
+    }.get(selection.get("kind"), "10")
     name = f"scgsim_epr_{rank}_{identity['sha256'][:24]}"
     definitions: list[tuple[str, str]] = []
     evidence: dict[str, bytes] = {}

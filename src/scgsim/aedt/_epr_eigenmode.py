@@ -1,4 +1,9 @@
-"""Native Eigenmode preparation and EPR orchestration inside run.py ownership."""
+"""Native Eigenmode preparation and EPR orchestration inside run.py ownership.
+
+Live geometry/electrical checks precede authoring. Assigned junction lines are
+verified from the existing native save before preparation returns or solves;
+saved analysis verifies the immutable workcopy before expression authoring.
+"""
 
 from __future__ import annotations
 
@@ -24,13 +29,29 @@ from ._epr_fields import (
     parse_native_scalar,
 )
 from ._epr_geometry import (
+    _read_saved_junction_lines,
     bind_inset_surface_selections,
     bind_saved_planar_geometry,
     plan_inset_sheet_names,
     prepare_native_planar_geometry,
 )
-from ._epr_models import EprResult, _freeze, detached, surface_evaluations
-from ._epr_results import combine_epr_mode, surface_integral_groups
+from ._epr_models import (
+    EprResult,
+    ExpressionCacheConvergence,
+    NativeExpressionDefinition,
+    NormalizedSurfaceEprTotal,
+    _freeze,
+    detached,
+    surface_evaluations,
+)
+from ._epr_results import (
+    _electric_domain_energy_coefficient,
+    _epr_domain_context,
+    _junction_capacitive_energy_coefficient,
+    _surface_energy_coefficients,
+    combine_epr_mode,
+    surface_integral_groups,
+)
 from ._hfss_convergence import read_hfss_convergence
 from ._hfss_runtime import _export_eigenmode
 from ._native_common import (
@@ -40,9 +61,8 @@ from ._native_common import (
     pyaedt_version,
     saved_setup_properties,
 )
-from .spec import AedtResources, REQUIRED_AEDT_VERSION, HfssEprAnalysisSpec, HfssEprSpec
+from .spec import REQUIRED_AEDT_VERSION, AedtResources, HfssEprAnalysisSpec, HfssEprSpec
 from .util import file_sha256, write_json
-
 
 _SURFACE_ANALYSIS_SCOPE = {
     "included_field_sides": ["top", "bottom"],
@@ -182,6 +202,7 @@ def prepare_epr_hfss(
         raise RuntimeError("HFSS EPR project was not saved after preparation")
     timings["save_seconds"] = round(time.perf_counter() - started, 6)
     started = time.perf_counter()
+    _read_saved_junction_lines(app, project_path, bound.design_name, bound.geometry, geometry)
     setup = _read_setup(app, bound)
     if bound.epr_request is not None:
         cache["serialized_readback"] = _read_cache(app, bound, cache["items"])
@@ -533,6 +554,8 @@ def _evaluate_mode_integrals(
     raw["frequency_hz"] = {"value": frequency_hz, "unit": "Hz"}
     evidence: list[dict[str, Any]] = []
     for expression in expressions:
+        if expression.get("cache_only"):
+            continue
         identity = expression["identity"]
         selection = identity["selection"]
         purpose = str(identity["purpose"])
@@ -625,6 +648,7 @@ def analyze_saved_epr(
         raise RuntimeError("saved EPR field solution is unavailable on the workcopy")
     started = time.perf_counter()
     geometry = bind_saved_planar_geometry(app, spec.geometry)
+    _read_saved_junction_lines(app, project_path, spec.design_name, spec.geometry, geometry)
     timings["geometry_rebind_seconds"] = round(time.perf_counter() - started, 6)
     started = time.perf_counter()
     expressions, authoring, phase_timings = _author_epr_expressions(
@@ -887,7 +911,11 @@ def _adaptive_epr_result(
     for mode in selected_modes:
         frequency_trace = frequency_traces[f"Mode({mode})"]
         frequencies = _trace_by_pass(frequency_trace, final_pass=final_pass)
-        mode_items = [item for item in cache["items"] if item["mode"] == mode]
+        mode_items = [
+            item
+            for item in cache["items"]
+            if item["mode"] == mode and not item.get("cache_only")
+        ]
         item_values: dict[str, dict[int, float]] = {}
         item_contexts: dict[str, dict[str, Any]] = {}
         for item in mode_items:
@@ -1214,10 +1242,183 @@ def _cache_intrinsics(mode_count: int, selected_mode: int) -> str:
     return " ".join(assignments)
 
 
+def _expression_name(
+    expressions: list[dict[str, Any]],
+    *,
+    purpose: str,
+    selection_kind: str,
+    selection_id_key: str,
+    selection_id: str,
+) -> str:
+    matches = [
+        item
+        for item in expressions
+        if item["identity"].get("purpose") == purpose
+        and item["identity"].get("selection", {}).get("kind") == selection_kind
+        and item["identity"].get("selection", {}).get(selection_id_key)
+        == selection_id
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"compiled EPR expression binding is missing or ambiguous: {purpose!r}"
+        )
+    return str(matches[0]["name"])
+
+
+def _weighted_native_terms(terms: list[tuple[str, float]]) -> list[str]:
+    operations: list[str] = []
+    for name, coefficient in terms:
+        if coefficient == 0.0:
+            continue
+        has_prior_term = bool(operations)
+        operations.extend(
+            (
+                f"NameOfExpression('{name}')",
+                f"Scalar_Constant({coefficient:.17g})",
+                "Operation('*')",
+            )
+        )
+        if has_prior_term:
+            operations.append("Operation('+')")
+    if not operations:
+        raise RuntimeError("normalized expression has no weighted terms")
+    return operations
+
+
+def _native_term_sum(terms: list[list[str]]) -> list[str]:
+    if not terms:
+        raise RuntimeError("normalized expression has no energy terms")
+    operations: list[str] = []
+    for term in terms:
+        has_prior_term = bool(operations)
+        operations.extend(term)
+        if has_prior_term:
+            operations.append("Operation('+')")
+    return operations
+
+
+def _normalized_surface_total_operations(
+    spec: HfssEprSpec,
+    expressions: list[dict[str, Any]],
+    target: NormalizedSurfaceEprTotal,
+) -> list[str]:
+    if spec.epr_request is None:
+        raise RuntimeError("normalized surface convergence requires an EPR request")
+    groups = [
+        group
+        for group in surface_integral_groups(spec.geometry, spec.epr_request)
+        if group["interface_kind"] == target.interface_kind
+        and group.get("evaluation_kind", "requested_margin")
+        == target.evaluation_kind
+        and float(group["margin_um"]) == target.margin_um
+    ]
+    if not groups:
+        raise RuntimeError("normalized surface convergence target has no owner groups")
+
+    numerator_terms: list[tuple[str, float]] = []
+    for group in groups:
+        normal_coefficient, tangential_coefficient = _surface_energy_coefficients(
+            group["interface_kind"],
+            float(group["film_thickness_m"]),
+            float(group["film_relative_permittivity"]),
+            float(group["substrate_relative_permittivity"]),
+        )
+        group_id = str(group["group_id"])
+        if normal_coefficient != 0.0:
+            numerator_terms.append(
+                (
+                    _expression_name(
+                        expressions,
+                        purpose=f"electric_normal_{group_id}",
+                        selection_kind="surface_group",
+                        selection_id_key="group_id",
+                        selection_id=group_id,
+                    ),
+                    normal_coefficient,
+                )
+            )
+        if tangential_coefficient != 0.0:
+            numerator_terms.append(
+                (
+                    _expression_name(
+                        expressions,
+                        purpose=f"electric_tangential_{group_id}",
+                        selection_kind="surface_group",
+                        selection_id_key="group_id",
+                        selection_id=group_id,
+                    ),
+                    tangential_coefficient,
+                )
+            )
+    numerator_operations = _weighted_native_terms(numerator_terms)
+
+    _, materials, domains = _epr_domain_context(spec.geometry)
+    denominator_terms: list[list[str]] = []
+    for domain_id, domain in domains.items():
+        material = materials[domain["material_id"]]
+        coefficient = _electric_domain_energy_coefficient(
+            float(material["permittivity"])
+        )
+        name = _expression_name(
+            expressions,
+            purpose=f"electric_volume_{domain_id}",
+            selection_kind="volume",
+            selection_id_key="semantic_id",
+            selection_id=domain_id,
+        )
+        denominator_terms.append(
+            [
+                f"NameOfExpression('{name}')",
+                f"Scalar_Constant({coefficient:.17g})",
+                "Operation('*')",
+            ]
+        )
+    for junction in spec.geometry.junctions:
+        coefficient = _junction_capacitive_energy_coefficient(
+            junction.capacitance_f, junction.width_um
+        )
+        if coefficient == 0.0:
+            continue
+        real_name = _expression_name(
+            expressions,
+            purpose=f"junction_voltage_real_{junction.junction_id}",
+            selection_kind="junction_sheet",
+            selection_id_key="junction_id",
+            selection_id=junction.junction_id,
+        )
+        imag_name = _expression_name(
+            expressions,
+            purpose=f"junction_voltage_imag_{junction.junction_id}",
+            selection_kind="junction_sheet",
+            selection_id_key="junction_id",
+            selection_id=junction.junction_id,
+        )
+        denominator_terms.append(
+            [
+                f"NameOfExpression('{real_name}')",
+                f"NameOfExpression('{real_name}')",
+                "Operation('*')",
+                f"NameOfExpression('{imag_name}')",
+                f"NameOfExpression('{imag_name}')",
+                "Operation('*')",
+                "Operation('+')",
+                f"Scalar_Constant({coefficient:.17g})",
+                "Operation('*')",
+            ]
+        )
+    denominator_operations = _native_term_sum(denominator_terms)
+    return [
+        *numerator_operations,
+        *denominator_operations,
+        "Operation('/')",
+    ]
+
+
 def _cache_items(
     expressions: list[dict[str, Any]],
     mode_count: int,
     selected_modes: tuple[int, ...],
+    convergence: ExpressionCacheConvergence | None = None,
 ) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for mode in selected_modes:
@@ -1241,6 +1442,17 @@ def _cache_items(
                     "selection": detached_data(expression["identity"]["selection"]),
                 }
             )
+            item = items[-1]
+            if expression.get("cache_only"):
+                item["cache_only"] = True
+            if (
+                expression.get("cache_only")
+                and convergence is not None
+                and mode == convergence.mode
+            ):
+                item["is_convergence"] = True
+                item["use_relative_convergence"] = convergence.use_relative_convergence
+                item["criterion"] = convergence.criterion
     if len({item["title"] for item in items}) != len(items):
         raise RuntimeError("compiled EPR cache titles are not unique")
     return items
@@ -1259,13 +1471,13 @@ def _native_expression_cache(items: list[dict[str, Any]]) -> list[Any]:
                 "Intrinsics:=",
                 item["intrinsics"],
                 "IsConvergence:=",
-                False,
+                item.get("is_convergence", False),
                 "UseRelativeConvergence:=",
-                0,
+                int(item.get("use_relative_convergence", False)),
                 "MaxConvergenceDelta:=",
-                1,
+                item.get("criterion", 1),
                 "MaxConvergeValue:=",
-                "1",
+                str(item.get("criterion", 1)),
                 "ReportType:=",
                 "Fields",
                 ["NAME:ExpressionContext"],
@@ -1312,7 +1524,9 @@ def _author_epr_expressions(
         elapsed = time.perf_counter() - started
         kind = "adjacent" if adjacent else "ordinary"
         phase_seconds[f"{kind}_compile_seconds"] += elapsed
-        expression_stage_seconds[stage] += elapsed
+        expression_stage_seconds[stage] = (
+            expression_stage_seconds.get(stage, 0.0) + elapsed
+        )
         expression_counts[kind] += 1
         compiled.append(result)
         return result[0]
@@ -1542,6 +1756,39 @@ def _author_epr_expressions(
                     namespace=namespace,
                 )
             )
+    convergence = spec.expression_convergence if isinstance(spec, HfssEprSpec) else None
+    if convergence is not None:
+        target = convergence.target
+        if isinstance(target, NormalizedSurfaceEprTotal):
+            purpose = "normalized_surface_epr_total"
+            selection = {
+                "kind": "normalized_surface_total",
+                "interface_kind": target.interface_kind,
+                "evaluation_kind": target.evaluation_kind,
+                "margin_um": target.margin_um,
+            }
+            operations = _normalized_surface_total_operations(spec, expressions, target)
+        elif isinstance(target, NativeExpressionDefinition):
+            purpose = "custom_convergence"
+            selection = {
+                "kind": "custom_convergence",
+                "definition_name": target.name,
+            }
+            operations = list(target.operations)
+        else:
+            raise TypeError("unsupported expression-cache convergence target")
+        authored = _timed_author(
+            "convergence",
+            purpose=purpose,
+            operations=operations,
+            solution=solution,
+            phase_degrees=0.0,
+            dependencies=pp_observed,
+            selection=selection,
+            namespace=namespace,
+        )
+        authored["cache_only"] = True
+        expressions.append(authored)
     batch = load_compiled_expressions(app, compiled, evidence_dir)
     for key in (
         "collision_check_seconds",
@@ -1587,7 +1834,12 @@ def _submit_epr_cache(
         if request.mode_indices is None
         else request.mode_indices
     )
-    items = _cache_items(expressions, spec.run_control.num_modes, selected_modes)
+    items = _cache_items(
+        expressions,
+        spec.run_control.num_modes,
+        selected_modes,
+        spec.expression_convergence,
+    )
     setup = app.get_setup(spec.run_control.setup_name)
     before = detached_data(setup.props)
     properties = copy.deepcopy(before)
@@ -1607,10 +1859,10 @@ def _submit_epr_cache(
         "source_assignment": authoring["source_assignment"],
         "postprocessing_variables": authoring["postprocessing_variables"],
         "native_readback": {
-            "status": "NOT_VERIFIED_NATIVE_READBACK",
+            "status": "PENDING_SAVED_SETUP_READBACK",
             "reason": (
-                "AEDT 2024.2 serialized setup omits IsConvergence and no "
-                "verified direct complete cache getter is available"
+                "submitted cache settings are not saved-setup readback; "
+                "saved properties are inspected after the project save"
             ),
         },
         "raw_cache_args_sha256": _identity_sha256(raw_cache),
@@ -1712,9 +1964,29 @@ def _read_cache(
     if not isinstance(raw_items, list):
         raise RuntimeError("saved EPR ExpressionCache items are invalid")
     persisted = []
+    convergence_field_names = (
+        "IsConvergence",
+        "UseRelativeConvergence",
+        "MaxConvergenceDelta",
+        "MaxConvergeValue",
+    )
+    convergence_fields = []
     for item in raw_items:
         if not isinstance(item, dict):
             raise RuntimeError("saved EPR cache item is invalid")
+        convergence_fields.append(
+            {
+                "title": item.get("Title"),
+                "values": {
+                    name: item[name]
+                    for name in convergence_field_names
+                    if name in item
+                },
+                "unavailable": [
+                    name for name in convergence_field_names if name not in item
+                ],
+            }
+        )
         persisted.append(
             {
                 "title": item.get("Title"),
@@ -1735,7 +2007,7 @@ def _read_cache(
     return {
         "use_cache_for": use_cache_for,
         "items": persisted,
-        "convergence_fields": "NOT_VERIFIED_SERIALIZED_OMISSION",
+        "convergence_fields": convergence_fields,
     }
 
 
