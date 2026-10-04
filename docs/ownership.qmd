@@ -1,5 +1,9 @@
 ---
 title: "Folder Tree and Ownership Boundaries"
+description: "Repository paths, public notebook authority and documentation publication responsibility."
+scgsim-kind: "project"
+scgsim-status: "CONVERGING"
+scgsim-id: "docs/ownership"
 ---
 
 ## Intended repository tree

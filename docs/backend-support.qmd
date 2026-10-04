@@ -1,15 +1,19 @@
 ---
 title: "Backend Support Matrix"
+description: "Implemented candidate workflows, recorded exercise limits and explicit exclusions."
+scgsim-kind: "contract"
+scgsim-status: "CONVERGING"
+scgsim-id: "docs/backend-support"
 ---
 
 This matrix separates implementation state, the exercise evidence recorded for
 that scope, and claims that evidence does not establish. `CONVERGING` means an
 implementation candidate exists; it is not an accepted or stable V1 capability.
 
-| Backend surface | Implementation | Exercise evidence recorded here | Current limit |
+| Backend surface | Implementation | Previously recorded exercise (not rerun here) | Current limit |
 |---|---|---|---|
-| Palace Electrostatic | Candidate; `CONVERGING` | Route A/B LTlab Slurm runs with strict resolution and reports exercised | Exercise scope does not establish all inputs or V1 stability. |
-| Palace Eigenmode | Candidate; `CONVERGING` | Route A/B LTlab Slurm runs with strict resolution and reports exercised | This does not validate every Eigenmode EPR output or numerical result. |
+| Palace Electrostatic | Candidate; `CONVERGING` | Route A/B Slurm runs with strict resolution and reports exercised | Exercise scope does not establish all inputs or V1 stability. |
+| Palace Eigenmode | Candidate; `CONVERGING` | Route A/B Slurm runs with strict resolution and reports exercised | This does not validate every Eigenmode EPR output or numerical result. |
 | Palace Eigenmode EPR | Candidate APIs for surface, bulk, port, reanalysis, and reports; `CONVERGING` | The guide's paired component examples are static and make no native-solve or numerical-validation claim. | Sidewall energy may remain uncomputed; reported known-loss subtotal is not total device loss. |
 | Palace Driven | Not implemented | None | Planned for later. |
 | Palace Magnetostatic | Not implemented | None | Planned for later. |
@@ -31,3 +35,11 @@ static workflow. The backend specifications own exact behavior:
 [Palace Electrostatic + SGB](specs/palace-electrostatic-sgb.qmd). The
 [Unified Report Model](report-model.qmd) describes result presentation and
 availability.
+
+## Learn an implemented workflow
+
+Use the [course map](examples.qmd#choose-the-physical-question) for the
+Electrostatic, ordinary Eigenmode, Eigenmode/EPR, Driven Modal/Terminal, Q3D
+and Q2D lessons. The common course distinguishes source preparation, native
+geometry observation, explicit solve and verified return. A new documentation
+render is evidence of the readable site, not another solver exercise.

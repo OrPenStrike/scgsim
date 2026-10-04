@@ -1,5 +1,9 @@
 ---
 title: "Error Archive"
+description: "Revision-bound public diagnostic observations without causal-fix or acceptance claims."
+scgsim-kind: "historical"
+scgsim-status: "HISTORICAL"
+scgsim-id: "docs/errors"
 ---
 
 This page records public, generic diagnostic cases without turning them into

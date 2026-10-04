@@ -1,0 +1,60 @@
+---
+title: "AEDT: HFSS Driven Modal"
+description: "Bind explicit integration lines and prepare the current two-port modal network request."
+scgsim-kind: "course"
+scgsim-status: "CONVERGING"
+scgsim-id: "docs/course/aedt-driven-modal"
+---
+
+Continue from [CPW inputs](aedt-inputs.qmd). Driven Modal asks for a network
+response, not unexcited resonant modes. Its ports use explicit integration
+lines. The two ordered ports on the CPW end faces establish excitation and
+reported port order; a picture of the gap cannot replace those line endpoints.
+
+```python
+from pathlib import Path
+from scgsim.aedt import (
+    FrequencySweepSpec, HfssDrivenSpec, HfssRunControl,
+    LengthMeshSpec, ModalPort, prepare_handoff,
+)
+
+ports = (
+    ModalPort(1, "o1", "-X", ((-250.0, 0.0, 0.0), (-250.0, 20.0, 0.0))),
+    ModalPort(2, "o2", "+X", ((250.0, 0.0, 0.0), (250.0, 20.0, 0.0))),
+)
+spec = HfssDrivenSpec(
+    mode="modal", gds_path=source_gds,
+    project_name="public_cpw_modal", design_name="CpwFiniteGroundModal",
+    materials=materials, vacuum_material_id="vacuum",
+    layer_imports=layer_imports, object_bindings=object_bindings,
+    ports=ports,
+    run_control=HfssRunControl(
+        "Setup1", "Fast20000", FrequencySweepSpec(3.0, 8.0, 20_000)
+    ),
+    region_padding_um=(0.0, 0.0, 100.0, 100.0, 1000.0, 1000.0),
+    length_mesh=LengthMeshSpec(("D0_TOP_M1_1",), ground_objects, 10.0),
+)
+handoff = prepare_handoff(
+    spec=spec, output_dir=Path(".artifacts/public-cpw-modal")
+)
+print(handoff.spec_path, handoff.script_path)
+```
+
+Endpoints and mesh length are micrometres; sweep bounds are GHz. The current
+public contract has exactly ordered ports 1 and 2 and a 20,000-point Fast
+sweep. These are the implemented interface's constraints, not a new sampling
+recommendation. The example's bounds and line coordinates come from the pinned
+OrPen CPW specimen. Native padding is zero on the declared port sides so those
+faces remain the intended ends.
+
+Before [execution](execute.qmd), inspect the copied spec's port sides, line
+orientation and source bindings. Native preparation reads back the actual
+port assignments and setup; requested Python objects alone cannot establish
+completion. On [strict return](returned-results.qmd), read ordered modal
+S-parameters, impedance and Touchstone as this network's output. Do not call
+its port ordering terminal-reference evidence or turn the export into an
+unimplemented SCGSim circuit model.
+
+For reference-conductor ports on the same public source, choose
+[Driven Terminal](aedt-driven-terminal.qmd). The exact distinction and native
+export requirements live in the [AEDT contract](../specs/aedt-runtime.qmd).

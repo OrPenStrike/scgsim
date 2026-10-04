@@ -1,0 +1,95 @@
+---
+title: "6. Restart and resolve the complete return"
+description: "Verify a returned run in a fresh session before reading physics and benchmark evidence."
+scgsim-kind: "course"
+scgsim-status: "CONVERGING"
+scgsim-id: "docs/course/returned-results"
+---
+
+Use this lesson after explicit host execution and retrieval of the complete run
+directory. Start a fresh analysis session: result interpretation should not
+depend on the live `sim`, coupon or Desktop from preparation. Keep the returned
+bytes and their metadata together. Resolving performs offline identity and
+artifact checks; it does not solve again.
+
+## Palace: bind the independently retained preparation ID
+
+```python
+from pathlib import Path
+from scgsim.palace import resolve_palace_result
+
+returned_run_dir = Path(".artifacts/returned-palace")
+expected_id = Path(".artifacts/palace-preparation-handoff-id.txt").read_text(
+    encoding="utf-8"
+).strip()
+resolved = resolve_palace_result(
+    returned_run_dir, expected_handoff_id=expected_id
+)
+resolved.show_all_results()
+```
+
+Point the paths to your actual retrieved package and preparation-side note.
+Never obtain the expected ID from the return you are trying to identify. The
+strict resolver requires completed receipt-bound output, matching geometry,
+config, handoff and hashes. It does not accept a failed run because a frequency
+CSV happens to exist.
+
+Read the report in order: identity/trustworthiness, numerical evidence and
+cost, then the available physics. Electrostatic reports retain excitation and
+terminal order for matrices. Eigenmode reports retain mode identity, frequency
+and native energy/port/surface meaning. An AMR indicator is not the same
+quantity as an algebraic eigenpair residual.
+
+For a failed or partial Palace return, use the inspection surface instead:
+
+```python
+from scgsim.palace import inspect_run_trustworthiness
+report = inspect_run_trustworthiness(returned_run_dir)
+from IPython.display import display
+display(report)
+```
+
+This preserves the recorded status and can expose the latest readable
+iteration as partial evidence. It does not grant completion or substitute an
+earlier snapshot into strict result resolution. Read a signal-kill diagnosis
+separately from a hash-verified OOM marker; exit 137 alone does not establish
+out-of-memory.
+
+## AEDT: read the sealed family evidence
+
+```python
+from pathlib import Path
+from scgsim.aedt import resolve_results
+
+returned_run_dir = Path(".artifacts/returned-aedt")
+resolved = resolve_results(returned_run_dir)
+resolved.show_all_results(show_details=False, theme="light")
+rows = resolved.physics_results()
+benchmark = resolved.simulation_benchmark()
+```
+
+The resolver verifies the receipt cohort, copied inputs, actual output hashes
+and family-specific native readback. `physics_results()` returns the selected
+family's rows: ordered S-parameters for Driven, mode frequency/native Q for
+ordinary Eigenmode, Q3D matrices, or Q2D per-unit-length matrix blocks. Preserve
+native units and conductor/port order when using those rows downstream.
+
+Benchmark records distinguish SCGSim wall time from native task/stage times;
+missing profile data stays unavailable. A missing adaptive profile does not
+invent a pass curve, and overlapping stage times or peaks must not be summed as
+though independent. Details exposes provenance while the main view stays
+readable. [Report contracts](../report-model.qmd) own exact ordering and
+availability.
+
+## Continue with the evidence you actually have
+
+For Palace Eigenmode EPR, `resolved.epr_result()` returns a detached final result
+when available. Preserve it for [offline EPR](offline-epr.qmd). For AEDT,
+adaptive EPR history and independently evaluated final saved-field EPR are
+separate artifacts. Use the [saved-field analysis bridge](aedt-saved-fields.qmd)
+when you need the latter. A completed ordinary Eigenmode receipt does not
+supply a missing saved-field cohort or an EPR request retroactively.
+
+If your task is a driven or extraction result, this is the course endpoint:
+retain verified native physics and its identity for your own analysis. No
+SCGSim circuit-model conversion or total-device loss estimate is implied.

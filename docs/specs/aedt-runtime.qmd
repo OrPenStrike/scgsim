@@ -1,6 +1,12 @@
 ---
 title: "AEDT Runtime Families"
+description: "AEDT family specifications, native readback, receipt cohorts and saved-field analysis."
+scgsim-kind: "contract"
+scgsim-status: "CONVERGING"
+scgsim-id: "docs/specs/aedt-runtime"
 ---
+
+The [course map](../examples.qmd) links every implemented AEDT family lesson. This page owns exact specifications, failure rules and historical reader contracts.
 
 ::: {.callout-note title="CONVERGING candidate contract"}
 HFSS Driven Terminal/Modal, HFSS Eigenmode, Q3D, and Q2D have live run and
@@ -75,7 +81,7 @@ New handoffs retain `scgsim.aedt.handoff.v1` and
 `scgsim.aedt.handoff-manifest.v1`. Both records add
 `expected_receipt_schema: scgsim.aedt.receipt.v3`, and the initial receipt is
 V3. It contains `prepared_runtime_source`: a deterministic, sorted
-`runtime-source.v5` manifest of the SCGSim transaction, family, common, spec,
+`runtime-source.v8` manifest of the SCGSim transaction, family, common, spec,
 persistence, native-readback, and AEDT presentation modules, a content digest
 over that manifest, and a truthful preparation Git observation when one is
 available. Git observation may be explicitly unavailable; module hashes and
@@ -101,7 +107,7 @@ V2 handoff retains its prepared V2 provenance cohort when execution emits V3;
 it is not relabeled as new V3 preparation.
 
 Every new completed V3 receipt has a separate `runtime_source` manifest using
-`runtime-source.v5` and a content digest for the code that actually executed
+`runtime-source.v8` and a content digest for the code that actually executed
 it, while retaining the historical `revision`, `run_py_sha256`,
 `spec_py_sha256`, convergence, and matrix-helper keys. Execution provenance
 failure therefore produces a failed receipt, never a strict-resolvable
@@ -122,9 +128,12 @@ an actor able to rewrite every member.
 `runtime-source.v1` is a frozen thirteen-module reader contract, not a live
 enumeration rule. The V2–V6 inventories are also frozen. V4 added
 `scgsim/aedt/_presentation.py`; V5 added `scgsim/sgb/geometry_plan.py` and
-`scgsim/sgb/__init__.py`. Current producer receipts use V7, which adds
-`scgsim/_notebook_presentation.py` to V6. The V1–V6 module membership and hashes
-retain their historical meaning. These source manifests do not change the V3
+`scgsim/sgb/__init__.py`. V7 added
+`scgsim/_notebook_presentation.py` to V6. Current producer receipts use V8,
+which adds `scgsim/aedt/_junction_partition.py` to V7. The V1–V7 module membership and hashes
+retain their historical meaning. These manifests bind their exact declared file inventory, not an exhaustive
+transitive dependency attestation; for example, the current frozen inventory
+does not separately hash `scgsim/sgb/engine_gates.py`. They do not change the V3
 receipt schema. A pure initial-receipt codec owns exact V1/V2/V3 member order,
 two-space JSON indentation, and the trailing newline. V1 omits prepared
 provenance; V2 and V3 insert it between `source` and `outputs`. Reading

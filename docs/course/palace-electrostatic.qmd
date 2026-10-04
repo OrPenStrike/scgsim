@@ -1,0 +1,77 @@
+---
+title: "Palace: terminal capacitance"
+description: "Bind exact Nets as terminals and physical grounds, then prepare an Electrostatic mesh and config."
+scgsim-kind: "course"
+scgsim-status: "CONVERGING"
+scgsim-id: "docs/course/palace-electrostatic"
+---
+
+Use the `snapshot` from [source observations](source-observations.qmd). This
+branch asks for Electrostatic terminal response rather than resonant modes.
+The public OrPen [Xmon notebook group](../examples.qmd#public-inputs) owns the
+component example; this lesson explains the reusable SCGSim stages.
+
+A Terminal identifies a conductor Net whose excitation enters the native
+matrix. Physical Ground identifies other conductor Nets. Grounding the outer
+solution boundary is a separate physical choice, not another spelling of a
+conductor ground. Here the Xmon pad is the terminal and its already assigned
+`Ground` Net is the physical ground:
+
+```python
+from pathlib import Path
+from scgsim.palace import ElectrostaticSim
+
+sim = ElectrostaticSim()
+sim.set_plan(snapshot)
+sim.set_output_dir(Path(".artifacts/public-xmon-electrostatic"))
+sim.add_terminal("xmon", net_id="xmon_pad")
+sim.add_ground(net_id="Ground")
+sim.set_electrostatic(
+    save_fields=0,
+    unassigned_conductor_policy="error",
+    exterior_boundary_policy="none",
+)
+sim.set_mesh(refined_mesh_size=5.0, max_mesh_size=300.0)
+```
+
+The terminal and ground selectors are exact final Net IDs. They are not
+geometric center guesses. The explicit `error` policy makes uncovered conductor
+components an input error; the alternative supported `ground` policy grounds
+unassigned components. Choose the policy for your experiment. The exterior is
+left ungrounded here; `exterior_boundary_policy="ground"` is a separate model
+and requires the explicit error policy. [The contract](../specs/palace-electrostatic-sgb.qmd)
+owns these choices and their index-map meaning.
+
+## Select the geometry approximation and build inputs
+
+The bound snapshot already supplies the outer envelope. Route B is the default
+finite-metal preparation. To explicitly select it without requesting surface
+films:
+
+```python
+sim.set_surface_epr(representation="B", specs={})
+mesh_path = sim.mesh()
+config_path = sim.write_config()
+print(mesh_path, config_path)
+```
+
+For a Route-A study, configure `representation="A"` with the appropriate
+explicit `route_a_thin_film` before meshing. `substrate_face` preserves physical
+face coordinates; `metal_gap_equivalent` is the separate supported two-face
+normalization. Consult the [geometry contract](../geometry-sgb.qmd) before
+changing that approximation. Surface films and their native inset margins are
+optional postprocessing specifications, with attributed thickness/permittivity/
+loss assumptions rather than inferred material measurements.
+
+The mesh is a real preparation operation and can fail natively. Writing config
+binds terminal and Ground attributes to that mesh. Inspect the exact index map
+alongside the config: schema v2 distinguishes physical Ground from exterior
+Ground, so you can tell which conductor and boundary policy was lowered.
+The [source summary](source-observations.qmd) remains a separate input view;
+`ElectrostaticSim` has no `input_summary()` method.
+
+Next [inspect the prepared mesh](solver-observations.qmd) if useful, then
+[prepare and execute the handoff](execute.qmd). On return,
+[resolve it](returned-results.qmd) before reading the capacitance matrix. Native
+terminal/excitation ordering and units remain authoritative; a prepared config
+contains no measured capacitance.

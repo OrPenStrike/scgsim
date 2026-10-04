@@ -1,0 +1,59 @@
+---
+title: "AEDT: HFSS Driven Terminal"
+description: "Use explicit shared ground references for the current two-port terminal network."
+scgsim-kind: "course"
+scgsim-status: "CONVERGING"
+scgsim-id: "docs/course/aedt-driven-terminal"
+---
+
+Continue from [CPW inputs](aedt-inputs.qmd). Terminal ports identify reference
+conductors explicitly. They use the same source GDS and PDK material mapping as
+Modal, but this model's reference assignment has its own native evidence and
+result meaning. A similar network curve would not make the two port models
+identical.
+
+```python
+from pathlib import Path
+from scgsim.aedt import (
+    FrequencySweepSpec, HfssDrivenSpec, HfssRunControl,
+    LengthMeshSpec, TerminalPort, prepare_handoff,
+)
+
+ports = (
+    TerminalPort(1, "o1", "-X", ground_objects),
+    TerminalPort(2, "o2", "+X", ground_objects),
+)
+spec = HfssDrivenSpec(
+    mode="terminal", gds_path=source_gds,
+    project_name="public_cpw_terminal", design_name="CpwFiniteGroundTerminal",
+    materials=materials, vacuum_material_id="vacuum",
+    layer_imports=layer_imports, object_bindings=object_bindings,
+    ports=ports,
+    run_control=HfssRunControl(
+        "Setup1", "Fast20000", FrequencySweepSpec(3.0, 8.0, 20_000)
+    ),
+    region_padding_um=(0.0, 0.0, 100.0, 100.0, 1000.0, 1000.0),
+    length_mesh=LengthMeshSpec(("D0_TOP_M1_1",), ground_objects, 10.0),
+)
+handoff = prepare_handoff(
+    spec=spec, output_dir=Path(".artifacts/public-cpw-terminal")
+)
+print(handoff.spec_path, handoff.archive_path)
+```
+
+Both ports share the ordered global reference tuple
+`("D0_TOP_M1_2", "D0_TOP_M1_3")`, the declared ground objects. References must
+name those exact source bindings; the current contract does not infer a ground
+from touching geometry. Optional `deembed_um` is a nonnegative micrometre input
+on `TerminalPort`; this example leaves it at zero.
+
+Review the copied spec's port order, references and end faces, then
+[execute on the native host](execute.qmd). The returned resolver checks actual
+terminal/reference readback and ordered S-parameters/Touchstone, not just the
+requested references. [Restart and resolve](returned-results.qmd) before
+passing that network response into your downstream analysis. Native benchmark
+and adaptive evidence describe the run separately from the physical response.
+
+Use [Modal](aedt-driven-modal.qmd) when the intended model calls for explicit
+integration lines. The [runtime contract](../specs/aedt-runtime.qmd) owns
+failure behavior and the bounded two-port interface.

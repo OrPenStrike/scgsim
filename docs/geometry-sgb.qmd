@@ -1,6 +1,13 @@
 ---
 title: "GeometryPlan and SGB Route A/B"
+description: "GeometryPlan source identity, occurrence and Net ownership, route lowering and input summary."
+scgsim-kind: "contract"
+scgsim-status: "CONVERGING"
+scgsim-id: "docs/geometry-sgb"
 ---
+
+Learn the source sequence in [shared Xmon inputs](tutorial-xmon-input.qmd) and
+[source observations](course/source-observations.qmd). The [geometry concept](concepts/geometry.qmd) explains the identities; this page owns their exact contract.
 
 The in-tree `scgsim.sgb` package is SCGSim's current geometry and topology
 authority. It consumes structured PDK and component semantics and must not

@@ -499,22 +499,6 @@ def _read_hfss_setup(hfss: Any, spec: HfssSpec) -> dict[str, Any]:
     return {"name": spec.run_control.setup_name, "native": native}
 
 
-def _saved_setup_properties(app: Any, setup_name: str) -> dict[str, Any]:
-    analysis = app.design_properties.get("AnalysisSetup")
-    setups = analysis.get("SolveSetups") if isinstance(analysis, dict) else None
-    setup_names = (
-        [name for name, value in setups.items() if isinstance(value, dict)]
-        if isinstance(setups, dict)
-        else []
-    )
-    if setup_names != [setup_name]:
-        raise RuntimeError("saved AEDT project does not contain one exact setup")
-    setup = setups[setup_name]
-    if not isinstance(setup, dict):
-        raise TypeError("saved AEDT setup properties are invalid")
-    return setup
-
-
 def _export(
     hfss: Any, run_dir: Path, spec: HfssSpec, ports: list[dict[str, Any]]
 ) -> tuple[dict[str, str], dict[str, Any]]:

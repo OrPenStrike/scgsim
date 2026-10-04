@@ -1,6 +1,12 @@
 ---
 title: "Execution Profiles and Local/Manual-HPC Handoff"
+description: "Exact launch profiles, caller resources, handoff identity and return requirements."
+scgsim-kind: "contract"
+scgsim-status: "CONVERGING"
+scgsim-id: "docs/execution-profiles"
 ---
+
+Follow [execute a handoff](course/execute.qmd) for the preparation-to-return procedure. This page owns profile/resource and identity requirements.
 
 SCGSim prepares portable handoffs; the caller owns where and how a prepared
 solver runs. A profile records the launch shape and the resources supplied by

@@ -86,9 +86,6 @@ from scgsim.semantics import (
     EvidenceResult,
     SemanticEvidenceFacade,
     conductor_solution_interface_kind,
-    is_vacuum_material_kind,
-    solution_interface_kind,
-    solution_interface_owner_ids,
 )
 from scgsim.semantics.ownership import (
     interface_surface_owner_ids,
@@ -99,6 +96,7 @@ from scgsim.semantics.ownership import (
 )
 from scgsim.semantics.route_a import geometry_z_range, record_geometry, same_z
 
+from scgsim.sgb.engine_gates import _route_b_port_sheet_binding_matches
 from scgsim.sgb.models import (
     HIGH_COUNT_LOCAL_CONDUCTOR_PART_ROLES,
     ConstructionBodyPlanRecord,
@@ -317,8 +315,6 @@ def _prepare_auto_vacuum_solution_regions(
     envelope_loop = _domain_bounds_loop(auto_bounds)
     auto_z_min_um = float(auto_bounds["z_min_um"])
     auto_z_max_um = float(auto_bounds["z_max_um"])
-    if not (auto_z_max_um > auto_z_min_um):
-        raise ValueError("auto VACUUM_REGION z_max_um must exceed z_min_um")
 
     all_entities = tuple(build_input.entities)
     obstacle_entities = tuple(
@@ -648,10 +644,6 @@ def _auto_vacuum_padding(
                 f"{auto_region_id} vacuum padding {key!r} must be a finite non-negative number."
             )
         values[key] = value
-    if set(values.keys()) != set(required):
-        raise ValueError(
-            f"{auto_region_id} metadata vacuum_region_padding_um must define exact six-face keys."
-        )
     return values
 
 
@@ -4171,22 +4163,6 @@ def _validate_route_b_port_sheet_sidewall_topology(
                 )
 
 
-def _route_b_port_sheet_binding_matches(
-    surface: SurfacePlanRecord,
-    *,
-    port_surface_id: str,
-    overlap_id: str | None,
-    host_semantic_id: str,
-) -> bool:
-    return any(
-        isinstance(binding, Mapping)
-        and binding.get("port_surface_id") == port_surface_id
-        and binding.get("overlap_id") == overlap_id
-        and binding.get("host_semantic_id") == host_semantic_id
-        for binding in surface.metadata.get("route_b_port_sheet_bindings", ())
-    )
-
-
 def _route_b_port_terminal_curve_matches_overlap(
     curve: CurvePlanRecord,
     *,
@@ -5444,21 +5420,6 @@ def _route_a_sheet_contact_cap_face(
     return "bottom" if contact_face == "top" else "top"
 
 
-def _contact_loops_for_entity(
-    contact_faces: Mapping[
-        tuple[str, str],
-        tuple[tuple[tuple[float, float], ...], ...],
-    ],
-    semantic_id: str,
-) -> tuple[tuple[tuple[float, float], ...], ...]:
-    return tuple(
-        loop
-        for (entity_id, _), loops in contact_faces.items()
-        if entity_id == semantic_id
-        for loop in loops
-    )
-
-
 def _subtract_contact_patches_from_face(
     geometry_ref: Mapping[str, Any],
     contact_loops: Sequence[tuple[tuple[float, float], ...]],
@@ -5690,39 +5651,6 @@ def _surface_interface_id(
         f"{primary_kind or interface.kind}__{entity.semantic_id}__"
         f"{'__'.join(boundary_ids)}__{suffix}"
     )
-
-
-def _route_a_sheet_interface_evidence(
-    build_input: GeometryBuildInput,
-    *,
-    interface: InterfacePlanRecord,
-    sheet_entity: SemanticEntitySpec,
-    semantic_facts: SemanticEvidenceFacade | None,
-) -> tuple[EvidenceResult, ...]:
-    if semantic_facts is None:
-        return ()
-    records: list[EvidenceResult] = []
-    for face in ("bottom", "top"):
-        solution_id = _conductor_face_adjacent_solution_id(
-            build_input, sheet_entity, face
-        )
-        records.append(
-            conductor_solution_evidence(
-                semantic_facts,
-                contribution_id=(
-                    f"route-a-sheet:{interface.interface_id}:"
-                    f"{face}:{solution_id}"
-                ),
-                patch_id=(
-                    f"planned:route-a-sheet:{interface.interface_id}:"
-                    f"{face}:{solution_id}"
-                ),
-                conductor_id=sheet_entity.semantic_id,
-                solution_id=solution_id,
-                side=face,
-            )
-        )
-    return tuple(records)
 
 
 def _is_route_a_sheet_interface(
@@ -6993,47 +6921,6 @@ def _ordered_loop_signature(
     return min(rotations)
 
 
-def _surface_planar_bounds(surface: SurfacePlanRecord) -> dict[str, float]:
-    points = [
-        point
-        for loop in (
-            surface.geometry_ref["outer_loop"],
-            *surface.geometry_ref.get("hole_loops", ()),
-        )
-        for point in _clean_loop(loop)
-    ]
-    return {
-        "x_min_um": min(point[0] for point in points),
-        "y_min_um": min(point[1] for point in points),
-        "x_max_um": max(point[0] for point in points),
-        "y_max_um": max(point[1] for point in points),
-    }
-
-
-def _merge_bounds(
-    first: Mapping[str, float],
-    second: Mapping[str, float],
-) -> dict[str, float]:
-    return {
-        "x_min_um": min(float(first["x_min_um"]), float(second["x_min_um"])),
-        "y_min_um": min(float(first["y_min_um"]), float(second["y_min_um"])),
-        "x_max_um": max(float(first["x_max_um"]), float(second["x_max_um"])),
-        "y_max_um": max(float(first["y_max_um"]), float(second["y_max_um"])),
-    }
-
-
-def _bounds_touch_or_overlap(
-    first: Mapping[str, float],
-    second: Mapping[str, float],
-) -> bool:
-    return not (
-        float(first["x_max_um"]) < float(second["x_min_um"]) - _TOPOLOGY_EPS_UM
-        or float(second["x_max_um"]) < float(first["x_min_um"]) - _TOPOLOGY_EPS_UM
-        or float(first["y_max_um"]) < float(second["y_min_um"]) - _TOPOLOGY_EPS_UM
-        or float(second["y_max_um"]) < float(first["y_min_um"]) - _TOPOLOGY_EPS_UM
-    )
-
-
 def _route_a_sheet_boundary_volume_ids(
     build_input: GeometryBuildInput,
     entity: SemanticEntitySpec,
@@ -7679,35 +7566,6 @@ def _conductor_entities_on_solution_plane(
                 records.append(entity)
                 break
     return tuple(records)
-
-
-def _solution_interface_kind(
-    lower: SemanticEntitySpec,
-    upper: SemanticEntitySpec,
-    *,
-    semantic_facts: SemanticEvidenceFacade | None = None,
-) -> str:
-    lower_kind = semantic_facts.material_kind(lower.semantic_id) if semantic_facts else lower.material_kind
-    upper_kind = semantic_facts.material_kind(upper.semantic_id) if semantic_facts else upper.material_kind
-    if not isinstance(lower_kind, str) or not isinstance(upper_kind, str):
-        raise ValueError("solution interface has no snapshotted material kind")
-    return solution_interface_kind(lower_kind, upper_kind)
-
-
-def _solution_interface_owner_ids(
-    kind: str,
-    lower: SemanticEntitySpec,
-    upper: SemanticEntitySpec,
-    *,
-    semantic_facts: SemanticEvidenceFacade | None = None,
-) -> tuple[str, str]:
-    lower_kind = semantic_facts.material_kind(lower.semantic_id) if semantic_facts else lower.material_kind
-    return solution_interface_owner_ids(
-        kind,
-        lower.semantic_id,
-        upper.semantic_id,
-        lower_is_vacuum=is_vacuum_material_kind(lower_kind),
-    )
 
 
 def _solution_exterior_face_geometry_refs(

@@ -1,0 +1,58 @@
+---
+title: "AEDT: ordinary HFSS Eigenmode"
+description: "Prepare a port-free mode request and retain native frequency and Q on return."
+scgsim-kind: "course"
+scgsim-status: "CONVERGING"
+scgsim-id: "docs/course/aedt-eigenmode"
+---
+
+Continue from [CPW inputs](aedt-inputs.qmd) in the same session. Ordinary HFSS
+Eigenmode has no driven excitation ports. It searches for the requested modes
+using an explicit adaptive setup; it does not create a source-first Surface-EPR
+catalogue or saved-field analysis request merely because its name is Eigenmode.
+
+```python
+from pathlib import Path
+from scgsim.aedt import (
+    EigenmodeRunControl, HfssEigenmodeSpec, prepare_handoff,
+)
+
+spec = HfssEigenmodeSpec(
+    gds_path=source_gds,
+    project_name="public_cpw_eigenmode",
+    design_name="CpwFiniteGroundEigenmode",
+    materials=materials,
+    vacuum_material_id="vacuum",
+    layer_imports=layer_imports,
+    object_bindings=object_bindings,
+    run_control=EigenmodeRunControl(
+        setup_name="Setup1", minimum_frequency_ghz=3.0, num_modes=2,
+        maximum_passes=6, maximum_delta_frequency_percent=5.0,
+    ),
+    region_padding_um=(100.0, 100.0, 100.0, 100.0, 1000.0, 1000.0),
+)
+handoff = prepare_handoff(
+    spec=spec, output_dir=Path(".artifacts/public-cpw-eigenmode")
+)
+print(handoff.spec_path, handoff.archive_path)
+```
+
+The public CPW example supplies these search/pass values. They are request
+controls, not an accepted scientific convergence criterion or a promised mode
+frequency. The Region encloses the model in the six-face native order described
+in the input lesson. Review the serialized spec and copied source before
+[explicit host execution](execute.qmd). Preparing the package opens no Desktop.
+
+After [return and strict resolution](returned-results.qmd), the normalized
+`eigenmodes.csv` retains ordered mode index, real `frequency_ghz` and native
+`q_factor`. The hashed `eigenmodes.eig` preserves native raw frequency output,
+including a complex component where present. SCGSim does not calculate damping
+or replace native Q from that component. Numerical history and benchmark
+availability remain separate evidence.
+
+An `.aedt` file and a completed ordinary receipt do not establish reusable
+saved-field EPR. If that is your task, start with the
+[source-first Xmon EPR model](../tutorial-xmon-aedt.qmd), then follow its
+separate [saved-field analysis](aedt-saved-fields.qmd) after the solve. The
+[AEDT contract](../specs/aedt-runtime.qmd) defines both paths without treating
+them as interchangeable results.

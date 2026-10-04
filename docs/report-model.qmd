@@ -1,6 +1,12 @@
 ---
 title: "Unified Report Model"
+description: "Report ordering, solver-specific quantities and availability without invented evidence."
+scgsim-kind: "contract"
+scgsim-status: "CONVERGING"
+scgsim-id: "docs/report-model"
 ---
+
+Use [restart and resolve](course/returned-results.qmd) for the report reading sequence and [offline EPR](course/offline-epr.qmd) for assumption changes. This page owns visible result behavior.
 
 SCGSim is an independent downstream toolkit, not official gsim. It provides
 strict solver-specific resolvers and a consistent, trust-first notebook reading

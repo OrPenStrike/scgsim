@@ -1,5 +1,9 @@
 ---
 title: "Roadmap and Priorities"
+description: "Current convergence priorities and deliberately deferred solver families."
+scgsim-kind: "project"
+scgsim-status: "CONVERGING"
+scgsim-id: "docs/roadmap"
 ---
 
 ## Current status

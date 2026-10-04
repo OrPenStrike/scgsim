@@ -1,64 +1,47 @@
----
-title: "SCGSim"
-output-file: index.html
----
+# SCGSim
 
-<span id="scgsim"></span>SCGSim prepares geometry-based inputs and backend-specific solver handoffs for
-superconducting-circuit simulations, then resolves and presents returned
-results. It is an independent downstream research toolkit.
+SCGSim turns superconducting-circuit source geometry into backend inputs,
+explicit solver handoffs and verified returned results. It is an independent
+downstream research toolkit. The in-tree `scgsim.sgb` owns geometry lowering;
+`scgsim.palace` and `scgsim.aedt` own their solver workflows and physical result
+meaning.
 
-## Choose a workflow {#documentation-source}
+## Learn the workflow
 
-Start with the [Examples and tutorials](docs/examples.qmd) page. It builds the
-shared Xmon inputs first, then points to the Palace or AEDT workflow.
+Start with the [simulation course](docs/examples.qmd). It takes you from
+[installation](docs/course/installation.qmd) through source observations,
+backend configuration, actual host execution, complete result retrieval and
+offline interpretation. Palace Electrostatic/Eigenmode and AEDT
+Eigenmode/EPR, Driven Modal/Terminal, Q3D and Q2D each have a dedicated branch.
 
-### Follow the tutorial path {#workflows}
+Public component-simulation notebooks belong to OrPen SC PDK; the course links
+their canonical sources rather than maintaining another notebook copy. The
+site displays code without running kernels or solvers. Prepared files,
+native geometry observations and returned field results are distinct evidence.
 
-1. [Build the shared Xmon inputs](docs/tutorial-xmon-input.qmd).
-2. Choose the [Palace handoff](docs/tutorial-xmon-palace.qmd) or the
-   [AEDT handoff and EPR workflow](docs/tutorial-xmon-aedt.qmd).
-3. Read [Eigenmode methods and offline EPR](docs/eigenmode-epr.qmd) for
-   normalization, loss assumptions, and returned-result analysis.
+## Capabilities and interpretation
 
-The backend pages document separate preparation and result APIs. Their static
-examples do not claim a native geometry check or solver run.
+The [backend support matrix](docs/backend-support.qmd) records implemented
+candidate workflows and their current evidence limits. Broad V1 semantics
+remain **CONVERGING**. Palace Driven and Magnetostatic are not implemented;
+Meep is excluded.
 
-## Optional installation extras
+Read [geometry concepts](docs/concepts/geometry.qmd) to understand source
+Entities, occurrences and final Nets, and [EPR concepts](docs/eigenmode-epr.qmd)
+to interpret participation, loss assumptions and uncomputed channels. Exact
+behavior belongs to the linked contracts; [architecture](docs/architecture.qmd)
+explains implementation responsibilities.
 
-SCGSim supports Python 3.12 and 3.13. Install ordinary AEDT workflows with
-`pip install 'scgsim[aedt]'`; this extra includes GDS support and PyAEDT 1.3.0.
-For AEDT Surface-EPR preparation, install `pip install 'scgsim[aedt-epr]'`;
-it adds the supported GDSFactory 9.x and KLayout 0.30.x ranges while retaining
-the AEDT requirements. Python 3.13 package support alone does not establish
-native AEDT 2024.2 correctness; see the [AEDT runtime
-reference](docs/specs/aedt-runtime.qmd).
+## Documentation and ownership
 
-When SCGSim and OrPen are used in one interpreter, resolve both packages
-together so the consumer project's lock selects one compatible GDSFactory,
-kfactory, and KLayout set. The [OrPen Xmon tutorials](docs/examples.qmd) link
-to the public notebook sources they use.
+The [documentation home](https://orpenstrike.github.io/scgsim/) lists published
+versions. The [development site](https://orpenstrike.github.io/scgsim/develop/)
+records its source revision and package version. Use that identity with the
+matched public input revision; a development version string alone does not
+identify every API change.
 
-## Online documentation
-
-The [SCGSim documentation home](https://orpenstrike.github.io/scgsim/) lists
-published versions. Open the [development documentation](https://orpenstrike.github.io/scgsim/develop/)
-for the current `develop` site.
-
-<span id="reference"></span>
-
-<span id="current-nonclaims"></span>
-
-## More information
-
-### Package capabilities and limits
-
-The [Backend Support Matrix](docs/backend-support.qmd) distinguishes implemented
-capabilities, exercised evidence, and current limits. Palace Driven and
-Magnetostatic workflows are not implemented.
-
-### Project context {#project-context}
-
-The [project goals and upstream relationship](docs/goals-and-upstream.qmd) and
-[architecture guide](docs/architecture.qmd) describe package ownership,
-source boundaries, and fallback limits. See [Provenance and data
-boundaries](docs/provenance.qmd) for evidence and publication authority.
+SCGSim owns runtime/package/documentation source. OrPen owns public PDK facts,
+components and component notebooks. [Ownership](docs/ownership.qmd) describes
+delivery responsibility; [provenance](docs/provenance.qmd) defines public/private
+data boundaries; [goals and derivation history](docs/goals-and-upstream.qmd)
+distinguish current authority from upstream provenance.

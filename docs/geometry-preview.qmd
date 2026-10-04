@@ -1,6 +1,12 @@
 ---
 title: "Headless Geometry Preview"
+description: "Solver-metadata-bound preview APIs, artifact identity and explicit unavailable modes."
+scgsim-kind: "contract"
+scgsim-status: "CONVERGING"
+scgsim-id: "docs/geometry-preview"
 ---
+
+For stage-by-stage use, follow [solver observations](course/solver-observations.qmd). This page owns preview binding and availability.
 
 ::: {.callout-note title="CONVERGING local candidate"}
 The public V1 preview runtime now exists as a local `CONVERGING` candidate.

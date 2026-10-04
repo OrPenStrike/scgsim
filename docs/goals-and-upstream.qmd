@@ -1,5 +1,9 @@
 ---
 title: "Goals, Non-goals, and Upstream Relationship"
+description: "Project goals, exclusions and upstream derivation provenance."
+scgsim-kind: "project"
+scgsim-status: "CONVERGING"
+scgsim-id: "docs/goals-and-upstream"
 ---
 
 ## Goals
@@ -23,7 +27,7 @@ SCGSim does not:
 - automatically accept upstream gsim APIs as SCGSim APIs;
 - maintain compatibility shims for older experimental interfaces;
 - support Meep;
-- use external gdsfactory or cloud execution as a fallback;
+- use an external gsim runner or cloud execution as a fallback;
 - publish private designs, controls, paths, or run artifacts.
 
 ## Starting-source identities

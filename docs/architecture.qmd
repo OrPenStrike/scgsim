@@ -1,5 +1,9 @@
 ---
 title: "Architecture and Data Flow"
+description: "Module ownership, native transaction phases and staged persistence boundaries."
+scgsim-kind: "implementation"
+scgsim-status: "CONVERGING"
+scgsim-id: "docs/architecture"
 ---
 
 SCGSim keeps PDK facts, component intent, semantic geometry, solver preparation,
@@ -34,18 +38,6 @@ backends may create different native geometry, but native observations do not
 replace source entity identity or establish connectivity. AEDT binding
 evidence retains source members and coverage through native aggregation.
 
-## Maintainer responsibility map
-
-This table records the current private boundaries for the CONVERGING
-maintainability work. The candidate implementation is under review; these
-changes do not alter a public API.
-
-| Area | Responsibility | Behavior to preserve |
-|---|---|---|
-| AEDT transaction | `scgsim.aedt.run._execute()` retains transaction ownership and release/seal eligibility. `_record_result_before_release`, `_record_epr_project_after_release`, and `_record_ordinary_result_after_release` isolate bounded result-recording steps. | Same phase order and exception boundaries; original dispatch/export error outranks release failure; release failure prevents sealing; partial export stays incomplete. |
-| AEDT integral targeting | `scgsim.aedt._epr_eigenmode._integral_target()` decodes one transient `IntegralTarget`; unit mapping and raw storage consume `kind` and `scope_id`. | Valid identity, payload, units, and formulas stay unchanged; malformed selections may fail earlier. The target is not persisted. |
-| Result presentation | AEDT history, EPR, and benchmark projections live in `scgsim.aedt._presentation`; Palace EPR presentation lives in `scgsim.palace._presentation`. Existing public delegates remain at their entry points. | Keep signatures, Figure/`.data` outputs, visible row/trace values and order, missingness, coverage, baselines, masks, loss states, and backend-specific port/junction meaning. Add no resolver, native I/O, new physics, or shared result schema. |
-
 ## Contract boundaries
 
 | Boundary | Authority |
@@ -65,64 +57,28 @@ changes do not alter a public API.
 | Offline tetrahedral mesh diagnostics | `scgsim._mesh_quality`, exposed through `scgsim.palace` |
 | Public component-simulation notebook source | OrPen SC PDK |
 
-## Semantic facts boundary
+## Internal semantic facts
 
-`scgsim.semantics` is a solver-independent internal boundary. It accepts plain
-values, has only standard-library dependencies, and returns recursively
-immutable snapshots. A snapshot binds its source revision, geometry revision,
-projection version, and canonical content hash. Detached serialization creates
-new plain containers so a consumer cannot mutate the retained snapshot.
+`scgsim.semantics` is a solver-independent stdlib boundary. It detaches plain
+values into recursively immutable, revision-bound snapshots and returns detached
+serialization. Evidence patches retain the snapshot that classified them;
+missing/different revision identity fails rather than silently rebinding facts.
+Native tags remain opaque observations, not sources of guessed contact.
 
-Every construction path—factory, direct dataclass construction, and
-`dataclasses.replace()`—applies the same detachment, string-key, revision-kind,
-and canonical-hash checks. Evidence patches and results carry the immutable
-snapshot reference that classified them; a facade rejects missing or different
-revision identity instead of silently rebinding evidence to its own snapshot.
-Unsupported interface intent remains a classification-time error, not a
-constructor-time validation rule.
+SGB reuses one source/model projection while planning instead of deep-copying
+stacks at every adjacency call. Domain ordering, sheet owners and aggregate
+physical-group owners remain separate projections. Contribution multiplicity
+is retained by the semantic ledger even when native geometry aggregates a
+surface. Material identity, approximation and native implementation stay
+separate. The [GeometryPlan/route contract](geometry-sgb.qmd) owns their public
+meaning; this page explains which modules implement it.
 
-The core records sourced patch identity, source and aggregate owners, declared
-material and effective domains, explicit side meaning, sheet owner, and
-outer/hole/seam provenance. Evidence states remain distinct as declared,
-planned, or observed. Native observations enter only as opaque, detached facts;
-Gmsh and solver bindings remain outside the core. Repeated observations of one
-contribution do not create additional contributions, and missing evidence stays
-unknown rather than becoming guessed contact.
-Classification requires an established conductor and solution-domain role;
-an observation by itself is evidence, not proof of physical contact.
-
-The prepared source boundary contains qualified Entity and polygon identities,
-holes, material and effective-domain identities, Z/thickness, route
-representations, and occurrence provenance. The explicit final net map is
-separate from component-local facts; unmapped entities remain unassigned until
-a backend operation requires a binding. Components expose no public `Group`
-API, implicit connectivity, or child-net merge. Physical mesh groups serve
-high-count geometry: copies share a group only when explicit Net, material,
-local source Entity ID, parent occurrence context, and role match. Qualified
-Entity/member lineage remains available, and an unassigned Net stays separate;
-the eight sibling Ground bumps in the public coupon therefore map to one
-physical group while retaining eight Entity IDs. AEDT owner/interface/integral
-groups remain backend-specific with their existing policy. These groups keep
-their distinct purposes and source-member/coverage evidence; Entity lineage
-alone does not promise a raw per-Entity measurement or field expression.
-Source-linked junction declarations retain terminal nets, direction,
-dimensions, inductance, and capacitance. Palace lowers source facts through
-SGB into conformal topology. AEDT creates its own native bodies, sheets, faces,
-and calculator selections while recording source bindings and native aggregate
-membership. Neither backend may make its native identity the other's input.
-
-Material identity, geometry approximation, PEC approximation, and native
-implementation are separate facts. The core classifies already-valid values;
-the existing SGB and Palace adapters retain their source-specific validation,
-error messages, and call order.
-
-For Palace routes, PDK fabrication owns substrate materials and Z ranges;
-component intent owns metal nets and polygon selections. SGB establishes
-source-side contact and local route evidence before Palace-specific lowering;
-native geometry cannot create source contact intent. The Route A/B contact,
-background-region, patch, and aggregation contracts are documented in
-[Geometry and SGB Route A/B](geometry-sgb.qmd) and
-[Palace Electrostatic + SGB](specs/palace-electrostatic-sgb.qmd).
+AEDT's native construction does not consume Gmsh tags or construction plans.
+Its binding sidecar retains source members and coverage through native bodies,
+sheets, faces and calculator selections. The [AEDT contract](specs/aedt-runtime.qmd)
+owns exact side-selection and result rules. Private result presentation lives
+in backend `_presentation` modules, with public methods delegating to them;
+presentation adds no solver execution or shared physics schema.
 
 ## Current truth
 
@@ -193,14 +149,14 @@ carrier and cannot reinterpret a caller spec or workspace.
 
 New preparation keeps the handoff and handoff-manifest schemas at V1 while both
 declare that the mutable run receipt uses `scgsim.aedt.receipt.v3`. The initial
-V3 receipt records a complete `runtime-source.v5` preparation-time SCGSim module
+V3 receipt records a declared `runtime-source.v8` preparation-time SCGSim module
 manifest and content digest. Before mutation, execution verifies the canonical
 manifest and binds the initial-receipt and prepared-manifest hashes. A canonical historical
 V1 `not_run` handoff with neither marker remains executable, but its resulting
 V3 receipt records preparation provenance as `legacy_v1_not_recorded`; it does
 not fabricate history.
 
-Every new completed V3 receipt records a separate complete `runtime-source.v5`
+Every new completed V3 receipt records a separate declared `runtime-source.v8`
 execution-time module manifest and digest while retaining the former
 runtime-source keys. Preparation and execution identities are not required to
 match: their separation records what prepared and what actually executed the
@@ -212,16 +168,14 @@ resolution rules; new V3-only native PEC checks do not reinterpret them. This
 consistency contract is not source authenticity for an actor able
 to rewrite the entire unsigned artifact set.
 
-The `runtime-source.v1` thirteen-module contract and the V2/V3/V4 extensions
-are frozen reader formats. New V3 receipts use `runtime-source.v5`, which adds
-the GeometryPlan module and SGB package dispatcher to the frozen V4 inventory;
-V4 added the AEDT presentation module. These source manifests do not change
-the receipt schema or historical module membership. One pure, versioned
-initial-receipt codec owns the historical V1/V2 and current V3 JSON member
-order, indentation, and final newline; handoff writing and initial-receipt
-reconstruction use that same codec. Historical receipt hashes are never
-compared with installed source, and prepared and actual identities remain
-independent evidence.
+The [AEDT receipt/provenance contract](specs/aedt-runtime.qmd#receipt-cohorts-and-source-provenance)
+is the unique authority for the exact current V8 inventory and frozen historical
+reader evolution. The manifests bind their declared file sets, not every
+transitive dependency. One pure, versioned initial-receipt codec owns historical
+V1/V2 and current V3 JSON member order, indentation and final newline; handoff
+writing and initial-receipt reconstruction use that codec. Historical receipt
+hashes are never compared with installed source, and preparation and execution
+identities remain independent evidence.
 
 Runtime-source provenance is computed inside the receipt-owned failure
 transaction before PyAEDT import and Desktop construction. New HFSS V3 receipts
