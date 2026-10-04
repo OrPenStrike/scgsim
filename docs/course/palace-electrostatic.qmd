@@ -74,4 +74,9 @@ Next [inspect the prepared mesh](solver-observations.qmd) if useful, then
 [prepare and execute the handoff](execute.qmd). On return,
 [resolve it](returned-results.qmd) before reading the capacitance matrix. Native
 terminal/excitation ordering and units remain authoritative; a prepared config
-contains no measured capacitance.
+contains no measured capacitance. State which terminal response your circuit
+question needs, then read that matrix entry and its available refinement
+history in the [research interpretation sequence](returned-results.qmd#interpret-for-scq-use).
+Retain terminal excitation, physical/exterior ground choices, actual criteria
+and native status; a native stopping flag alone does not decide whether the
+capacitance is adequate for that circuit-model use.

@@ -19,6 +19,13 @@ their canonical sources rather than maintaining another notebook copy. The
 site displays code without running kernels or solvers. Prepared files,
 native geometry observations and returned field results are distinct evidence.
 
+Use the returned quantity and its recorded history to answer your stated SCQ
+research question. A native convergence flag records the outcome of your
+configured stopping criterion; it does not decide whether the result is adequate
+for that use. The [result-reading lesson](docs/course/returned-results.qmd#interpret-for-scq-use)
+shows how to retain criteria, changes, units and native status while making
+that research judgement.
+
 ## Capabilities and interpretation
 
 The [backend support matrix](docs/backend-support.qmd) records implemented

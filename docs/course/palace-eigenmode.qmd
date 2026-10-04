@@ -26,7 +26,9 @@ display(sim.input_summary())
 
 These are explicit example controls: target is in hertz and mesh sizes are in
 micrometres. They request a computation; they are not numerical accuracy or
-acceptance evidence. `save` controls native saved-field output. Your study may
+acceptance evidence. Choose them in relation to the mode and quantities your
+SCQ study needs, and retain the chosen settings and any later changes in the
+Notebook. `save` controls native saved-field output. Your study may
 set numerical order, solver, AMR and output controls with `set_numerical()`;
 record them beside the action they govern rather than hiding them in notebook
 helpers. The generated `Nonconformal` key defaults to false in SCGSim; native
@@ -56,7 +58,12 @@ only its stack or envelope.
 At this point you have no eigenfrequency result. Continue to
 [solver observations](solver-observations.qmd) and
 [explicit execution](execute.qmd), then
-[returned result resolution](returned-results.qmd).
+[returned result resolution](returned-results.qmd). Read the requested mode
+frequency and any selected participation history for the
+[intended SCQ use](returned-results.qmd#interpret-for-scq-use), with native
+criteria/status retained. An eigenpair residual or AMR indicator describes its
+own native quantity; it does not by itself establish adequacy of the frequency
+or EPR contribution you plan to use.
 
 For the public Xmon with an inductive source port and attributed thin films,
 use the [Palace EPR extension](../tutorial-xmon-palace.qmd) **before** meshing

@@ -43,8 +43,11 @@ print(handoff.spec_path, handoff.archive_path)
 A Signal net explicitly names its source/sink object and sides. Ground nets
 have no source/sink. Together the nets cover every declared conductor exactly;
 net names are not reconstructed from object labels. The public example's 6 GHz
-frequency and three-pass limit are study inputs, not proof that extraction has
-converged.
+frequency and three-pass limit are study inputs. Preserve the actual extraction
+criteria, any changes and native completion/convergence status in the Notebook.
+The [result-reading lesson](returned-results.qmd#interpret-for-scq-use) relates
+the selected matrix quantity and its available history to the intended SCQ use;
+the native stopping flag alone does not decide its adequacy.
 
 ## Know which formulation you requested
 

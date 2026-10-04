@@ -99,6 +99,17 @@ gaps even if a frequency is readable. Do not choose an earlier complete pass
 and label it the final result. A newly evaluated margin belongs to the final
 saved-field analysis, not the historical curve.
 
+## Read EPR history for the intended use
+
+Before interpreting a loss update, identify the mode, owner/interface and
+baseline or requested-margin quantity that the study needs. Read its recorded
+participation history and changes with the corresponding frequency history;
+one does not stand in for the other. Retain the actual criteria and native
+status rather than labeling a selected snapshot sufficient because of a
+converged flag. Follow the [research interpretation sequence](returned-results.qmd#interpret-for-scq-use)
+for the Notebook's judgement. Offline assumption changes reuse the same field
+evidence and cannot improve an unresolved or unavailable participation history.
+
 ## Interpret an assumption change
 
 Reanalysis applies recorded assumptions, interface defaults, then exact group

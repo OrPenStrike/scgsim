@@ -212,8 +212,11 @@ handoff = sim.prepare_handoff()
 print(handoff.run_dir, handoff.script_path, handoff.archive_path)
 ```
 
-The run controls are preparation inputs, not convergence evidence or accuracy
-criteria. Use a new output directory for each preparation; SCGSim rejects an
+The run controls set the caller's native search and stopping request. They do
+not establish research sufficiency before a solve. Retain the actual criteria
+and any changes beside the returned native status and quantity history in the
+Notebook, then use the [research interpretation sequence](course/returned-results.qmd#interpret-for-scq-use)
+to explain whether that evidence answers the intended SCQ question. Use a new output directory for each preparation; SCGSim rejects an
 existing path. `prepare_handoff()` writes the portable package but does not
 open AEDT, create native geometry, or run the solver.
 
@@ -222,6 +225,10 @@ open AEDT, create native geometry, or run the solver.
 [Execute the complete package](course/execute.qmd) explicitly on the AEDT host,
 then [restart and resolve the return](course/returned-results.qmd). The report
 reads sealed identity, numerical/history and benchmark evidence before physics.
+For the study's selected mode and surface contribution, inspect participation
+and its changes as well as frequency; frequency-only stopping does not describe
+the adequacy of a separate EPR quantity. Use the recorded criterion and native
+status as evidence without turning either into a universal acceptance rule.
 Preparation here constructs Python source/catalogue/request records; it does
 not create native CAD or establish calculator field-side accuracy.
 

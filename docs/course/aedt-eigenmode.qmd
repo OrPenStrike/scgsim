@@ -38,8 +38,11 @@ print(handoff.spec_path, handoff.archive_path)
 ```
 
 The public CPW example supplies these search/pass values. They are request
-controls, not an accepted scientific convergence criterion or a promised mode
-frequency. The Region encloses the model in the six-face native order described
+controls, not a promised mode frequency or a universal SCQ sufficiency rule.
+Keep the actual controls and any changes in the Notebook. On return, read the
+requested mode and its available changes for the
+[intended research use](returned-results.qmd#interpret-for-scq-use); retain
+native convergence status without treating it as the research conclusion. The Region encloses the model in the six-face native order described
 in the input lesson. Review the serialized spec and copied source before
 [explicit host execution](execute.qmd). Preparing the package opens no Desktop.
 
