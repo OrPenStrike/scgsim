@@ -729,7 +729,7 @@ def _validate_readback(root: Path, receipt: dict[str, Any], spec: Any) -> None:
         raise TypeError("completed receipt has no canonical result readback")
     frequency = readback[key]
     if frequency != {
-        "records": 20_000,
+        "records": int(spec.run_control.sweep.points),
         "frequency_unit": "GHz",
         "first_frequency_ghz": spec.run_control.sweep.start_ghz,
         "last_frequency_ghz": spec.run_control.sweep.stop_ghz,
@@ -751,7 +751,7 @@ def _validate_readback(root: Path, receipt: dict[str, Any], spec: Any) -> None:
         not isinstance(touchstone, dict)
         or touchstone.get("path") != f"{spec.mode}.s2p"
         or touchstone.get("ports") != 2
-        or touchstone.get("records") != 20_000
+        or touchstone.get("records") != int(spec.run_control.sweep.points)
         or touchstone.get("frequency_unit") != "GHz"
         or touchstone.get("first_frequency_ghz") != spec.run_control.sweep.start_ghz
         or touchstone.get("last_frequency_ghz") != spec.run_control.sweep.stop_ghz

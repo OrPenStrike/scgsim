@@ -41,9 +41,15 @@ print(handoff.spec_path, handoff.script_path)
 ```
 
 Endpoints and mesh length are micrometres; sweep bounds are GHz. The current
-public contract has exactly ordered ports 1 and 2 and a 20,000-point Fast
-sweep. These are the implemented interface's constraints, not a new sampling
-recommendation. The example's bounds and line coordinates come from the pinned
+public interface retains ordered ports 1 and 2. The example explicitly requests
+20,000 points, the unchanged default of `FrequencySweepSpec`; the selected
+candidate lets the caller choose `points` for the study. Exact whole-number
+numeric inputs, including `20000.0`, preserve their count without truncation.
+The count is bound through native setup, export and returned readback; valid
+historical 20,000-point data retains its original custody. These values do not
+recommend adequate sampling for every response. Read the
+[caller-owned count contract](../specs/aedt-runtime.qmd#hfss-driven-sweep-count)
+when changing it. The example's bounds and line coordinates come from the pinned
 OrPen CPW specimen. Native padding is zero on the declared port sides so those
 faces remain the intended ends.
 
@@ -54,6 +60,14 @@ completion. On [strict return](returned-results.qmd), read ordered modal
 S-parameters, impedance and Touchstone as this network's output. Do not call
 its port ordering terminal-reference evidence or turn the export into an
 unimplemented SCGSim circuit model.
+
+Retain native convergence classification, the caller's criteria and reported
+changes/pass history with that response. The selected
+[HFSS observation contract](../specs/aedt-runtime.qmd#hfss-convergence-observations)
+removes only the additional convergence qualifications; it leaves native
+execution failure, incomplete artifacts and request/cross-export identity
+checks intact. Pass count alone does not identify a stopping cause or make
+failed work completed.
 
 For reference-conductor ports on the same public source, choose
 [Driven Terminal](aedt-driven-terminal.qmd). The exact distinction and native

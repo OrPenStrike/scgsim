@@ -378,15 +378,13 @@ class PalaceTrustReport:
 
         display(HTML(self._identity_html()))
         items = self._convergence_items()
-        if len(self.passes) < 2:
-            display(HTML(items[0]))
-        else:
+        if len(self.passes) >= 2:
             display(HTML(self._convergence_heading_html()))
-            for item in items:
-                if isinstance(item, str):
-                    display(HTML(item))
-                else:
-                    _show_figure(item)
+        for item in items:
+            if isinstance(item, str):
+                display(HTML(item))
+            else:
+                _show_figure(item)
         for item in self._surface_convergence_items():
             if isinstance(item, str):
                 display(HTML(item))
@@ -483,7 +481,17 @@ class PalaceTrustReport:
 
     def _convergence_items(self) -> list[Any]:
         if len(self.passes) < 2:
-            return [self._convergence_status_html()]
+            items: list[Any] = [self._convergence_status_html()]
+            q_traces = _mode_traces(
+                self.passes,
+                lambda pass_: (
+                    None if pass_.eig_columns is None else pass_.eig_columns.get("Q")
+                ),
+            )
+            q_notice = _native_positive_infinity_q_notice(q_traces)
+            if q_notice is not None:
+                items.append(q_notice)
+            return items
         xs = tuple(pass_.pass_index for pass_ in self.passes)
         items: list[Any] = []
         for header in _union_mapping_keys(self.passes, "eig_columns"):
@@ -497,8 +505,10 @@ class PalaceTrustReport:
             )
             if header == "Q" and not _traces_are_finite(traces):
                 items.append(
-                    "<p style='opacity:0.75'>Q is non-finite in this run; "
-                    "the loss model may be disabled. The Q convergence plot is omitted.</p>"
+                    _native_positive_infinity_q_notice(traces)
+                    or "<p style='opacity:0.75'>A finite Q convergence plot is "
+                    "unavailable because the Q trace contains non-finite or "
+                    "unavailable data.</p>"
                 )
                 continue
             figure = _line_figure(
@@ -2697,6 +2707,33 @@ def _traces_are_finite(traces: Sequence[tuple[str, Sequence[float | None]]]) -> 
         if isinstance(value, (int, float)) and not isinstance(value, bool)
     ]
     return bool(numbers) and all(math.isfinite(value) for value in numbers)
+
+
+def _native_positive_infinity_q_notice(
+    traces: Sequence[tuple[str, Sequence[float | None]]],
+) -> str | None:
+    values = [value for _name, ys in traces for value in ys]
+    contains_positive_infinity = any(
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and value == math.inf
+        for value in values
+    )
+    finite_or_positive_infinity_only = all(
+        value is None
+        or (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and (math.isfinite(value) or value == math.inf)
+        )
+        for value in values
+    )
+    if not contains_positive_infinity or not finite_or_positive_infinity_only:
+        return None
+    return (
+        "<p style='opacity:0.75'>Native-reported Q includes +inf; "
+        "a finite-Q convergence view is unavailable.</p>"
+    )
 
 
 def _delta_traces(

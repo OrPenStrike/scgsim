@@ -1505,7 +1505,13 @@ def _validate_eig_table(table: ParsedTable, expected_modes: int) -> None:
             f"{table.path} eig header does not match current Palace native schema."
         )
     for row in table.rows:
-        _require_finite_data(row)
+        _require_finite_data(
+            {
+                key: value
+                for key, value in row.items()
+                if not (key == "Q" and value == math.inf)
+            }
+        )
     if len(table.rows) != expected_modes:
         raise ValueError(
             f"{table.path} must contain {expected_modes} eig rows; found {len(table.rows)}."

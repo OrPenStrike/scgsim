@@ -76,6 +76,16 @@ family's rows: ordered S-parameters for Driven, mode frequency/native Q for
 ordinary Eigenmode, Q3D matrices, or Q2D per-unit-length matrix blocks. Preserve
 native units and conductor/port order when using those rows downstream.
 
+For HFSS Driven/Eigenmode, the selected
+[convergence-observation contract](../specs/aedt-runtime.qmd#hfss-convergence-observations)
+retains native classification and its criteria/delta/pass/count history without
+the additional convergence qualifications. Request-setting identity and
+cross-export self-consistency remain checked. This does not reclassify a
+failed/incomplete return as completed: native analyze/save failure, interrupted
+work and missing/corrupt required artifacts keep their failure meaning. An
+unknown cause stays unknown; a pass count alone does not establish OOM,
+walltime or successful early stopping. Q2D/Q3D policies are unchanged.
+
 Benchmark records distinguish SCGSim wall time from native task/stage times;
 missing profile data stays unavailable. A missing adaptive profile does not
 invent a pass curve, and overlapping stage times or peaks must not be summed as

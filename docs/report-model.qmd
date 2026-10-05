@@ -52,7 +52,16 @@ recorded history remain observations for the Notebook to retain. The report
 does not replace them with a universal research-sufficiency threshold. Native
 convergence and a usable numerical artifact are not an automatic judgement
 that the research question has been answered. This interpretation does not
-change eligibility, hashes, raw status, pass selection or failure behavior.
+replace native status, hashes, pass selection or genuine execution failure
+meaning. The Human-selected HFSS Driven/Eigenmode candidate removes only the
+three extra convergence qualifications described in the
+[HFSS contract](specs/aedt-runtime.qmd#hfss-convergence-observations). Its
+reports present the existing structured convergence fields, with request and
+cross-export consistency intact. Keep the caller's criteria with the native
+records: Eigenmode's consecutive-pass count and native history remain in the
+hash-bound `adaptive-convergence.prop` export, rather than being exposed as a
+normalized count or full raw history in the report. They do not turn failed/incomplete work into completion, infer an
+unknown stopping cause from pass count, or change Q2D/Q3D policies.
 
 ## Honesty rule
 
@@ -133,6 +142,16 @@ detached Palace EPR result retains original artifact identity and hash
 references, but those references do not authenticate the detached JSON itself.
 Presentation does not weaken source bindings and makes no
 numerical-convergence or cross-solver-agreement claim.
+
+For Palace only, the Human-selected **CONVERGING** candidate preserves
+positive infinity in the native Eigenmode `eig.csv` `Q` column and explicitly
+labels it **native-reported infinite Q**. A finite Q-based view is unavailable
+for that value; the report does not infer a physical lossless model or replace
+it with a finite number or zero. Other otherwise valid frequency/energy
+evidence is not rejected solely for this Q value. The
+[Palace native Q contract](specs/palace-eigenmode.qmd#native-eigenmode-q) owns
+the narrow raw-value allowance and unchanged other-column/NaN/negative-infinity
+policies. EPR normalization and unknown-loss interpretation remain separate.
 
 The separate [Tetrahedral Mesh Quality](mesh-quality.qmd) report is bound to a
 single MSH file read. Its volume, orientation, and condition evidence are

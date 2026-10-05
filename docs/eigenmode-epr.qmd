@@ -108,7 +108,12 @@ That native value does not turn an unknown assumption into a known zero: the
 Palace v2 index and detached EPR result preserve `loss_tangent=None`, and
 SCGSim's analysis keeps the inverse-Q contribution unavailable. A native
 infinite-Q or zero-loss display is not evidence that the loss is known to be
-zero.
+zero. The selected Palace candidate retains only native Eigenmode `eig.csv`
+`Q=+inf` as explicitly reported native infinity, with its finite Q-based view
+unavailable. This preserves what the solver reported without supplying a
+physical lossless inference. The [Palace native Q contract](specs/palace-eigenmode.qmd#native-eigenmode-q)
+owns the allowance; EPR still uses actual energy/frequency evidence and its
+recorded loss assumptions, independently of that native Q value.
 
 Historical Palace surface-film records before
 `scgsim.palace.surface-film.v2` can contain a recorded `loss_tangent=0.0`

@@ -171,6 +171,70 @@ Likewise, a `completed` label and an `.aedt` file alone do not prove that saved
 fields are present or reusable; only the versioned family evidence sealed and
 checked by the resolver has that meaning.
 
+### HFSS Driven caller-owned sweep count {#hfss-driven-sweep-count}
+
+Human selected this implementation direction for the current **CONVERGING**
+candidate. `FrequencySweepSpec(start_ghz, stop_ghz, points=20000)` keeps its
+existing public `points` field and default. The caller chooses the sample count
+for the study. Exact whole-number numeric inputs, including `20000.0`, are
+accepted and converted losslessly to the native/count integer. A non-whole
+input is rejected rather than truncated. This contract adds no scientific
+minimum, maximum or adequate-sampling envelope; native sweep/domain failures
+retain their native meaning.
+
+The bound count governs native sweep setup, exports and returned-data
+readback/reader cardinality together. The returned frequencies and ordered
+network data must belong to that request, with the existing endpoint, unit,
+port-order, source/readback and hash bindings. There is no hidden 20,000-point
+export or reader assumption for a differently requested count, no resampling
+or interpolation, and no fallback to another sweep.
+
+Valid historical 20,000-point data and its canonical input/receipt custody
+remain valid under their existing identities. The numeric input `20000.0`
+does not become an invalid historical request merely because a native API uses
+an integer count. Changing the caller's count creates a different request;
+it does not relabel old returned data. Q2D/Q3D behavior is unchanged by this selected count direction. The separate
+HFSS convergence-observation direction below governs qualification. Sampling
+adequacy remains the caller's research interpretation, not a count threshold
+chosen by SCGSim.
+
+### HFSS convergence observations {#hfss-convergence-observations}
+
+Human selected this implementation direction for the current **CONVERGING**
+candidate, covering HFSS Driven and Eigenmode only. Native convergence status,
+caller-authored criteria and changes, reported delta, final pass and available
+native records remain observations. For Eigenmode, `Current Consecutive Passes`
+and native convergence history remain in the hash-bound
+`adaptive-convergence.prop` export. The parser reads and structurally checks
+the count; the existing normalized result/report does not expose that count
+or reproduce the full raw history. SCGSim removes only
+these three additional qualification rejections:
+
+- A native converged classification is not rejected solely because the final
+  reported convergence delta exceeds the caller's configured target: maximum
+  magnitude delta-S (ratio) for Driven, or frequency change (percent) for Eigenmode.
+- A native not-converged classification is not rejected solely because the
+  final pass differs from the caller's configured maximum.
+- Eigenmode's native converged classification is not rejected solely because
+  the reported consecutive-pass count is below the caller's requested minimum.
+
+The native classification is retained with the values that accompanied it;
+it does not independently certify the criterion or research adequacy. A pass
+count alone does not explain why native work stopped. An unknown cause stays
+unknown rather than being labeled OOM, walltime or successful early stopping.
+Actual OOM/walltime interruption, native analyze/save failure and incomplete
+or corrupt returned artifacts retain their genuine failure meaning. This
+change does not mark failed/incomplete work completed or reclassify an old
+FAILED receipt.
+
+Request-setting identity (C4), cross-export self-consistency (C5), native/source
+identity, required formats and artifact hashes remain checked. Requested
+controls and returned evidence must still belong to the same run. Q2D/Q3D
+convergence policies are unchanged. The caller interprets quantity/history
+for the intended SCQ use as taught in the
+[result-reading lesson](../course/returned-results.qmd#interpret-for-scq-use);
+this direction adds no numerical sufficiency threshold or whole-V1 acceptance.
+
 ### HFSS Eigenmode native frequency export {#hfss-eigenmode-native-frequency-export}
 
 The shared HFSS Eigenmode exporter accepts native real-only mode rows with

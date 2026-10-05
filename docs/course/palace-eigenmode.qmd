@@ -65,6 +65,15 @@ criteria/status retained. An eigenpair residual or AMR indicator describes its
 own native quantity; it does not by itself establish adequacy of the frequency
 or EPR contribution you plan to use.
 
+On return, the selected candidate retains a native `eig.csv` `Q=+inf` as
+**native-reported infinite Q**. Its finite Q-based view is unavailable. Keep
+that native observation separate from a physical lossless-model claim; it
+does not replace a missing loss assumption or determine a device lifetime.
+Other otherwise valid frequency and energy channels remain readable under
+their existing contracts. The [native Q contract](../specs/palace-eigenmode.qmd#native-eigenmode-q)
+defines this narrow allowance; other columns and NaN/negative infinity remain
+subject to their current policies.
+
 For the public Xmon with an inductive source port and attributed thin films,
 use the [Palace EPR extension](../tutorial-xmon-palace.qmd) **before** meshing
 and handoff preparation. Its surface/bulk/port selections filter reported

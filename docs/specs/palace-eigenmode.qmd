@@ -57,6 +57,25 @@ return and the separately retained preparation ID. The resulting
 new detached result, and `show_epr(result, *, mode=None)` returns a Plotly Figure.
 Neither operation opens Palace.
 
+### Native Eigenmode Q availability {#native-eigenmode-q}
+
+Human selected this narrow implementation direction for the current
+**CONVERGING** candidate: only the native `eig.csv` `Q` column may retain
+positive infinity (`+inf`) as its native-reported value during result
+resolution. The report labels it explicitly as **native-reported infinite Q**;
+a finite Q-based view is unavailable for that value. It does not infer a
+physical lossless model, replace infinity with a finite number or zero, or
+reject otherwise valid frequency/domain-energy data solely because of this Q
+value.
+
+Other native columns and the existing NaN/negative-infinity policies remain
+unchanged. This is not a blanket nonfinite allowance, and it does not relax
+completion, table structure, mode/index order, request identity or artifact
+custody. EPR normalization still uses its actual energy/frequency channels,
+not the native Q sentinel. Surface-Q behavior retains its existing separate
+contract. The selected direction does not grant whole-V1 acceptance or
+stabilization.
+
 Native port participation is signed and phase-convention dependent. It is not
 AEDT's nonnegative inductive/capacitive junction pair. Loss assumptions and
 unknowns retain their meaning across detachment and updates; the

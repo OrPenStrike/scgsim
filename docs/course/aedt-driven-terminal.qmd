@@ -47,12 +47,29 @@ name those exact source bindings; the current contract does not infer a ground
 from touching geometry. Optional `deembed_um` is a nonnegative micrometre input
 on `TerminalPort`; this example leaves it at zero.
 
+The example's `FrequencySweepSpec(..., 20_000)` requests the unchanged default
+count explicitly. The selected candidate lets the caller set `points`, accepting
+exact whole-number numeric counts such as `20000.0` without truncation. Native
+setup, export and returned-data readback use that bound count together; valid
+historical 20,000-point data keeps its original custody. Choose sampling for
+the network response your study needs; this example supplies no universal
+adequacy recommendation or extra count envelope. The
+[HFSS count contract](../specs/aedt-runtime.qmd#hfss-driven-sweep-count) owns
+that behavior alongside the separately selected
+[HFSS convergence-observation direction](../specs/aedt-runtime.qmd#hfss-convergence-observations).
+
 Review the copied spec's port order, references and end faces, then
 [execute on the native host](execute.qmd). The returned resolver checks actual
 terminal/reference readback and ordered S-parameters/Touchstone, not just the
 requested references. [Restart and resolve](returned-results.qmd) before
 passing that network response into your downstream analysis. Native benchmark
 and adaptive evidence describe the run separately from the physical response.
+Retain native classification, actual criteria, reported changes and pass counts
+as observations. The selected direction removes extra convergence
+qualification rejections while keeping genuine native/analyze/save failures,
+incomplete returns and request/cross-export consistency checks. An unknown
+stopping cause remains unknown; a shorter pass history does not certify
+successful early stopping or identify OOM/walltime.
 
 Use [Modal](aedt-driven-modal.qmd) when the intended model calls for explicit
 integration lines. The [runtime contract](../specs/aedt-runtime.qmd) owns
