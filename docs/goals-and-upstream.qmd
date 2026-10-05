@@ -32,11 +32,19 @@ or support for excluded backends.
 The semantic state is **STABILIZED**: the Human-assigned minimal checks have
 passed independent review and preserve the accepted function and failure
 behavior. They do not establish universal physics accuracy or new native
-solver evidence. Develop uses prerelease metadata, including `1.0.0rc1`;
-first stable `main` uses `1.0.0`. Integration/publication and workspace
-synchronization are verified separately, and a stable main publication must
-be confirmed before it is treated as available.
+solver evidence. Stable `main` carries the latest stable release, while `develop` carries the
+next prerelease line. Integration, Pages deployment and workspace synchronization
+keep their own recorded identities; semantic stabilization alone does not
+publish a newer version.
 Historical receipts retain their original source, outcome and evidence scope.
+
+Native Askr presentation is confirmed for the 1.0.1 maintenance release:
+four Areas, Pages and Sections navigation, and versioned sites that distinguish
+original content from presentation. Release delivery is authorized;
+instructional content revisions remain separate and are not accepted by this
+presentation decision. Runtime, result and scientific semantics remain
+unchanged. A historical version keeps its original authored content and source
+revision; updated presentation is recorded separately.
 
 ## Non-goals
 

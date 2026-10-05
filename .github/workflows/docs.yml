@@ -28,7 +28,7 @@ jobs:
       - uses: quarto-dev/quarto-actions/setup@8a96df13519ee81fd526f2dfca5962811136661b # v2.2.0
         with:
           version: '1.10.18'
-      - name: Render exact current branch snapshots without execution
+      - name: Render frozen sources and version catalogue without execution
         run: python scripts/build_docs_site.py --output "$RUNNER_TEMP/scgsim-pages"
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:

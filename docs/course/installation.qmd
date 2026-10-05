@@ -32,6 +32,8 @@ python -m pip install -e '.[palace]'
 If reproducing a particular documentation build, select its recorded source
 revision in this clone before installing. Choose the extra for the actual work:
 
+::: {.table-responsive}
+
 | Work on this computer | Installation from the matching checkout | What it supplies |
 |---|---|---|
 | Resolve and plot returned results | `pip install -e .` | SCGSim, NumPy and Plotly |
@@ -39,6 +41,8 @@ revision in this clone before installing. Choose the extra for the actual work:
 | Prepare ordinary HFSS or Q3D; use Q2D | `pip install -e '.[aedt]'` | GDS reader and PyAEDT 1.3.0 |
 | Prepare source-first AEDT Surface EPR | `pip install -e '.[aedt-epr]'` | AEDT dependencies plus GDSFactory 9.x and KLayout 0.30.x |
 | Inspect solver-bound geometry | `pip install -e '.[visualization]'` | Mesh reader, image tools and PyVista; combine with the backend extra |
+
+:::
 
 A visualization installation can be combined with a backend, for example
 `pip install -e '.[palace,visualization]'`. Rendering needs a usable native

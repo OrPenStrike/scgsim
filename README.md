@@ -31,7 +31,8 @@ that research judgement.
 The [backend support matrix](docs/backend-support.qmd) records accepted V1
 workflows and their current evidence limits. The Human accepted
 the implemented V1 semantics, and the reviewed assigned stabilization is
-complete. Release delivery remains separate. Palace Driven and Magnetostatic are not implemented;
+complete. Stable `main` 1.0.0 is published; delivery identities and native evidence
+remain separate. Palace Driven and Magnetostatic are not implemented;
 Meep is excluded.
 
 Read [geometry concepts](docs/concepts/geometry.qmd) to understand source
@@ -42,16 +43,24 @@ explains implementation responsibilities.
 
 ## Documentation and ownership
 
-The `develop` lane uses prerelease versions, including `1.0.0rc1`; the first
-stable `main` version is `1.0.0`. Use a branch or artifact only after its
-publication is confirmed and keep its recorded source identity. Stabilization
-does not itself publish a stable site.
+The four documentation Areas are **Overview**, **Tutorial**, **Concept**, and
+**Contract**. Each Area's **Pages** menu selects a document; **Sections** on the
+right navigates within it. Implementation and project pages live under Contract rather
+than a separate top-level Area.
 
-The [documentation home](https://orpenstrike.github.io/scgsim/) lists published
-versions. The [development site](https://orpenstrike.github.io/scgsim/develop/)
-records its source revision and package version. Use that identity with the
-matched public input revision; a development version string alone does not
-identify every API change.
+Stable `main` carries the latest stable release; `develop` contains the next
+prerelease line. Native Askr presentation is confirmed for the 1.0.1
+maintenance release. Instructional content revisions remain separate work;
+this release does not reopen the stabilized runtime V1 contract.
+
+The [documentation home](https://orpenstrike.github.io/scgsim/) selects the
+latest published stable version. Versioned sites keep a matching package
+version and content revision; the version menu distinguishes development,
+current stable, and retained history. The `/main/` and `/develop/` links remain
+aliases for the corresponding selected versions. A historical page keeps its
+original content even when its presentation is updated. Use its recorded
+content identity with the matched public input revision; a version string
+alone does not identify every API change.
 
 SCGSim owns runtime/package/documentation source. OrPen owns public PDK facts,
 components and component notebooks. [Ownership](docs/ownership.qmd) describes
