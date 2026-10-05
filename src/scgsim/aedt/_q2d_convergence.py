@@ -154,19 +154,9 @@ def _problem_evidence(
     if (converged_count, not_converged_count) == (1, 0):
         converged = True
         stop_reason = converged_text
-        if final_delta > target and not math.isclose(
-            final_delta, target, rel_tol=0.0, abs_tol=1e-12
-        ):
-            raise RuntimeError(
-                f"{solver} profile reports convergence above its native target"
-            )
     elif (converged_count, not_converged_count) == (0, 1):
         converged = False
         stop_reason = not_converged_text
-        if final_pass != maximum_passes:
-            raise RuntimeError(
-                f"{solver} non-converged profile stopped before maximum passes"
-            )
     else:
         raise RuntimeError(f"{solver} native profile has ambiguous convergence status")
 

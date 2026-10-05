@@ -49,6 +49,11 @@ The [result-reading lesson](returned-results.qmd#interpret-for-scq-use) relates
 the selected matrix quantity and its available history to the intended SCQ use;
 the native stopping flag alone does not decide its adequacy.
 
+Keep native status, reported delta and actual controls with the matrix result;
+the [matrix observation contract](../specs/aedt-runtime.qmd#q2d-q3d-convergence-observations)
+describes their retention. Judge whether the matrix quantity and available
+changes support the accuracy your intended study needs.
+
 ## Know which formulation you requested
 
 The default `solve_ac_rl=True` requests combined capacitance/conductance and

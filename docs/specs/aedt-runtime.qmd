@@ -229,11 +229,38 @@ FAILED receipt.
 
 Request-setting identity (C4), cross-export self-consistency (C5), native/source
 identity, required formats and artifact hashes remain checked. Requested
-controls and returned evidence must still belong to the same run. Q2D/Q3D
-convergence policies are unchanged. The caller interprets quantity/history
+controls and returned evidence must still belong to the same run. The separate
+[Q2D/Q3D observation candidate](#q2d-q3d-convergence-observations) below covers
+matrix-family qualifications. The caller interprets quantity/history
 for the intended SCQ use as taught in the
 [result-reading lesson](../course/returned-results.qmd#interpret-for-scq-use);
 this direction adds no numerical sufficiency threshold or whole-V1 acceptance.
+
+### Q2D/Q3D convergence observations {#q2d-q3d-convergence-observations}
+
+The current **CONVERGING** Q2D/Q3D candidate applies the native-observation
+direction to these two additional qualifications, separately from the earlier
+HFSS-only scope:
+
+- A native converged classification is not rejected solely because its final
+  reported delta exceeds the configured target.
+- A native not-converged classification is not rejected solely because its
+  completed pass count differs from the configured maximum.
+
+Native status, target, final delta, completed passes and source remain recorded
+observations. Keep the caller's actual controls and any changes with those
+records when interpreting a matrix quantity for the intended study. The native
+classification does not independently certify the criterion or research
+adequacy. Pass count alone does not identify OOM, walltime or successful early
+stopping; an unknown cause remains unknown.
+
+Native analyze/save/export failures and missing or corrupt artifacts retain
+their failure meaning; existing FAILED receipts are not reclassified. Required
+metric/control formats, configured-control identity, native/source identity and
+artifact custody remain checked. The accepted Q2D one-file primary matrix
+export, finite C/G/L/R data, units, frequency, conductor order and historical
+readers are unchanged. This candidate changes no API/schema or numeric
+precision and establishes no research threshold or whole-V1 acceptance.
 
 ### HFSS Eigenmode native frequency export {#hfss-eigenmode-native-frequency-export}
 

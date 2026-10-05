@@ -67,6 +67,11 @@ blocks without creating another normalized file. Native coupling or Spice
 blocks can coexist without becoming extra primary matrices. The resolver binds
 frequency, `LastAdaptive` solution, conductor order and per-unit-length units.
 
+Keep native status, reported delta and actual controls with the matrix result,
+as described by the [matrix observation contract](../specs/aedt-runtime.qmd#q2d-q3d-convergence-observations).
+Use that quantity and its available changes to judge whether its accuracy is
+adequate for your intended study.
+
 Per-unit-length capacitance is not a lumped Electrostatic capacitance, and a
 Q2D cross-section is not the finite 3D Q3D experiment. Preserve those units and
 scope when interpreting the result. Historical separate CG/RL and normalized
