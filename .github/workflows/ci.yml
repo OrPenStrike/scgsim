@@ -40,7 +40,16 @@ jobs:
       - name: Verify package version contract
         env:
           TARGET_LINE: ${{ github.event_name == 'pull_request' && github.base_ref || github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_BRANCH: ${{ github.head_ref }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
         run: |
+          # A same-repository develop -> main promotion reviews prerelease source.
+          # The resulting main push must still satisfy the stable version policy.
+          if [ "$EVENT_NAME" = pull_request ] && [ "$TARGET_LINE" = main ] &&
+             [ "$PR_HEAD_BRANCH" = develop ] && [ "$PR_HEAD_REPOSITORY" = "$GITHUB_REPOSITORY" ]; then
+            TARGET_LINE=develop
+          fi
           case "$TARGET_LINE" in
             develop|main) line="$TARGET_LINE" ;;
             *) line=any ;;

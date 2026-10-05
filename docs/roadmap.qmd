@@ -16,11 +16,20 @@ status.
 
 ## Near term
 
-The reviewed Human-assigned minimal stabilization is complete. Remaining
-delivery priorities are:
+The reviewed Human-assigned minimal runtime stabilization and first stable
+`main` delivery are complete. The documentation-only 1.0.1 maintenance
+release uses confirmed native Askr presentation and focuses on:
 
-1. Integrate the reviewed prerelease checkpoint and its version-bound knowledge.
-2. Verify the first stable main delivery and workspace synchronization separately.
+1. Four reader-facing Areas with floating Pages navigation and a Sections TOC.
+2. Current stable, development and retained historical sites with exact content
+   and presentation identities, preserving existing page URLs.
+3. Develop-to-main promotion, required checks and actual Pages deployment of the
+   reviewed maintenance release.
+
+Native presentation is accepted and maintenance release delivery is
+authorized. Instructional content redesign remains separate future work;
+this release does not accept the complete curriculum. It adds no solver
+family, scientific criterion, runtime API or public notebook authority.
 
 ## Later
 

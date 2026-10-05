@@ -15,7 +15,6 @@ website:
   title: "SCGSim"
   description: "Source geometry, explicit solver handoffs and verified electromagnetic results"
   page-navigation: true
-  reader-mode: false
   search:
     location: navbar
     type: overlay
@@ -23,20 +22,25 @@ website:
   repo-actions: [source, issue]
   navbar:
     left:
-      - text: "Start"
+      - text: "Overview"
         href: index.qmd
-      - text: "Course"
+      - text: "Tutorial"
         href: docs/examples.qmd
-      - text: "Concepts"
+      - text: "Concept"
         href: docs/concepts/geometry.qmd
-      - text: "Contracts"
+      - text: "Contract"
         href: docs/backend-support.qmd
-      - text: "Implementation & project"
-        href: docs/architecture.qmd
   sidebar:
-    - id: course
-      title: "Simulation course"
-      style: docked
+    - id: overview
+      title: "Pages"
+      style: floating
+      collapse-level: 1
+      contents:
+        - text: "SCGSim overview"
+          href: index.qmd
+    - id: tutorial
+      title: "Pages"
+      style: floating
       collapse-level: 1
       contents:
         - docs/examples.qmd
@@ -64,40 +68,43 @@ website:
             - docs/course/aedt-driven-terminal.qmd
             - docs/course/aedt-q3d.qmd
             - docs/course/aedt-q2d.qmd
-    - id: concepts
-      title: "Concepts"
-      style: docked
+    - id: concept
+      title: "Pages"
+      style: floating
+      collapse-level: 1
       contents:
         - docs/concepts/geometry.qmd
         - docs/eigenmode-epr.qmd
-    - id: contracts
-      title: "Contracts"
-      style: docked
+    - id: contract
+      title: "Pages"
+      style: floating
+      collapse-level: 1
       contents:
         - docs/backend-support.qmd
-        - docs/geometry-sgb.qmd
-        - docs/specs/palace-electrostatic-sgb.qmd
-        - docs/specs/palace-eigenmode.qmd
-        - docs/specs/aedt-runtime.qmd
-        - docs/execution-profiles.qmd
-        - docs/geometry-preview.qmd
-        - docs/mesh-quality.qmd
-        - docs/report-model.qmd
-        - docs/notebook-ux.qmd
-    - id: project
-      title: "Implementation & project"
-      style: docked
-      contents:
-        - docs/architecture.qmd
-        - docs/goals-and-upstream.qmd
-        - docs/ownership.qmd
-        - docs/provenance.qmd
-        - docs/roadmap.qmd
-        - docs/errors.qmd
+        - section: "Public contracts"
+          contents:
+            - docs/geometry-sgb.qmd
+            - docs/specs/palace-electrostatic-sgb.qmd
+            - docs/specs/palace-eigenmode.qmd
+            - docs/specs/aedt-runtime.qmd
+            - docs/execution-profiles.qmd
+            - docs/geometry-preview.qmd
+            - docs/mesh-quality.qmd
+            - docs/report-model.qmd
+            - docs/notebook-ux.qmd
+        - section: "Implementation"
+          contents:
+            - docs/architecture.qmd
+            - docs/ownership.qmd
+            - docs/provenance.qmd
+        - section: "Project"
+          contents:
+            - docs/goals-and-upstream.qmd
+            - docs/roadmap.qmd
+            - docs/errors.qmd
 
 format:
   askr-html:
-    css: docs/styles.css
     html-math-method: mathjax
     respect-user-color-scheme: true
     toc: true
