@@ -1,10 +1,17 @@
 ---
 title: "AEDT Runtime Families"
+description: "AEDT family specifications, native readback, receipt cohorts and saved-field analysis."
+scgsim-kind: "contract"
+scgsim-status: "STABILIZED"
+scgsim-id: "docs/specs/aedt-runtime"
 ---
 
-::: {.callout-note title="CONVERGING candidate contract"}
+The [course map](../examples.qmd) links every implemented AEDT family lesson. This page owns exact specifications, failure rules and historical reader contracts.
+
+::: {.callout-note title="Stabilized V1 contract"}
 HFSS Driven Terminal/Modal, HFSS Eigenmode, Q3D, and Q2D have live run and
-strict resolve evidence. The scope remains converging rather than V1 stable.
+strict resolve evidence. These semantics are Human-accepted; stabilization and release delivery
+remain separate.
 :::
 
 ## One shared lifecycle
@@ -43,7 +50,7 @@ run.py: release Desktop -> write final receipt
 ```
 
 The normal command and diagnostic instrumentation use the same private family
-preparation functions. The EPR candidate adds `--execute --prepare-only`
+preparation functions. The EPR path adds `--execute --prepare-only`
 through this same transaction and native builder. It saves and reads back the
 prepared model, releases the owned Desktop, and reports
 `native_preparation_only` with `solver_invoked=false`; it is a native
@@ -75,7 +82,7 @@ New handoffs retain `scgsim.aedt.handoff.v1` and
 `scgsim.aedt.handoff-manifest.v1`. Both records add
 `expected_receipt_schema: scgsim.aedt.receipt.v3`, and the initial receipt is
 V3. It contains `prepared_runtime_source`: a deterministic, sorted
-`runtime-source.v5` manifest of the SCGSim transaction, family, common, spec,
+`runtime-source.v8` manifest of the SCGSim transaction, family, common, spec,
 persistence, native-readback, and AEDT presentation modules, a content digest
 over that manifest, and a truthful preparation Git observation when one is
 available. Git observation may be explicitly unavailable; module hashes and
@@ -101,7 +108,7 @@ V2 handoff retains its prepared V2 provenance cohort when execution emits V3;
 it is not relabeled as new V3 preparation.
 
 Every new completed V3 receipt has a separate `runtime_source` manifest using
-`runtime-source.v5` and a content digest for the code that actually executed
+`runtime-source.v8` and a content digest for the code that actually executed
 it, while retaining the historical `revision`, `run_py_sha256`,
 `spec_py_sha256`, convergence, and matrix-helper keys. Execution provenance
 failure therefore produces a failed receipt, never a strict-resolvable
@@ -122,9 +129,12 @@ an actor able to rewrite every member.
 `runtime-source.v1` is a frozen thirteen-module reader contract, not a live
 enumeration rule. The V2–V6 inventories are also frozen. V4 added
 `scgsim/aedt/_presentation.py`; V5 added `scgsim/sgb/geometry_plan.py` and
-`scgsim/sgb/__init__.py`. Current producer receipts use V7, which adds
-`scgsim/_notebook_presentation.py` to V6. The V1–V6 module membership and hashes
-retain their historical meaning. These source manifests do not change the V3
+`scgsim/sgb/__init__.py`. V7 added
+`scgsim/_notebook_presentation.py` to V6. Current producer receipts use V8,
+which adds `scgsim/aedt/_junction_partition.py` to V7. The V1–V7 module membership and hashes
+retain their historical meaning. These manifests bind their exact declared file inventory, not an exhaustive
+transitive dependency attestation; for example, the current frozen inventory
+does not separately hash `scgsim/sgb/engine_gates.py`. They do not change the V3
 receipt schema. A pure initial-receipt codec owns exact V1/V2/V3 member order,
 two-space JSON indentation, and the trailing newline. V1 omits prepared
 provenance; V2 and V3 insert it between `source` and `outputs`. Reading
@@ -161,6 +171,95 @@ unresolved native assignments, and path/hash mismatches.
 Likewise, a `completed` label and an `.aedt` file alone do not prove that saved
 fields are present or reusable; only the versioned family evidence sealed and
 checked by the resolver has that meaning.
+
+### HFSS Driven caller-owned sweep count {#hfss-driven-sweep-count}
+
+The Human-accepted V1 contract provides this behavior. `FrequencySweepSpec(start_ghz, stop_ghz, points=20000)` keeps its
+existing public `points` field and default. The caller chooses the sample count
+for the study. Exact whole-number numeric inputs, including `20000.0`, are
+accepted and converted losslessly to the native/count integer. A non-whole
+input is rejected rather than truncated. This contract adds no scientific
+minimum, maximum or adequate-sampling envelope; native sweep/domain failures
+retain their native meaning.
+
+The bound count governs native sweep setup, exports and returned-data
+readback/reader cardinality together. The returned frequencies and ordered
+network data must belong to that request, with the existing endpoint, unit,
+port-order, source/readback and hash bindings. There is no hidden 20,000-point
+export or reader assumption for a differently requested count, no resampling
+or interpolation, and no fallback to another sweep.
+
+Valid historical 20,000-point data and its canonical input/receipt custody
+remain valid under their existing identities. The numeric input `20000.0`
+does not become an invalid historical request merely because a native API uses
+an integer count. Changing the caller's count creates a different request;
+it does not relabel old returned data. Q2D/Q3D behavior is unchanged by this selected count direction. The separate
+HFSS convergence-observation direction below governs qualification. Sampling
+adequacy remains the caller's research interpretation, not a count threshold
+chosen by SCGSim.
+
+### HFSS convergence observations {#hfss-convergence-observations}
+
+This accepted observation contract covers HFSS Driven and Eigenmode only. Native convergence status,
+caller-authored criteria and changes, reported delta, final pass and available
+native records remain observations. For Eigenmode, `Current Consecutive Passes`
+and native convergence history remain in the hash-bound
+`adaptive-convergence.prop` export. The parser reads and structurally checks
+the count; the existing normalized result/report does not expose that count
+or reproduce the full raw history. SCGSim removes only
+these three additional qualification rejections:
+
+- A native converged classification is not rejected solely because the final
+  reported convergence delta exceeds the caller's configured target: maximum
+  magnitude delta-S (ratio) for Driven, or frequency change (percent) for Eigenmode.
+- A native not-converged classification is not rejected solely because the
+  final pass differs from the caller's configured maximum.
+- Eigenmode's native converged classification is not rejected solely because
+  the reported consecutive-pass count is below the caller's requested minimum.
+
+The native classification is retained with the values that accompanied it;
+it does not independently certify the criterion or research adequacy. A pass
+count alone does not explain why native work stopped. An unknown cause stays
+unknown rather than being labeled OOM, walltime or successful early stopping.
+Actual OOM/walltime interruption, native analyze/save failure and incomplete
+or corrupt returned artifacts retain their genuine failure meaning. This
+change does not mark failed/incomplete work completed or reclassify an old
+FAILED receipt.
+
+Request-setting identity (C4), cross-export self-consistency (C5), native/source
+identity, required formats and artifact hashes remain checked. Requested
+controls and returned evidence must still belong to the same run. The separate
+[Q2D/Q3D observation contract](#q2d-q3d-convergence-observations) below covers
+matrix-family qualifications. The caller interprets quantity/history
+for the intended SCQ use as taught in the
+[result-reading lesson](../course/returned-results.qmd#interpret-for-scq-use);
+this direction adds no numerical sufficiency threshold or scientific certification.
+
+### Q2D/Q3D convergence observations {#q2d-q3d-convergence-observations}
+
+The accepted Q2D/Q3D contract applies the native-observation direction to
+these two additional qualifications, separately from the earlier HFSS-only
+scope:
+
+- A native converged classification is not rejected solely because its final
+  reported delta exceeds the configured target.
+- A native not-converged classification is not rejected solely because its
+  completed pass count differs from the configured maximum.
+
+Native status, target, final delta, completed passes and source remain recorded
+observations. Keep the caller's actual controls and any changes with those
+records when interpreting a matrix quantity for the intended study. The native
+classification does not independently certify the criterion or research
+adequacy. Pass count alone does not identify OOM, walltime or successful early
+stopping; an unknown cause remains unknown.
+
+Native analyze/save/export failures and missing or corrupt artifacts retain
+their failure meaning; existing FAILED receipts are not reclassified. Required
+metric/control formats, configured-control identity, native/source identity and
+artifact custody remain checked. The accepted Q2D one-file primary matrix
+export, finite C/G/L/R data, units, frequency, conductor order and historical
+readers are unchanged. This behavior changes no API/schema or numeric
+precision and establishes no research threshold or scientific certification.
 
 ### HFSS Eigenmode native frequency export {#hfss-eigenmode-native-frequency-export}
 
@@ -251,10 +350,10 @@ creating a second artifact.
 Resolution fails closed unless the connected AEDT/PyAEDT versions, declared
 setup and `LastAdaptive` solution, frequency, per-unit-length units, conductor
 order, and every primary matrix value match the sealed run and are finite.
-This Q2D contract is accepted V1 behavior; the broader AEDT surface remains
-`CONVERGING` and is not V1 stable.
+This Q2D contract is accepted V1 behavior; the broader implemented AEDT surface is also
+`STABILIZED`, with stabilization and release delivery tracked separately.
 
-## Q3D extraction and Region-ground candidate
+## Q3D extraction and Region-ground contract {#q3d-extraction-and-region-ground-candidate}
 
 `Q3dSpec.solve_ac_rl` is a strict boolean and defaults to `true`. The default
 therefore preserves the existing combined capacitance/conductance plus AC
@@ -304,11 +403,11 @@ the requested padding and this zero-offset finalization explicitly.
 
 The prior failed `_01` project remains immutable diagnostic evidence. There is
 no compatibility fallback, physical bridge, or unite path. This replacement
-contract remains `CONVERGING`.
+contract is `STABILIZED`; historical diagnostic evidence is not relabeled.
 
 ## Eigenmode saved fields and Surface-EPR direction
 
-The converging Eigenmode Surface-EPR path is an additive lifecycle, not a
+The accepted Eigenmode Surface-EPR path is an additive lifecycle, not a
 reinterpretation of a completed V1/V2/V3 receipt. It starts from shared source
 polygons, holes, material/domain facts, route profile, and declared junction
 intent, then records a separate AEDT binding from those facts to native bodies,
@@ -474,7 +573,7 @@ and an `unavailable` list. That saved configuration still does not establish
 that the solver applied the criterion or that it changed the adaptive stop;
 those outcomes require an actual target-run observation.
 
-### Public EPR candidate surface
+### Public EPR surface {#public-epr-candidate-surface}
 
 `prepare_planar_geometry_input()` validates and detaches shared source
 polygons, holes, entities, solution domains, Route A/B selection, junctions,
@@ -636,7 +735,7 @@ interval must satisfy `L < U`.
 The full-width corridor, including its side boundaries, must be clear of other
 metal. The A end may contact only terminal A and the B end only terminal B;
 cross-terminal or third-net contact is rejected. If these preconditions do
-not hold, the candidate reports unsupported topology/search assumptions
+not hold, the implementation reports unsupported topology/search assumptions
 rather than universal infeasibility.
 
 Search uses the source-local DBU `h` recorded with the partition evidence. It
@@ -784,10 +883,13 @@ material, vacuum-region, and (for Route A) thin-film provenance. See
 [Geometry and SGB Route A/B](../geometry-sgb.qmd#shared-source-facts-for-aedt).
 The first call requests no analysis contributions and exposes the horizontal
 top/bottom `contribution_catalog` after applying the declared junctions. A row
-can include original and derived polygon IDs. In this helper, the caller
-selects the unique intersection with original `build_input.polygons` IDs; the
-selected source polygon is then checked against the catalogue before
-constructing `SurfaceEprSpec`. Supply the existing Route A profile
+can retain original or derived polygon IDs, or a planned SA surface ID. In
+this helper, the caller selects one contribution and explicitly supplies a
+source ID retained by that catalogue row; the ID need not belong to the
+original `build_input.polygons`. Missing or ambiguous contribution selection
+and a source ID not retained by the selected row fail before constructing
+`SurfaceEprSpec`. The helper does not choose a source for the caller. Supply the
+existing Route A profile
 (`substrate_face` or `metal_gap_equivalent`) explicitly as `route_a_profile`;
 no profile is defaulted.
 
@@ -859,12 +961,8 @@ def prepare_surface_epr_handoff(
     if len(matches) != 1:
         raise ValueError("select exactly one contribution_id from the catalogue")
     record = matches[0]
-    original_polygon_ids = {item.polygon_id for item in build_input.polygons}
-    original_sources = set(record["source_polygon_ids"]) & original_polygon_ids
-    if len(original_sources) != 1:
-        raise ValueError("catalogue row must resolve to one original source polygon")
-    if source_polygon_id not in original_sources:
-        raise ValueError("source_polygon_id must be the row's original source polygon")
+    if source_polygon_id not in record["source_polygon_ids"]:
+        raise ValueError("source_polygon_id must be retained by the selected catalogue row")
 
     surface = SurfaceEprSpec(
         contribution_id=record["contribution_id"],
@@ -963,7 +1061,7 @@ offline APIs substitutes a historical cache row for a final saved-field row.
 
 The earlier A-r5 no-solve attempt loaded same-side surface expressions but
 failed to load an opposite-side sheet expression written with an unverified
-CLC command. The current candidate compiles dependency-ordered CLC definitions
+CLC command. The current implementation compiles dependency-ordered CLC definitions
 locally, including an adjacent-side integrand and the native-serialized
 `EnterAdjacentSurface` command, then submits the complete definition library
 through one native `LoadNamedExpressions` call. Preparation and saved-field
@@ -1223,7 +1321,7 @@ runtime dependency or an authority that replaces the formulas above.
 
 ## Current exclusions
 
-This candidate does not provide S-parameter circuit models, automatic solver
+This V1 does not provide S-parameter circuit models, automatic solver
 selection, arbitrary legacy recipe ingestion, custom AEDT material definitions,
 or compatibility fallbacks for old private runtimes. Those are independent
 future scopes.

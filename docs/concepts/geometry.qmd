@@ -1,0 +1,72 @@
+---
+title: "From source geometry to a solver model"
+description: "Understand occurrences, Entities, Nets, regions and the distinction between declared and observed geometry."
+scgsim-kind: "concept"
+scgsim-status: "STABILIZED"
+scgsim-id: "docs/concepts/geometry"
+---
+
+A component describes local geometry. Placing it twice creates two occurrences
+of those facts; it does not rename the component's own local Entities. A named
+occurrence path qualifies identity before flattening, so two touching polygons
+can still retain separate source lineage. The final study then assigns those
+qualified Entities to Nets. Neither touching appearance nor similar labels
+performs that assignment.
+
+For example, `chip/device/D1_XMON_PAD` names one source Entity in one named
+placement. `xmon_pad` is its final Net in the Xmon study. Eight sibling bump
+Entities can belong to `Ground` while remaining eight source members. A backend
+may aggregate them into a computational physical group; the group serves mesh
+or integral work and is not a ninth Entity or a promise of eight raw results.
+
+The PDK owns material, fabrication level and Z/thickness facts. The component
+owns local polygons, ports and topology selectors. The study's GeometryPlan
+owns occurrence names and the final Net map. Preparing the plan produces one
+immutable snapshot for backend consumption. The exact API, assignment errors,
+array handling and snapshot schema live in the
+[GeometryPlan contract](../geometry-sgb.qmd).
+
+## A region is part of the model
+
+The outer vacuum envelope is an explicit source input on the plan. It encloses
+the study and is partitioned around modeled bodies. An authored inter-die gap
+remains distinct from that outer region. Changing padding changes the physical
+model rather than merely the camera view, so prepare a new snapshot when the
+source envelope changes.
+
+Shared input does not imply identical exterior conditions. Palace's unspecified
+Eigenmode exterior has its natural PMC condition; the current AEDT EPR Region
+uses HFSS's default Perfect E policy. Record the envelope and boundary choices
+when comparing models. No implicit conversion makes those experiments equal.
+
+## Route A and Route B answer different approximation questions
+
+Route A represents face metal by zero-thickness PEC sheets, with the explicit
+supported face/profile assumptions. Route B constructs finite metal and uses
+its closed exterior PEC shell; Palace excludes the conductor interior from its
+solution tetrahedra. Finite source dimensions, PEC approximation and native CAD
+implementation are separate facts. A Route-A profile may preserve physical
+substrate-face coordinates or explicitly normalize a two-face gap; it is not an
+automatic fallback when Route B is hard to mesh.
+
+A surface interface needs material-side and contact evidence, not just a name
+such as MA or MS. Local support can vary over one sheet; substrate holes and
+exposed portions retain their own meaning. The contract records that detail so
+loss analysis can state which patches were evaluated and which were not.
+
+## Read evidence at the stage that produced it
+
+| Stage | What it establishes |
+|---|---|
+| Source summary | Normalized declared inputs, source identity and unknowns |
+| Prepared catalogue/config | Planned backend selections and approximation choices |
+| Bound mesh/native readback | Geometry and assignments observed in that backend |
+| Returned solve receipt and outputs | Recorded execution and actual returned result evidence |
+| Report/plot | A presentation of the selected evidence and assumptions |
+
+A preview cannot create a missing Net or prove field accuracy. A completed
+receipt cannot create an uncomputed sidewall contribution. Retaining stage and
+source identity keeps these observations useful without promoting them into a
+stronger claim. Return to the [course map](../examples.qmd), or read
+[implementation responsibilities](../architecture.qmd) after completing the
+workflow.

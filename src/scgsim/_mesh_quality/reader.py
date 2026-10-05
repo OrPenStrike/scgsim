@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import BinaryIO, Mapping
+from typing import BinaryIO, Literal, Mapping, overload
 
 import numpy as np
 
@@ -104,6 +104,12 @@ class _Lines:
         self.line_number += 1
         return line
 
+    @overload
+    def text(self, *, required: Literal[True]) -> str: ...
+
+    @overload
+    def text(self, *, required: bool = False) -> str | None: ...
+
     def text(self, *, required: bool = False) -> str | None:
         raw = self.read(required=required)
         if raw is None:
@@ -132,7 +138,6 @@ def _readonly(value: np.ndarray) -> np.ndarray:
 
 def _count(lines: _Lines, section: str) -> int:
     raw = lines.text(required=True)
-    assert raw is not None
     try:
         value = int(raw)
     except ValueError as error:
@@ -144,7 +149,6 @@ def _count(lines: _Lines, section: str) -> int:
 
 def _expect(lines: _Lines, expected: str) -> None:
     actual = lines.text(required=True)
-    assert actual is not None
     if actual != expected:
         raise ValueError(f"expected {expected!r}, found {actual!r}")
 
@@ -195,7 +199,6 @@ def read_msh22(mesh_path: str | Path) -> MeshData:
                     raise ValueError("duplicate $MeshFormat section")
                 seen.add(name)
                 raw_descriptor = lines.text(required=True)
-                assert raw_descriptor is not None
                 descriptor = raw_descriptor.split()
                 if descriptor != ["2.2", "0", "8"]:
                     if len(descriptor) >= 2 and descriptor[1] == "1":
@@ -209,7 +212,6 @@ def read_msh22(mesh_path: str | Path) -> MeshData:
                 seen.add(name)
                 for _ in range(_count(lines, "PhysicalNames")):
                     raw = lines.text(required=True)
-                    assert raw is not None
                     match = _PHYSICAL_NAME.fullmatch(raw)
                     if match is None:
                         raise ValueError(f"malformed PhysicalNames row: {raw!r}")
@@ -226,7 +228,6 @@ def read_msh22(mesh_path: str | Path) -> MeshData:
                 identifiers: set[int] = set()
                 for _ in range(_count(lines, "Nodes")):
                     raw_fields = lines.text(required=True)
-                    assert raw_fields is not None
                     fields = raw_fields.split()
                     if len(fields) != 4:
                         raise ValueError("each MSH 2.2 node row must have four fields")
@@ -250,7 +251,6 @@ def read_msh22(mesh_path: str | Path) -> MeshData:
                 seen.add(name)
                 for _ in range(_count(lines, "Elements")):
                     raw_fields = lines.text(required=True)
-                    assert raw_fields is not None
                     fields = raw_fields.split()
                     if len(fields) < 3:
                         raise ValueError("malformed MSH 2.2 element row")
@@ -297,7 +297,6 @@ def read_msh22(mesh_path: str | Path) -> MeshData:
             rows = 0
             while True:
                 raw = lines.text(required=True)
-                assert raw is not None
                 if raw == end:
                     break
                 if raw.startswith("$End") or raw.startswith("$"):

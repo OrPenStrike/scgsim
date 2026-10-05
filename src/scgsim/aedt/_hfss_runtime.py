@@ -27,7 +27,6 @@ from ._native_common import (
 )
 from .spec import (
     AedtResources,
-    POINT_COUNT,
     REQUIRED_AEDT_VERSION,
     SURFACE_APPROXIMATION_LEVEL,
     HfssEigenmodeSpec,
@@ -419,12 +418,13 @@ def _setup(hfss: Any, spec: HfssSpec) -> None:
     setup.props["PercentRefinement"] = spec.run_control.percent_refinement
     if not setup.update():
         raise RuntimeError("HFSS Driven adaptive setup update failed")
+    point_count = int(spec.run_control.sweep.points)
     sweep = hfss.create_linear_count_sweep(
         spec.run_control.setup_name,
         "GHz",
         spec.run_control.sweep.start_ghz,
         spec.run_control.sweep.stop_ghz,
-        num_of_freq_points=POINT_COUNT,
+        num_of_freq_points=point_count,
         name=spec.run_control.sweep_name,
         save_fields=False,
         sweep_type="Fast",
@@ -441,7 +441,7 @@ def _setup(hfss: Any, spec: HfssSpec) -> None:
         "Fast",
         f"{spec.run_control.sweep.start_ghz}GHz",
         f"{spec.run_control.sweep.stop_ghz}GHz",
-        POINT_COUNT,
+        point_count,
     )
     if actual != expected:
         raise RuntimeError(f"Fast sweep readback mismatch: {actual!r} != {expected!r}")
@@ -497,22 +497,6 @@ def _read_hfss_setup(hfss: Any, spec: HfssSpec) -> dict[str, Any]:
     if native != expected:
         raise RuntimeError(f"HFSS saved setup readback mismatch: {native!r}")
     return {"name": spec.run_control.setup_name, "native": native}
-
-
-def _saved_setup_properties(app: Any, setup_name: str) -> dict[str, Any]:
-    analysis = app.design_properties.get("AnalysisSetup")
-    setups = analysis.get("SolveSetups") if isinstance(analysis, dict) else None
-    setup_names = (
-        [name for name, value in setups.items() if isinstance(value, dict)]
-        if isinstance(setups, dict)
-        else []
-    )
-    if setup_names != [setup_name]:
-        raise RuntimeError("saved AEDT project does not contain one exact setup")
-    setup = setups[setup_name]
-    if not isinstance(setup, dict):
-        raise TypeError("saved AEDT setup properties are invalid")
-    return setup
 
 
 def _export(
@@ -674,10 +658,11 @@ def _write_complex_csv(
 ) -> dict[str, Any]:
     if not data:
         raise RuntimeError("solution-data extraction failed")
+    point_count = int(spec.run_control.sweep.points)
     frequency, _ = data.get_expression_data(expressions[0], "real")
-    if len(frequency) != POINT_COUNT:
+    if len(frequency) != point_count:
         raise RuntimeError(
-            f"extracted point count must be {POINT_COUNT}, got {len(frequency)}"
+            f"extracted point count must be {point_count}, got {len(frequency)}"
         )
     unit = data.units_sweeps.get(data.primary_sweep)
     values = [float(value) for value in frequency]
@@ -699,7 +684,7 @@ def _write_complex_csv(
         for expression in expressions
     }
     if any(
-        len(real) != POINT_COUNT or len(imag) != POINT_COUNT
+        len(real) != point_count or len(imag) != point_count
         for real, imag in columns.values()
     ):
         raise RuntimeError("solution-data expression length mismatch")
@@ -712,7 +697,7 @@ def _write_complex_csv(
         ],
     ]
     rows = []
-    for index in range(POINT_COUNT):
+    for index in range(point_count):
         row: dict[str, Any] = {"frequency_ghz": frequency[index]}
         for expression, (real, imag) in columns.items():
             row[f"Re({expression}){suffix}"] = real[index]
@@ -735,6 +720,7 @@ def _verify_touchstone(
         raise RuntimeError("Touchstone must be a nonempty .s2p file")
     if len(native_port_names) != 2 or len(set(native_port_names)) != 2:
         raise RuntimeError("Touchstone requires two ordered native port names")
+    point_count = int(spec.run_control.sweep.points)
     unit: str | None = None
     frequencies: list[float] = []
     header_ports: dict[int, str] = {}
@@ -768,7 +754,7 @@ def _verify_touchstone(
         frequencies.append(frequency)
     if (
         unit != "GHz"
-        or len(frequencies) != POINT_COUNT
+        or len(frequencies) != point_count
         or not math.isclose(
             frequencies[0], spec.run_control.sweep.start_ghz, abs_tol=1e-9
         )

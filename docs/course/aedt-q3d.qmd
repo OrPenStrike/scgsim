@@ -1,0 +1,78 @@
+---
+title: "AEDT: Q3D extraction"
+description: "Assign exact finite-thickness nets and choose combined extraction or a capacitance-only enclosure."
+scgsim-kind: "course"
+scgsim-status: "STABILIZED"
+scgsim-id: "docs/course/aedt-q3d"
+---
+
+Continue from [CPW inputs](aedt-inputs.qmd). Q3D extracts conductor matrices
+from a finite three-dimensional model. Unlike the HFSS sheet example, the
+public Q3D CPW uses **0.2 µm** metal thickness. Keep the same GDS polygons and
+PDK mapping, but declare the finite import interval for this branch:
+
+```python
+from pathlib import Path
+from scgsim.aedt import (
+    LayerImport, MatrixRunControl, Q3dNetSpec, Q3dSpec, prepare_handoff,
+)
+
+q3d_layers = (
+    LayerImport(1, 0, "D0_TOP_M1", 0.0, 0.2),
+    LayerImport(201, 0, "D0_SUBSTRATE", -500.0, 0.0),
+)
+nets = (
+    Q3dNetSpec("Signal", "Signal", ("D0_TOP_M1_1",),
+                "D0_TOP_M1_1", "-X", "D0_TOP_M1_1", "+X"),
+    Q3dNetSpec("GroundLeft", "Ground", ("D0_TOP_M1_2",)),
+    Q3dNetSpec("GroundRight", "Ground", ("D0_TOP_M1_3",)),
+)
+spec = Q3dSpec(
+    gds_path=source_gds, project_name="public_cpw_q3d",
+    design_name="CpwFiniteGroundQ3d",
+    materials=materials, vacuum_material_id="vacuum",
+    layer_imports=q3d_layers, object_bindings=object_bindings, nets=nets,
+    run_control=MatrixRunControl("Setup1", frequency_ghz=6.0, maximum_passes=3),
+    region_padding_um=(0.0, 0.0, 100.0, 100.0, 1000.0, 1000.0),
+    solve_ac_rl=True,
+)
+handoff = prepare_handoff(spec=spec, output_dir=Path(".artifacts/public-cpw-q3d"))
+print(handoff.spec_path, handoff.archive_path)
+```
+
+A Signal net explicitly names its source/sink object and sides. Ground nets
+have no source/sink. Together the nets cover every declared conductor exactly;
+net names are not reconstructed from object labels. The public example's 6 GHz
+frequency and three-pass limit are study inputs. Preserve the actual extraction
+criteria, any changes and native completion/convergence status in the Notebook.
+The [result-reading lesson](returned-results.qmd#interpret-for-scq-use) relates
+the selected matrix quantity and its available history to the intended SCQ use;
+the native stopping flag alone does not decide its adequacy.
+
+Keep native status, reported delta and actual controls with the matrix result;
+the [matrix observation contract](../specs/aedt-runtime.qmd#q2d-q3d-convergence-observations)
+describes their retention. Judge whether the matrix quantity and available
+changes support the accuracy your intended study needs.
+
+## Know which formulation you requested
+
+The default `solve_ac_rl=True` requests combined capacitance/conductance and
+AC resistance/inductance. The complete return seals native `c_matrix.csv`,
+`ac_rl_matrix.csv` and normalized `matrices.csv` under `results/q3d/`.
+
+For a capacitance/conductance-only study, create a separate spec with
+`solve_ac_rl=False`. That formulation returns only native `c_matrix.csv`; it
+creates no AC-RL setup or compatibility matrix artifact. A dedicated grounded
+Region enclosure is an additional optional model choice on that CG-only spec:
+`grounded_region_net="EnclosureGround"`, where the new net name differs from
+all physical nets. It requests six native PEC face sheets and preserves the
+physical Ground nets. It does not unite the sheets, add bridges or claim an
+AC/DC return path. The [contract](../specs/aedt-runtime.qmd#q3d-extraction-and-region-ground-candidate)
+owns native validation/readback and the distinction between enclosure and
+physical ground.
+
+Review the layer thickness, exact net membership and extraction choice, then
+[execute](execute.qmd) and [resolve the complete return](returned-results.qmd).
+Read matrices with their native units and conductor order. Changing enclosure
+or extraction formulation creates a different experiment, not an offline loss
+update to old results.

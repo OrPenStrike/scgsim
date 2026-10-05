@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
+from numbers import Number
 from pathlib import Path
 from typing import Any, Literal
 
@@ -111,7 +112,7 @@ def _adaptive_controls(
 
 @dataclass(frozen=True)
 class FrequencySweepSpec:
-    """One HFSS Fast sweep with the Human-fixed output count."""
+    """One HFSS Fast sweep with a caller-authored output count."""
 
     start_ghz: float
     stop_ghz: float
@@ -122,8 +123,14 @@ class FrequencySweepSpec:
         stop = _number(self.stop_ghz, "stop_ghz")
         if start <= 0 or stop <= start:
             raise ValueError("frequency sweep requires 0 < start_ghz < stop_ghz")
-        if self.points != POINT_COUNT:
-            raise ValueError(f"points must be exactly {POINT_COUNT}")
+        if isinstance(self.points, bool) or not isinstance(self.points, Number):
+            raise ValueError("points must be an exact whole-number numeric value")
+        try:
+            native_points = int(self.points)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("points must be an exact whole-number numeric value") from exc
+        if self.points != native_points:
+            raise ValueError("points must be an exact whole-number numeric value")
         object.__setattr__(self, "start_ghz", start)
         object.__setattr__(self, "stop_ghz", stop)
 
@@ -131,6 +138,7 @@ class FrequencySweepSpec:
         return {
             "start_ghz": self.start_ghz,
             "stop_ghz": self.stop_ghz,
+            # Preserve authored count representation in historical payload identity.
             "points": self.points,
         }
 

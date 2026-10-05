@@ -1,10 +1,11 @@
 [build-system]
 requires = ["setuptools>=77"]
-build-backend = "setuptools.build_meta"
+build-backend = "_build_backend"
+backend-path = ["."]
 
 [project]
 name = "scgsim"
-version = "1.0.0.dev31"
+version = "1.0.0rc1"
 description = "Research-first electromagnetic simulation workflows for superconducting circuits."
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
@@ -49,3 +50,12 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+exclude = ["scgsim._agent_knowledge*"]
+
+[tool.setuptools.package-data]
+scgsim = [
+    "_agent_knowledge/manifest.json",
+    "_agent_knowledge/README.md",
+    "_agent_knowledge/docs/*.qmd",
+    "_agent_knowledge/docs/**/*.qmd",
+]

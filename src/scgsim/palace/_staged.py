@@ -12,7 +12,6 @@ from tempfile import TemporaryDirectory
 from typing import Any, Literal
 
 from scgsim.semantics.route_a import (
-    adjacent_dielectric_region as semantic_adjacent_dielectric_region,
     apply_thin_film_profile,
     derive_thin_film_facts,
     geometry_z_range as semantic_geometry_z_range,
@@ -23,7 +22,6 @@ from scgsim.semantics.route_a import (
     normalize_optional_profile,
     record_geometry as semantic_record_geometry,
     same_z as semantic_same_z,
-    single_face_thin_film_facts,
     validate_single_face_metal_records,
 )
 from scgsim.sgb.models import GeometryBuildInput
@@ -289,35 +287,10 @@ def _validate_single_face_metal_records(
     )
 
 
-def _single_face_route_a_thin_film_facts(
-    face: tuple[float, float, list[str]],
-    *,
-    regions: Mapping[str, Any],
-    materials: Mapping[str, Any],
-    host_id: str,
-) -> dict[str, Any]:
-    return single_face_thin_film_facts(
-        face, regions=regions, materials=materials, host_id=host_id
-    )
-
-
 def _group_z_ranges(
     faces: Sequence[tuple[str, str, float, float]],
 ) -> list[tuple[float, float, list[str]]]:
     return semantic_group_z_ranges(faces)
-
-
-def _adjacent_dielectric_region(
-    regions: Mapping[str, Any],
-    materials: Mapping[str, Any],
-    *,
-    host_id: str,
-    z_um: float,
-    side: Literal["lower", "upper"],
-) -> dict[str, Any]:
-    return semantic_adjacent_dielectric_region(
-        regions, materials, host_id=host_id, z_um=z_um, side=side
-    )
 
 
 def _map_stack_z_ranges(stack: dict[str, Any], facts: Mapping[str, Any]) -> None:

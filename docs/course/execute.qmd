@@ -1,0 +1,94 @@
+---
+title: "5. Execute a handoff on its host"
+description: "Transfer complete prepared inputs, launch explicitly and retain the returned run identity."
+scgsim-kind: "course"
+scgsim-status: "STABILIZED"
+scgsim-id: "docs/course/execute"
+---
+
+Prerequisite: complete a backend lesson and retain its `handoff`. Preparation
+creates the input package. Execution is the separate operation that invokes the
+native solver. Keep your preparation-side notes and transfer the complete
+package, not just a mesh, JSON spec or project filename.
+
+## Palace: select the host's launch shape
+
+The Palace lessons configure `sim`, build its mesh and write its config.
+You now provide the real host executable, resources and setup commands. These
+values belong to your environment, so this example reads them from study-owned
+environment variables instead of prescribing a site's path or core count.
+
+```python
+import json
+import os
+from pathlib import Path
+
+handoff = sim.prepare_handoff(
+    profile=os.environ["SCGSIM_PALACE_PROFILE"],
+    executable=os.environ["SCGSIM_PALACE_EXECUTABLE"],
+    resources=json.loads(os.environ["SCGSIM_PALACE_RESOURCES_JSON"]),
+    setup_commands=tuple(json.loads(
+        os.environ.get("SCGSIM_PALACE_SETUP_COMMANDS_JSON", "[]")
+    )),
+)
+identity_note = Path(".artifacts/palace-preparation-handoff-id.txt")
+identity_note.parent.mkdir(parents=True, exist_ok=True)
+identity_note.write_text(handoff.handoff_id + "\n", encoding="utf-8")
+print(handoff.script_path, handoff.archive_path)
+```
+
+Retain this ID note outside the transferred package. If the backend lesson has
+already created a handoff, retain its ID instead of preparing a second one.
+The [profile contract](../execution-profiles.qmd) gives exact resource keys.
+`direct-local` can call a binary or the Palace wrapper. Slurm uses a binary
+inside the scheduler launcher; do not stack an MPI wrapper on top of `srun`.
+Resource requests are your allocation choice, not SCGSim's scientific criteria.
+
+Review the generated script, transfer/extract the complete archive, then run
+from its directory on the target host:
+
+```bash
+bash run_palace.sh
+```
+
+For the selected Slurm profile, the corresponding action is:
+
+```bash
+sbatch run_palace.sbatch
+```
+
+Submission establishes a scheduler request, not completion. The generated
+script first applies native `--dry-run` to the exact copied config, then invokes
+the solve only if that preflight succeeds. A preflight failure records its own
+stage and `solver_invoked=false`; it must not be interpreted as a failed PDE
+solve. Retrieve the full returned directory, including metadata and logs.
+
+## AEDT: execute the prepared package locally
+
+The AEDT lesson's `handoff` contains copied geometry where needed, spec,
+metadata, initial receipt, manifest and `run_aedt.sh`. Transfer the full package
+to the AEDT 2024.2 / PyAEDT 1.3.0 host and run from the extracted directory:
+
+```bash
+bash run_aedt.sh
+```
+
+The script invokes the common transaction with explicit execution. If using the
+CLI directly, retain the actual metadata path:
+
+```bash
+python -m scgsim.aedt.run --handoff metadata/aedt_handoff_metadata.json --execute
+```
+
+Execution opens the owned Desktop, prepares the selected native family, solves,
+exports and reads back actual outputs, then saves/releases and seals the
+receipt. A native failure, missing export or release failure does not become a
+completed result. A run directory is a single prepared execution unit; use a
+new output directory when preparing another request instead of overwriting its
+receipt/history.
+
+Retrieve the complete returned directory. An `.aedt` file alone does not prove
+that saved fields exist, and an isolated EPR JSON cannot replace full-run
+resolution. The next lesson [restarts and resolves the return](returned-results.qmd)
+without opening a solver. Additional saved-field EPR evaluation has its own
+[native analysis lesson](aedt-saved-fields.qmd).

@@ -1,5 +1,9 @@
 ---
-title: "Public Xmon: shared Eigenmode inputs"
+title: "2. Author shared Xmon inputs"
+description: "Author named public Xmon occurrences and final Nets into one immutable source snapshot."
+scgsim-kind: "course"
+scgsim-status: "STABILIZED"
+scgsim-id: "docs/tutorial-xmon-input"
 execute:
   enabled: false
 ---
@@ -15,6 +19,9 @@ Palace Route B example linked from [Examples](examples.qmd); they are public
 simulation inputs, not measured device data or paper-mask dimensions. Use the
 matched SCGSim and OrPen versions listed there. Quarto shows this code without
 executing it.
+
+The goal is one source snapshot shared by two backends. Start with
+[installation](course/installation.qmd), and retain `snapshot` in this session.
 
 The [pinned public OrPen Xmon sources](https://github.com/OrPenStrike/orpen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/src/ComponentSimulation/Kosen2024_Xmon)
 provide the Palace Route B lumped-port inductance of $11.78\,\mathrm{nH}$ used
@@ -36,21 +43,12 @@ device and bump references by their names; do not reconstruct hierarchy from
 flattened polygon names.
 
 ```python
-from pathlib import Path
-import hashlib
-import json
-
 import gdsfactory as gf
 import orpen_sc_pdk
 from orpen_sc_pdk import LAYER_STACK, get_material_records
 from orpen_sc_pdk.helpers.assembly import place_flip_chip_ground_short_bumps
 from orpen_sc_pdk.tech import OUTER_VACUUM_THICKNESS_UM
-from scgsim.sgb import GeometryPlan, build_gds_stack_geometry_input
-
-output_dir = Path.cwd() / ".artifacts" / "public-xmon-inputs"
-output_dir.mkdir(parents=True, exist_ok=True)
-gds_path = output_dir / "xmon.gds"
-stack_path = output_dir / "xmon.stack.json"
+from scgsim.sgb import GeometryPlan
 
 orpen_sc_pdk.activate()
 gf.clear_cache()
@@ -120,6 +118,7 @@ plan.set_vacuum_region(
     padding=(0.0, 0.0, float(OUTER_VACUUM_THICKNESS_UM))
 )
 snapshot = plan.prepare()
+port_name = "chip/device/o_junction_lumped"
 ```
 
 The outer Region padding is an explicit shared input, not a backend-specific
@@ -127,50 +126,14 @@ override. The authored `D0_TO_D1_GAP` remains its own vacuum Entity. Palace and
 AEDT choose different external boundary defaults; matching source geometry
 does not make those physical models identical.
 
-## Save and reread the GDS plus stack
+## Observe the prepared source and continue
 
-`GeometryPlanSnapshot.gds_bytes` and the detached `snapshot.stack` provide a
-portable GDS/JSON pair. The public SGB reader can load that pair independently
-of the live component references. This round trip checks the emitted GDS hash
-and qualified Entity identities; it does not validate native solver geometry.
+`snapshot.geometry_input` carries the qualified Entity and polygon inventory;
+`snapshot.stack` is detached and `snapshot.gds_bytes` binds the emitted GDS.
+The plan retains no live component references in that snapshot. Preparing it
+establishes source identity, not native geometry validation or a solve.
 
-```python
-gds_path.write_bytes(snapshot.gds_bytes)
-stack_path.write_text(
-    json.dumps(snapshot.stack, sort_keys=True, indent=2),
-    encoding="utf-8",
-)
-
-reloaded = build_gds_stack_geometry_input(
-    gds_file=gds_path,
-    stack_file=stack_path,
-    top_cell_name=snapshot.stack["metadata"]["top_cell_name"],
-)
-actual_gds_sha256 = hashlib.sha256(gds_path.read_bytes()).hexdigest()
-if actual_gds_sha256 != snapshot.gds_sha256:
-    raise ValueError("GDS/stack round trip changed the source GDS identity")
-if reloaded.metadata["gds_sha256"] != actual_gds_sha256:
-    raise ValueError("the detached stack does not identify these GDS bytes")
-if {item.semantic_id for item in reloaded.entities} != {
-    item.semantic_id for item in snapshot.geometry_input.entities
-}:
-    raise ValueError("GDS/stack round trip changed qualified Entity identities")
-
-port_name = "chip/device/o_junction_lumped"
-port_sheets = [
-    item for item in snapshot.geometry_input.port_sheet_regions
-    if item.metadata.get("source_name") == port_name
-]
-if len(port_sheets) != 1:
-    raise ValueError(f"expected one authored source sheet for {port_name!r}")
-port_sheet = port_sheets[0]
-if len(port_sheet.overlaps) != 2:
-    raise ValueError("the authored junction sheet must overlap two terminal owners")
-print(gds_path, stack_path, snapshot.gds_sha256)
-```
-
-The shared variable `snapshot` is ready for either backend page. The source
-sheet ID and its two owner overlaps come from the actual prepared port record;
-the examples do not invent a polygon ID or junction geometry. See the
-[GeometryPlan contract](geometry-sgb.qmd#component-to-backend-geometry-contract)
-for identity, grouping, and validation boundaries.
+Continue to [3. Inspect and retain source inputs](course/source-observations.qmd).
+That lesson reads the summary and portable GDS/stack pair, then links the
+Electrostatic and Eigenmode branches. The [GeometryPlan contract](geometry-sgb.qmd#component-to-backend-geometry-contract)
+defines occurrence, assignment and grouping behavior.

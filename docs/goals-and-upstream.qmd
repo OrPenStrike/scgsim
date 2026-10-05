@@ -1,5 +1,9 @@
 ---
 title: "Goals, Non-goals, and Upstream Relationship"
+description: "Project goals, exclusions and upstream derivation provenance."
+scgsim-kind: "project"
+scgsim-status: "STABILIZED"
+scgsim-id: "docs/goals-and-upstream"
 ---
 
 ## Goals
@@ -14,6 +18,26 @@ superconducting-circuit simulation workflows. Its direction is:
   through public fixtures and evidence;
 - Agent-driven development with exact revision and validation records.
 
+## V1 acceptance and delivery {#v1-acceptance-and-delivery}
+
+On 2026-10-05 the Human explicitly accepted the complete implemented V1
+semantics and assigned bounded stabilization. Acceptance covers the current
+geometry, supported solver workflows, result ownership, failure contracts,
+retained numerical/geometry policies and documented limitations, including
+caller-owned whole sweep counts, native convergence observations and narrow
+Palace native infinite-Q handling. The linked technical contracts remain the
+authority for exact behavior; acceptance adds no scientific adequacy threshold
+or support for excluded backends.
+
+The semantic state is **STABILIZED**: the Human-assigned minimal checks have
+passed independent review and preserve the accepted function and failure
+behavior. They do not establish universal physics accuracy or new native
+solver evidence. Develop uses prerelease metadata, including `1.0.0rc1`;
+first stable `main` uses `1.0.0`. Integration/publication and workspace
+synchronization are verified separately, and a stable main publication must
+be confirmed before it is treated as available.
+Historical receipts retain their original source, outcome and evidence scope.
+
 ## Non-goals
 
 SCGSim does not:
@@ -23,7 +47,7 @@ SCGSim does not:
 - automatically accept upstream gsim APIs as SCGSim APIs;
 - maintain compatibility shims for older experimental interfaces;
 - support Meep;
-- use external gdsfactory or cloud execution as a fallback;
+- use an external gsim runner or cloud execution as a fallback;
 - publish private designs, controls, paths, or run artifacts.
 
 ## Starting-source identities

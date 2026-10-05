@@ -1,61 +1,38 @@
 ---
-title: "Notebook UX Contracts"
+title: "Notebook consumer contract"
+description: "OrPen notebook ownership and stage-local package consumer behavior."
+scgsim-kind: "contract"
+scgsim-status: "STABILIZED"
+scgsim-id: "docs/notebook-ux"
 ---
 
-Public notebooks are a first-class OrPen SC PDK interface. SCGSim owns the
-runtime APIs they call and does not keep duplicate notebook source.
+Public component-simulation notebooks are an OrPen SC PDK interface. SCGSim
+owns their reusable runtime APIs and keeps no duplicate notebook source.
+The [course map](examples.qmd#public-inputs) links the canonical public sources.
 
-## Palace notebook contract
+## Stage-local controls
 
-Only `WORKFLOW_ACTION`, `RUN_ID`, and the run root are global controls. Every
-other control is placed beside its immediate action in these stages:
+Only workflow action, run ID and run root are global consumer controls.
+Component inputs, physics assumptions, mesh, config, resources and analysis
+selections belong beside their immediate actions. The visible sequence is
+source → model/EPR → mesh where applicable → config/handoff → explicit host
+execution → returned-run analysis. Backend setup stays visible; package-owned
+handoff, Desktop ownership, readback, hashes and resolution do not become
+notebook-local helper implementations.
 
-```text
-Build Component Coupon
--> Configure EPR / Problem
--> Build Mesh
--> Generate Config
--> Prepare Handoff
--> Analyze Returned Run
-```
+Source summaries precede preparation. Returned analysis starts with identity,
+numerical evidence and cost before physics. The [report contract](report-model.qmd)
+owns ordering/availability; [execution profiles](execution-profiles.qmd) own
+scripts/resources/return identity; backend contracts own controls. The notebook
+must not turn an incomplete receipt or unreadable final table into success.
 
-This contract permits Route A or Route B for the current Surface-EPR direction.
-It publishes no private component, selector, dimension, screenshot, config,
-mesh, receipt, or artifact.
+## Source and result custody
 
-Notebooks may set `amr_max_passes` (Palace `MaxIts`) and
-`amr_nonconformal` (Palace `Model.Refinement.Nonconformal`).
-`write_config()` always emits the `Nonconformal` key. The SCGSim default is
-`false` so generated configs do not inherit Palace's `true` default. Set
-`amr_nonconformal=True` only to opt into nonconformal AMR. Do not delete the
-key from a generated config.
-
-`prepare_handoff()` owns `run_palace.sbatch` / `run_palace.sh`. The `profile`
-argument is `direct-local`, `slurm-single-node`, or `slurm-multi-node`.
-Slurm jobs write stdout and stderr only to `logs/palace-%j.log`. Do not keep a
-duplicate `slurm-%j.out`.
-
-`## Analyze Returned Run` first displays run identity, AMR convergence, and
-simulation cost through `show_run_trustworthiness()`. Physics-result figures
-are a later report layer and are not the first notebook view.
-`resolve_palace_result()` remains strict and accepts completed runs only;
-`inspect_run_trustworthiness()` represents failed or partial runs without
-changing their receipt status. When the final primary table is missing or
-unreadable, inspection selects the latest readable `iterationNN`, records its
-source and receipt integrity, and lets the same `show_*` surfaces display it as
-partial evidence. Failure diagnosis is independent: a hash-verified Slurm OOM
-marker confirms out-of-memory, while exit 137 alone is reported only as a
-signal kill. Numerical Evidence plots each readable AMR scalar as its own
-figure. AMR error Norm, Maximum, and Mean share one log plot; Minimum is
-omitted. Legends sit to the right of each figure. `show_run_trustworthiness()`
-and `inspect_run_trustworthiness()` accept `theme="light"` (default) or
-`theme="dark"` for Plotly figures only. Identity cards, status cards, and
-tables follow the notebook theme. Simulation Benchmark keeps attempted-run
-and selected-snapshot cost data and also records per-AMR-pass wall time, DOFs,
-and seconds per million DOFs so later runs can accumulate cost statistics.
-
-## AEDT notebook contract
-
-AEDT examples use the same stage-local rule. Backend-specific setup remains
-visible, but handoff construction, execution, native readback, hashes, and
-result resolution stay in `scgsim.aedt`, not notebook-local helper code.
+PDK materials/fabrication and component local semantics remain with their owners.
+The notebook assigns named occurrences and the final Net map through GeometryPlan.
+Public notebooks contain no private geometry, selectors, dimensions, screenshots,
+configs, meshes, receipts or artifacts. Ignoring an artifact directory in Git
+does not preserve its bytes for later resolution; the study owner must retain
+its evidence. The [provenance contract](provenance.qmd) defines publication
+boundaries. Runtime implementation does not grant notebook acceptance or native
+solver accuracy.

@@ -1,0 +1,89 @@
+---
+title: "Palace Eigenmode and EPR contract"
+description: "The current staged Eigenmode facade, output selections and detached result boundary."
+scgsim-kind: "contract"
+scgsim-status: "STABILIZED"
+scgsim-id: "docs/specs/palace-eigenmode"
+---
+
+`scgsim.palace.EigenmodeSim` owns mutable mesh, config, resolved-port and handoff
+state. It is separate from Electrostatic and AEDT, with no common simulation
+base object. The [Palace lesson](../course/palace-eigenmode.qmd) teaches the
+ordinary sequence; [Xmon EPR](../tutorial-xmon-palace.qmd) adds optional physics.
+
+| Stage | Public surface |
+|---|---|
+| Shared source | `set_plan(GeometryPlanSnapshot)` |
+| Standalone source | `set_geometry(component)` and `set_stack(stack)` on a fresh unbound simulation |
+| Output | `set_output_dir(path)` |
+| Eigenmode | `set_eigenmode(*, num_modes=10, target=None, tolerance=1e-6, save=0)` |
+| Mesh controls | `set_mesh(*, refined_mesh_size, max_mesh_size)` |
+| Numerical controls | `set_numerical(...)` retains explicit order, linear solver, AMR and output choices |
+| Source/settings view | `input_summary()` returns detached source plus settings, no file/native I/O |
+| Surface model | `set_surface_epr(*, representation, specs, route_a_thin_film=None)` |
+| Authored port | `add_port(qualified_name, *, layer, layout_sheet=True, inductance)` |
+| Output selection | `set_epr_request(*, surface_interfaces=None, bulk_domain_ids=None, port_names=None)` |
+| Preparation | `mesh()`, `write_config()`, then `prepare_handoff(*, profile, executable, resources=None, setup_commands=(), petsc_options=())` |
+
+Target frequency is in hertz, mesh lengths in micrometres, inductance in henries.
+Ordinary Eigenmode does not require surface specs, ports or an EPR request.
+A bound plan carries the shared envelope and cannot be partially replaced by
+standalone geometry/stack or conflicting envelope setters. The
+[GeometryPlan contract](../geometry-sgb.qmd) owns source identity and route
+preparation. The [Electrostatic/shared Palace contract](palace-electrostatic-sgb.qmd)
+owns native multi-margin lowering and shared config controls.
+
+## Selection and physical meaning
+
+Surface selectors are `MA`, `MS`, `SA`. Bulk selectors are the SGB solution-volume
+`entry_name` values from `Domains.Postprocessing.Energy`. Port selectors are
+configured `LayoutPortBinding.name` values. `None` selects all configured
+entries, `()` selects none, and a subset must resolve against the exact written
+index. Unknown selections fail during config writing or result extraction.
+Filtering output does not delete physical domains/ports or change normalization.
+
+The unspecified external Eigenmode vacuum boundary retains native Palace PMC.
+This is different from the current AEDT EPR default Perfect E choice; a shared
+source snapshot does not imply field-model equality.
+
+## Results and offline analysis
+
+`resolve_palace_result(run_dir, *, expected_handoff_id)` requires a completed
+return and the separately retained preparation ID. The resulting
+`ResolvedPalaceResult.epr_result()` detaches available final Eigenmode EPR into
+`PalaceEprResult`, with `to_payload()` / `from_payload()` and rows/coverage.
+`resolve_epr_result(path)` reads that detached JSON without the full run.
+`reanalyze_epr(result, *, surface_defaults=None, group_overrides=None)` returns a
+new detached result, and `show_epr(result, *, mode=None)` returns a Plotly Figure.
+Neither operation opens Palace.
+
+### Native Eigenmode Q availability {#native-eigenmode-q}
+
+The Human-accepted V1 contract permits this narrow behavior: only the native `eig.csv` `Q` column may retain
+positive infinity (`+inf`) as its native-reported value during result
+resolution. The report labels it explicitly as **native-reported infinite Q**;
+a finite Q-based view is unavailable for that value. It does not infer a
+physical lossless model, replace infinity with a finite number or zero, or
+reject otherwise valid frequency/domain-energy data solely because of this Q
+value.
+
+Other native columns and the existing NaN/negative-infinity policies remain
+unchanged. This is not a blanket nonfinite allowance, and it does not relax
+completion, table structure, mode/index order, request identity or artifact
+custody. EPR normalization still uses its actual energy/frequency channels,
+not the native Q sentinel. Surface-Q behavior retains its existing separate
+contract. V1 acceptance does not establish scientific adequacy or completed
+stabilization.
+
+Native port participation is signed and phase-convention dependent. It is not
+AEDT's nonnegative inductive/capacitive junction pair. Loss assumptions and
+unknowns retain their meaning across detachment and updates; the
+[EPR concept](../eigenmode-epr.qmd) owns normalization and loss interpretation.
+The [report contract](../report-model.qmd) owns coverage, baseline versus margin
+presentation, partial availability and solver-specific quantities.
+
+Shared staged invalidation and per-file persistence are described under
+[implementation](../architecture.qmd#palace-preparation-lifecycle). Invalidation
+is not a promise of whole-workflow atomic disk replacement. Handoff preparation
+never executes or submits Palace; the [execution contract](../execution-profiles.qmd)
+owns the selected profile, resources and returned receipt.

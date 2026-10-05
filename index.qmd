@@ -1,0 +1,6 @@
+---
+title: ""
+output-file: index.html
+---
+
+{{< include README.md >}}

@@ -1583,31 +1583,6 @@ def _analysis_surface_sheet(
     return app.modeler[name], points
 
 
-def _domain_center(source: Mapping[str, Any], semantic_id: str) -> tuple[float, float, float]:
-    matches = [
-        item
-        for item in source["solution_regions"]
-        if item["semantic_id"] == semantic_id
-    ]
-    if len(matches) != 1:
-        raise ValueError(f"effective domain {semantic_id!r} is not unique")
-    geometry = matches[0]["geometry"]
-    bounds = geometry.get("domain_bounds_um")
-    if not isinstance(bounds, Mapping):
-        outer = geometry.get("outer_loop")
-        if not isinstance(outer, Sequence) or isinstance(outer, (str, bytes)):
-            raise ValueError(f"effective domain {semantic_id!r} lacks planar bounds")
-        xs = [float(point[0]) for point in outer]
-        ys = [float(point[1]) for point in outer]
-        x_center = (min(xs) + max(xs)) / 2.0
-        y_center = (min(ys) + max(ys)) / 2.0
-    else:
-        x_center = (float(bounds["x_min_um"]) + float(bounds["x_max_um"])) / 2.0
-        y_center = (float(bounds["y_min_um"]) + float(bounds["y_max_um"])) / 2.0
-    z_min, z_max = geometry_z_range(geometry, semantic_id)
-    return x_center, y_center, (z_min + z_max) / 2.0
-
-
 def _bounds_box(app: Any, entity: Mapping[str, Any], source: Mapping[str, Any]) -> Any:
     geometry = entity["geometry"]
     bounds = geometry.get("domain_bounds_um")

@@ -1,79 +1,88 @@
 ---
-title: "Examples and tutorials"
+title: "Simulation course"
+description: "Follow the input-to-results mainline, then choose a complete implemented backend branch."
+scgsim-kind: "course"
+scgsim-status: "STABILIZED"
+scgsim-id: "docs/examples"
 ---
 
-This is the tutorial entry point: build the shared Xmon inputs, then choose the
-Palace or AEDT backend path. SCGSim documents its handoff and result APIs;
-OrPen SC PDK owns the public component-simulation notebooks linked below.
+The course starts with one question: **what has this stage actually produced?**
+You will author source identity, choose a physical model, prepare real backend
+inputs, execute explicitly on a solver host and read the complete return in a
+fresh session. Optional EPR reanalysis changes attributed assumptions on actual
+recorded evidence. No page supplies synthetic solver output or runs a solver
+during site rendering.
 
-## Learn the shared Xmon workflow
+These lessons describe accepted V1 behavior; the lessons themselves are not proof
+of numerical accuracy. The [support matrix](backend-support.qmd) records
+capabilities and evidence limits. Executable public component notebooks remain
+owned by OrPen SC PDK; SCGSim owns the APIs and explanations they use.
 
-The shared-input page prepares one source snapshot. Choose a backend tutorial
-for its own configuration and result contract. These static pages document
-preparation and returned-package handling; they do not establish native
-geometry validation or a solver run.
+## Mainline: from source to an interpretable return
 
-1. [Build the public Xmon inputs](tutorial-xmon-input.qmd): construct the
-   component-local geometry, register named occurrences, set the Notebook's
-   final `Net -> Entity` map, and prepare the immutable input snapshot.
-2. [Prepare a Palace Route B Eigenmode handoff](tutorial-xmon-palace.qmd): use
-   that snapshot with Palace-specific configuration and result resolution.
-3. [Prepare an AEDT Route B Eigenmode handoff](tutorial-xmon-aedt.qmd): add
-   catalogue-bound MA/MS/SA surfaces, the source-linked Xmon junction, and
-   selected bulk domains using AEDT's backend-specific request.
+| Lesson | What you do | What you retain |
+|---|---|---|
+| [1. Choose an environment](course/installation.qmd) | Separate preparation, native host and analysis dependencies | Matching package/source identity and a selected kernel |
+| [2. Author shared Xmon inputs](tutorial-xmon-input.qmd) | Register occurrences, assign final Nets and prepare GeometryPlan | One immutable source snapshot |
+| [3. Inspect and retain source](course/source-observations.qmd) | Read normalized inputs and save the paired source | Source facts, unknowns and GDS/stack identity |
+| Choose a backend below | Configure its physical model and request | Actual mesh/config or portable AEDT handoff |
+| [4. Inspect the prepared backend](course/solver-observations.qmd) | Optionally inspect bound mesh/native assignments | Stage-specific geometry evidence, not a solve |
+| [5. Execute on the host](course/execute.qmd) | Transfer and launch the complete handoff explicitly | Actual returned receipt, outputs and logs |
+| [6. Restart and resolve](course/returned-results.qmd) | Verify the full return before reading physics | Identity-bound native quantities and benchmark availability |
+| [7. Reanalyze EPR offline](course/offline-epr.qmd) | Change assumptions on an available recorded EPR result | New attributed analysis, same field evidence |
 
-The backend pages keep their setup, handoff, and result contracts separate.
-Both remain converging candidates. For Route A background and the complete
-public notebook context, use the pinned
-[OrPen Xmon component-simulation sources](https://github.com/OrPenStrike/orpen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/src/ComponentSimulation/Kosen2024_Xmon).
-The [geometry guide](geometry-sgb.qmd) explains SCGSim's Route A/B geometry
-choices.
+Lessons 2–3 share one preparation session and `snapshot`. Backend lessons state
+which variables they need. Lesson 6 deliberately starts a fresh session and
+uses preserved files rather than the earlier live objects. You can start there
+when a complete returned package already exists. Ordinary network/extraction
+work ends with its verified native result; EPR stages apply only to a result
+that actually contains the required fields and requested analysis.
 
-## Prerequisites and scope
+## Choose the physical question
 
-Use Python 3.12 or 3.13 with the public OrPen SC PDK inputs at revision
-[`35b4dc1cdd3f921badcac2fe57a98366315ae8d9`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9).
-That revision declares OrPen SC PDK `0.1.0` and GDSFactory 9.48.x; the
-[pinned project metadata](https://github.com/OrPenStrike/orpen-sc-pdk/blob/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/pyproject.toml)
-records its dependency constraints. Read each backend page for its own local
-runtime prerequisites. The Palace page documents a handoff; the AEDT page
-documents its backend-specific candidate contract.
+| Question | Backend lesson | Source prerequisite |
+|---|---|---|
+| Terminal capacitance with explicit conductor/exterior ground choices | [Palace Electrostatic](course/palace-electrostatic.qmd) | Shared snapshot |
+| Resonant modes without optional film/port requests | [Palace Eigenmode](course/palace-eigenmode.qmd) | Shared snapshot |
+| Surface/bulk and inductive-port participation | [Palace Xmon EPR](tutorial-xmon-palace.qmd) | Shared Xmon + ordinary Eigenmode stages |
+| Port-free CPW mode frequency/native Q | [Ordinary HFSS Eigenmode](course/aedt-eigenmode.qmd) | [CPW GDS/material mapping](course/aedt-inputs.qmd) |
+| Surface/bulk/junction EPR with source-linked topology | [AEDT Xmon EPR](tutorial-xmon-aedt.qmd) | Shared Xmon snapshot |
+| Final fields on a released, sealed solution | [AEDT saved-field analysis](course/aedt-saved-fields.qmd) | Complete returned EPR cohort; native host still required |
+| Two-port response with integration lines | [HFSS Driven Modal](course/aedt-driven-modal.qmd) | CPW GDS/material mapping |
+| Two-port response with reference conductors | [HFSS Driven Terminal](course/aedt-driven-terminal.qmd) | CPW GDS/material mapping |
+| Finite 3D conductor matrices | [Q3D](course/aedt-q3d.qmd) | CPW GDS with finite metal import interval |
+| Per-unit-length cross-section C/G/L/R | [Q2D](course/aedt-q2d.qmd) | Explicit rectangles and conductor groups |
 
-These pages target the SCGSim source checkpoint
-[`a0e179ab014702a9889b1eb93b9192b3f54a8608`](https://github.com/OrPenStrike/scgsim/tree/a0e179ab014702a9889b1eb93b9192b3f54a8608).
-The published `1.0.0.dev28` version string alone does not identify or
-guarantee these source APIs; use the matching SCGSim checkout together with
-the OrPen revision above. Quarto leaves code execution disabled. The pages
-document handoff and result workflows; they do not report native solver runs
-or numerical validation.
+The CPW lessons share one source lesson instead of repeating the specimen in
+each family. Q2D uses explicit cross-section facts, not an implicit slice of a
+GeometryPlan. A common package lifecycle does not flatten capacitance,
+frequency, S-parameters, participation or per-unit-length quantities into a
+single physical result.
 
-## Find a workflow by task
+## Matched public inputs {#public-inputs}
 
-| If you want to… | Start here |
+The public inputs below are pinned to OrPen source
+[`35b4dc1cdd3f921badcac2fe57a98366315ae8d9`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9),
+which declares OrPen `0.1.0` and GDSFactory 9.48.x. Resolve its dependencies
+with the SCGSim checkout described by the selected documentation build. These
+lessons have been reconstructed against the current SCGSim APIs; the former
+`a0e179ab`/`dev28` tutorial checkpoint is historical, not their API authority.
+
+| Canonical public notebook group | Use |
 |---|---|
-| Build the public Xmon geometry inputs | [Shared Xmon inputs](tutorial-xmon-input.qmd) |
-| Inspect normalized inputs before mesh or handoff preparation | [Palace tutorial](tutorial-xmon-palace.qmd) or [AEDT tutorial](tutorial-xmon-aedt.qmd) |
-| Prepare a Palace Route B Eigenmode handoff | [Palace tutorial](tutorial-xmon-palace.qmd) |
-| Prepare an AEDT Route B surface, bulk, and junction EPR handoff | [AEDT tutorial](tutorial-xmon-aedt.qmd) |
-| Resolve and show a complete returned run package | [Palace tutorial](tutorial-xmon-palace.qmd) or [AEDT tutorial](tutorial-xmon-aedt.qmd) |
-| Load an existing result, inspect EPR, or update loss assumptions | [Eigenmode methods and offline EPR](eigenmode-epr.qmd) |
-| Compare package capabilities and exercised evidence | [Backend support matrix](backend-support.qmd) |
-| Place controls beside the notebook stage that uses them | [Notebook UX contracts](notebook-ux.qmd) |
-| Prepare a local or Slurm handoff | [Execution profiles and handoff](execution-profiles.qmd) |
+| [Kosen2024_Xmon](https://github.com/OrPenStrike/orpen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/src/ComponentSimulation/Kosen2024_Xmon) | Palace Route A/B Electrostatic/Eigenmode and source-first Xmon studies |
+| [ComponentSimulation/CpwFiniteGround](https://github.com/OrPenStrike/orpen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/src/ComponentSimulation/CpwFiniteGround) | Ordinary HFSS Eigenmode, Driven Modal/Terminal and Q3D |
+| [CrossSectionSimulation/CpwFiniteGround](https://github.com/OrPenStrike/orpen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/src/CrossSectionSimulation/CpwFiniteGround) | Q2D rectangles and conductor groups |
 
-## Canonical OrPen notebook groups
+The specimen dimensions and presets are public model inputs, not measured
+process/device evidence. An old notebook's comments do not replace the current
+package contract: for example, 3D Region padding uses the native
+`(+X,-X,+Y,-Y,+Z,-Z)` order, while Q2D uses `(-X,+X,-Y,+Y)`.
 
-The following links point to the same pinned OrPen source revision used by the
-static Xmon tutorials. They are the canonical notebook source; the links do not
-claim that SCGSim has executed or validated a native solve.
+## Read deeper when the stage needs it
 
-| Workflow | OrPen SC PDK source |
-|---|---|
-| Palace Route A/B Electrostatic and Eigenmode | [`notebooks/src/ComponentSimulation/Kosen2024_Xmon/`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/src/ComponentSimulation/Kosen2024_Xmon) |
-| HFSS Driven Terminal/Modal and Eigenmode | [`notebooks/src/ComponentSimulation/CpwFiniteGround/`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/src/ComponentSimulation/CpwFiniteGround) |
-| Q3D | [`notebooks/src/ComponentSimulation/CpwFiniteGround/`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/src/ComponentSimulation/CpwFiniteGround) |
-| Q2D | [`notebooks/src/CrossSectionSimulation/CpwFiniteGround/`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/src/CrossSectionSimulation/CpwFiniteGround) |
-
-Exact backend contracts live in the [AEDT runtime reference](specs/aedt-runtime.qmd)
-and [Palace + SGB reference](specs/palace-electrostatic-sgb.qmd). Result and
-plot contents are described in the [Unified Report Model](report-model.qmd).
+[Geometry concepts](concepts/geometry.qmd) explain source identity and
+approximation. [EPR concepts](eigenmode-epr.qmd) explain energy, normalization,
+mask alternatives and loss unknowns. The Contract navigation holds exact
+interfaces and failure rules; [architecture](architecture.qmd) describes their
+implementation. Start with [installation](course/installation.qmd).

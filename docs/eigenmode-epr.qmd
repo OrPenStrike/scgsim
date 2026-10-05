@@ -1,80 +1,39 @@
 ---
-title: "Eigenmode and Offline EPR"
+title: "Interpreting Eigenmode EPR"
+description: "Energy normalization, physical partitions, masks and attributed loss assumptions."
+scgsim-kind: "concept"
+scgsim-status: "STABILIZED"
+scgsim-id: "docs/eigenmode-epr"
 ---
 
-::: {.callout-note title="CONVERGING candidate contract"}
+::: {.callout-note title="Stabilized V1 interpretation contract"}
 Both backends provide one solver-specific `EigenmodeSim` with surface, bulk,
 and port/junction EPR analysis. Their preparation and result types remain
 backend-owned. Offline film reanalysis uses recorded result evidence and does
-not reopen a solver. This page documents the current candidate; it does not
-claim V1 stability. The [Backend Support Matrix](backend-support.qmd) separates
-the implemented candidate from the currently documented exercise evidence and
+not reopen a solver. This page documents accepted V1 semantics; assigned stabilization and
+release delivery remain separate. The [Backend Support Matrix](backend-support.qmd) separates
+accepted implementation from the currently documented exercise evidence and
 limits.
 :::
 
 ## Workflow and state contract {#workflow-and-state-contract}
 
-| Step | AEDT | Palace |
-|---|---|---|
-| Configure | Both facades consume the same prepared `scgsim.sgb.GeometryPlanSnapshot` through `set_plan(snapshot)`. AEDT then uses `set_output_dir(path)`, `set_eigenmode(*, project_name, design_name, run_control, route='B', route_a_profile=None, resources=None, geometry_workers=None)`, `set_surface_epr(*, contributions=(), defaults=None)`, `add_junction(PlanarJunction)`, and `set_epr_request(EprAnalysisRequest | None)`. | Palace then uses `set_output_dir(path)`, `set_eigenmode(*, num_modes=10, target=None, tolerance=1e-6, save=0)`, and `set_mesh(*, refined_mesh_size, max_mesh_size)`. Optional EPR setup: `set_surface_epr(*, representation, specs, route_a_thin_film=None)`, `add_port(qualified_name, *, layer, layout_sheet=True, inductance)`, and `set_epr_request(*, surface_interfaces: Sequence[str] | None = None, bulk_domain_ids: Sequence[str] | None = None, port_names: Sequence[str] | None = None)`. The outer vacuum envelope comes from the plan snapshot. |
-| Prepare a handoff | `prepare_handoff()` creates the versioned HFSS Eigenmode package. It does not run HFSS. | `mesh()` creates the local mesh; `write_config()` writes Palace configuration; `prepare_handoff(*, profile, executable, resources=None, setup_commands=(), petsc_options=())` creates the manual run package. Quarto examples are disabled and do not call these methods. |
-| Resolve returned results | `sim.resolve_results(run_dir=None)` resolves the AEDT run summary. `scgsim.aedt.resolve_epr_result(path)` loads the EPR result record. | `scgsim.palace.resolve_palace_result(run_dir, *, expected_handoff_id)` resolves a returned run; `resolved.epr_result()` detaches its final Eigenmode EPR quantities. `scgsim.palace.resolve_epr_result(path)` loads a detached EPR JSON file without reading the full solver run. |
-| Reanalyze and show | `scgsim.aedt.reanalyze_epr(result, *, surface_defaults=None, group_overrides=None)` returns a fresh `EprResult`; `show_epr(result, *, mode=None, native_pass=None, theme="light")` returns a Plotly `Figure`. | `scgsim.palace.reanalyze_epr(result, *, surface_defaults=None, group_overrides=None)` returns a fresh `PalaceEprResult`; `show_epr(result, *, mode=None)` returns a Plotly `Figure`. |
+Both backends consume a shared prepared source snapshot, but their preparation,
+request and result types remain backend-owned. Ordinary modes need no film-loss
+request. Surface, bulk and port/junction EPR extend a configured physical model;
+output selection does not remove modeled domains or change normalization.
 
-AEDT presentation accepts the keyword-only `theme="light"` or
-`theme="dark"`, defaulting to light, on `ResolvedRun.show_all_results()`,
-`ResolvedRun.show_simulation_benchmark()`, standalone `show_epr()` and
-`plot_epr_result()`, and `EigenmodeSim.show_epr()`. An invalid theme raises a
-`ValueError`; existing return types are unchanged. For example,
-`resolved.show_all_results(show_details=False, theme="dark")` selects a dark
-report explicitly. `InputSummary` has no theme parameter, and its detached
-`.data` is unchanged.
+Learn the operations in [Palace Eigenmode](course/palace-eigenmode.qmd),
+[Palace EPR](tutorial-xmon-palace.qmd), [AEDT EPR](tutorial-xmon-aedt.qmd) and
+[offline reanalysis](course/offline-epr.qmd). Exact signatures and selections
+belong to the [Palace Eigenmode contract](specs/palace-eigenmode.qmd) and
+[AEDT contract](specs/aedt-runtime.qmd). AEDT saved-field evaluation is a native
+workcopy operation; reanalysis of a recorded JSON result is offline arithmetic.
 
-::: {.callout-note title="Backend boundary choices"}
-The shared Eigenmode workflow does not promise identical models. In the current
-Palace setup, the external surface of the outer vacuum region is left
-unspecified, so Palace uses its natural PMC boundary ([Palace boundary guide](https://awslabs.github.io/palace/stable/guide/boundaries/)).
-New SCGSim AEDT EPR preparations record the `hfss_default.v1` policy and leave
-the Region exterior without a separate boundary assignment, so HFSS applies
-its default Perfect E boundary
-([AEDT runtime specification](specs/aedt-runtime.qmd#public-epr-candidate-surface)).
-These are intentional backend choices; SCGSim does not automatically convert
-one into the other, and the difference is not a missing parity feature.
-Comparisons should note the outer boundary, Region size, and backend settings.
-No harmonization is required.
-:::
-
-The ordinary Palace path prepares and resolves Eigenmode and domain-energy
-results without surface specs, a lumped port, or an EPR request. Those inputs
-are optional EPR declarations, not requirements for an Eigenmode run.
-
-The result belongs to its backend: AEDT keeps an `EprResult` anchored to its
-source evidence, while Palace can detach a `PalaceEprResult` with
-`to_payload()` / `from_payload()`. Neither backend uses a shared simulation
-base class. AEDT's `EprAnalysisRequest` is AEDT-specific; it is not a Palace
-configuration object.
-
-An ordinary Palace Eigenmode configuration does not need Surface-EPR specs or
-a lumped port. Add `set_surface_epr()` and `add_port()` only for those EPR
-model elements. Palace's
-`set_epr_request(*, surface_interfaces: Sequence[str] | None = None, bulk_domain_ids: Sequence[str] | None = None, port_names: Sequence[str] | None = None)`
-filters configured outputs. Surface values are `MA`, `MS`, and `SA`; bulk IDs
-are SGB solution-volume `entry_name` values from `Domains.Postprocessing.Energy`;
-port values are configured `LayoutPortBinding.name` values. `None` selects all
-configured entries, `()` selects none, and an explicit subset must resolve.
-Unknown selections fail against the exact index during config writing and
-result extraction. The selection is retained in result-bound metadata and can
-be read without a `Sim` object. It does not remove physical domains or ports
-from the native model or change the normalization; ordinary Palace Eigenmode
-also works without surface specs or ports.
-
-AEDT's `EprAnalysisRequest` has `mode_indices`, `surface_contribution_ids`,
-`junction_ids`, and `bulk_domain_ids`. `mode_indices=None` selects all requested
-Eigenmodes; an explicit mode selection must be nonempty and valid. For each of
-`surface_contribution_ids`, `junction_ids`, and `bulk_domain_ids`, `None` means
-all supported configured entries, an empty tuple means none, and an explicit
-selection must resolve. Omitting the AEDT EPR request means no EPR analysis
-request.
+The source envelope does not equalize backend exterior conditions: unspecified
+Palace Eigenmode uses natural PMC, while current AEDT EPR records HFSS default
+Perfect E. Record boundary choice, Region size and numerical controls when
+comparing physical models; no automatic harmonization is implied.
 
 ## Quantities and normalization {#quantities-and-normalization}
 
@@ -84,17 +43,16 @@ $$
 p_i = \frac{U_i}{U_{norm}}.
 $$
 
-AEDT uses the unique electric-domain normalization
-$U_E=\epsilon_0/2\sum_D\int_D\epsilon_r|E|^2dV$ plus the declared
-junction capacitive energies, $U_{norm}=U_E+\sum_j U_{C,j}$. Palace uses
-its final native electric-domain and capacitive-energy tables for its
-normalization. Thin-film estimates are numerator estimates; SCGSim does not add
+AEDT's denominator combines the unique electric-domain field energy and
+declared junction capacitive energy. Palace obtains its normalization from
+final native electric-domain and capacitive-energy tables. Thin-film estimates are numerator estimates; SCGSim does not add
 them back into either backend's denominator. The detailed AEDT MA/MS/SA
 surface formulas, material-side binding, and linearized junction normalization
 are documented in [the AEDT Eigenmode reference](specs/aedt-runtime.qmd#surface-estimates-and-junction-normalization).
 
-AEDT bulk domain participation uses
-$U_D=\epsilon_0/2\int_D\epsilon_r|E|^2dV$ divided by the same denominator.
+AEDT bulk-domain participation divides that domain's electric field energy by
+the same denominator; exact field-energy formulas belong to the linked runtime
+contract.
 The report presents surface, bulk, and junction/port partitions on separate
 axes; these views do not assert that every physical loss channel has been
 evaluated.
@@ -150,7 +108,12 @@ That native value does not turn an unknown assumption into a known zero: the
 Palace v2 index and detached EPR result preserve `loss_tangent=None`, and
 SCGSim's analysis keeps the inverse-Q contribution unavailable. A native
 infinite-Q or zero-loss display is not evidence that the loss is known to be
-zero.
+zero. The accepted Palace behavior retains only native Eigenmode `eig.csv`
+`Q=+inf` as explicitly reported native infinity, with its finite Q-based view
+unavailable. This preserves what the solver reported without supplying a
+physical lossless inference. The [Palace native Q contract](specs/palace-eigenmode.qmd#native-eigenmode-q)
+owns the allowance; EPR still uses actual energy/frequency evidence and its
+recorded loss assumptions, independently of that native Q value.
 
 Historical Palace surface-film records before
 `scgsim.palace.surface-film.v2` can contain a recorded `loss_tangent=0.0`
@@ -172,145 +135,11 @@ frequency, participation, and energy subplots; a valid partial-row frequency
 does not fill its unavailable EPR quantities. Both views use stable scientific
 keys for selection rather than readable display labels.
 
-## Static component examples {#static-component-examples}
+## Read the quantities in a real result
 
-The public Xmon inputs, component metadata, layer stack, and backend setup now
-live in the linked tutorials. They use the OrPen SC PDK source pinned in
-[Examples](examples.qmd); its film presets are modeling assumptions, not
-measured material properties. The shared page exports the annotated component
-and stack used by the Palace tutorial. The AEDT page documents a separate
-backend candidate on the same source snapshot and its authored vacuum-domain
-contract. The following backend sections retain their historical fragment
-URLs and link to the workflow guides.
-
-### Palace Route B {#palace-route-b}
-
-[Prepare the Palace Route B Eigenmode handoff](tutorial-xmon-palace.qmd) from
-the [shared Xmon inputs](tutorial-xmon-input.qmd). The tutorial owns the
-backend-specific setup, manual handoff, and returned-run resolution. Preparing
-or running the handoff is a user action; Quarto does not execute it.
-
-### AEDT HFSS Eigenmode {#aedt-hfss-eigenmode}
-
-[AEDT Route B Eigenmode guide](tutorial-xmon-aedt.qmd) describes the backend
-facade and candidate source bindings. Its static examples do not claim a
-native geometry check or solver run. Surface and junction selections must
-come from source bindings; see the
-[catalogue-driven handoff reference](specs/aedt-runtime.qmd#catalogue-driven-handoff).
-
-### Offline Palace result example {#offline-palace-result-example}
-
-Load a detached Palace EPR result on a later day, compare the recorded and
-updated loss assumptions for the same mode, and export both owner-labeled
-surface views. The detached result can be moved independently of the full run
-directory. The value below is an illustrative loss assumption, not a measured
-material property. This code creates no simulation object and invokes no
-Palace solver:
-
-```python
-from pathlib import Path
-
-from scgsim.palace import reanalyze_epr, resolve_epr_result, show_epr
-
-result = resolve_epr_result(
-    Path(".artifacts/public-xmon-palace-route-b/results/palace-epr-result.json")
-)
-mode = min(row["mode"] for row in result.rows)
-recorded_figure = show_epr(result, mode=mode)
-updated = reanalyze_epr(
-    result,
-    surface_defaults={"MA": {"loss_tangent": 2.0e-4}},
-)
-updated_figure = show_epr(updated, mode=mode)
-recorded_figure.write_html("palace-epr-recorded.html")
-updated_figure.write_html("palace-epr-updated.html")
-```
-
-Both figures show owner/interface labels and coverage in the surface panel;
-their hover data includes source membership and loss assumptions. Comparing
-the recorded and updated figures makes the effect of that assumption change
-visible while keeping the selected mode fixed.
-
-### Offline AEDT result example
-
-Load the final AEDT `epr-result.json` only after its separate saved-field
-analysis has completed. This file has no adaptive pass; select a mode, apply a
-new loss assumption, and compare the same mode before and after. Set `run_dir`
-to the directory containing the saved-field analysis:
-
-```python
-from pathlib import Path
-
-from scgsim.aedt import reanalyze_epr, resolve_epr_result, show_epr
-
-run_dir = Path("runs/aedt-eigenmode")
-result = resolve_epr_result(run_dir / "results/epr/epr-result.json")
-mode = min(row["mode"] for row in result.rows)
-recorded_figure = show_epr(result, mode=mode)
-updated = reanalyze_epr(
-    result,
-    surface_defaults={"MA": {"loss_tangent": 2.0e-4}},
-)
-updated_figure = show_epr(updated, mode=mode, theme="light")
-updated_dark_figure = show_epr(updated, mode=mode, theme="dark")
-recorded_figure.write_html("aedt-epr-recorded.html")
-updated_figure.write_html("aedt-epr-updated.html")
-updated_dark_figure.write_html("aedt-epr-updated-dark.html")
-```
-
-The surface bars carry owner labels and hover details, and the coverage note
-identifies uncomputed sidewalls and unknown losses. The loss value above is an
-illustrative assumption, not a measured material property.
-
-#### Select an adaptive mode and pass
-
-Adaptive history is a separate result from final saved-field EPR. To compare
-an exact historical pass before and after reanalysis, load its
-`adaptive-epr-result.json`, choose the latest complete pass for one returned
-mode, and use the public report view for the pass/convergence record:
-
-```python
-from pathlib import Path
-
-from scgsim.aedt import (
-    plot_epr_result,
-    reanalyze_epr,
-    resolve_epr_result,
-    show_epr,
-)
-
-run_dir = Path("runs/aedt-eigenmode")
-history = resolve_epr_result(
-    run_dir / "results/epr/adaptive-epr-result.json"
-)
-complete_rows = [row for row in history.rows if row["status"] == "complete"]
-if not complete_rows:
-    raise ValueError("adaptive history contains no complete passes for any mode")
-mode = min(row["mode"] for row in complete_rows)
-native_pass = max(
-    row["native_pass"]
-    for row in complete_rows
-    if row["mode"] == mode
-)
-history_before = show_epr(history, mode=mode, native_pass=native_pass)
-history_updated = reanalyze_epr(
-    history,
-    surface_defaults={"MA": {"loss_tangent": 2.0e-4}},
-)
-history_after = show_epr(history_updated, mode=mode, native_pass=native_pass)
-history_before.write_html("aedt-epr-pass-recorded.html")
-history_after.write_html("aedt-epr-pass-updated.html")
-convergence = plot_epr_result(
-    history,
-    mode=mode,
-    native_pass=native_pass,
-    show_convergence=True,
-    theme="dark",
-)
-convergence.write_html("aedt-epr-convergence.html")
-```
-
-The adaptive history figure and final saved-field figure remain separate; the
-first does not stand in for the second. These are static API workflows. Quarto
-does not prepare a handoff or run either solver, and the examples make no
-numerical-validation claim.
+Use [offline EPR](course/offline-epr.qmd) for mode/pass selection and attributed
+assumption changes on actual recorded results. It exports figures from evidence,
+not example numbers. The [report contract](report-model.qmd) owns visible
+coverage and ordering; native saved-field requirements live in the
+[AEDT contract](specs/aedt-runtime.qmd). Missing channels and unknown loss remain
+limitations on interpretation, not zero contributions.

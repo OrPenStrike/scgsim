@@ -1,0 +1,4 @@
+include _build_backend.py
+include README.md
+recursive-include docs *.qmd
+recursive-include src/scgsim/_agent_knowledge *.json *.md *.qmd

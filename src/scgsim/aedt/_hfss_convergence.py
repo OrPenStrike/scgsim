@@ -70,15 +70,9 @@ def read_hfss_convergence(
     if status == (1, 0):
         converged = True
         stop_reason = converged_text
-        if final_delta > target and not math.isclose(
-            final_delta, target, rel_tol=0.0, abs_tol=1e-12
-        ):
-            raise RuntimeError(f"{solver} reports convergence above its native target")
     elif status == (0, 1):
         converged = False
         stop_reason = not_converged_text
-        if final_pass != spec.run_control.maximum_passes:
-            raise RuntimeError(f"{solver} stopped before its configured maximum passes")
     else:
         raise RuntimeError(f"{solver} native convergence status is ambiguous")
 
@@ -172,16 +166,6 @@ def _read_eigenmode_convergence(
     ):
         raise RuntimeError(f"{solver} native final convergence delta does not match")
     converged = status == "Yes"
-    if converged:
-        if consecutive < spec.run_control.minimum_converged_passes or (
-            current > target
-            and not math.isclose(current, target, rel_tol=0, abs_tol=1e-12)
-        ):
-            raise RuntimeError(
-                f"{solver} reports convergence outside its native target"
-            )
-    elif completed != spec.run_control.maximum_passes:
-        raise RuntimeError(f"{solver} stopped before its configured maximum passes")
     return {
         "sources": {"export_convergence": _source(path, root)},
         "quantity": "maximum_delta_frequency",

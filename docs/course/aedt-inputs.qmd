@@ -1,0 +1,90 @@
+---
+title: "AEDT branch: prepare the public CPW inputs"
+description: "Share one explicit GDS and PDK mapping across ordinary HFSS and Q3D lessons."
+scgsim-kind: "course"
+scgsim-status: "STABILIZED"
+scgsim-id: "docs/course/aedt-inputs"
+---
+
+Use this branch after [installation](installation.qmd) for ordinary HFSS
+Eigenmode, Driven Modal/Terminal and Q3D. These families use direct GDS imports
+with explicit layer/object bindings. They do not automatically consume the
+Xmon GeometryPlan or its EPR catalogue. Q2D has its own explicit
+[cross-section lesson](aedt-q2d.qmd).
+
+The public specimen and executable notebook sources belong to
+[OrPen's pinned CPW group](../examples.qmd#public-inputs). Its CPW is 500 µm
+long, with a 10 µm signal, 6 µm gaps, 80 µm grounds and a 500 µm substrate.
+Those are example design inputs, not measured device geometry or universal
+solver settings. The GDS contains three metal rectangles and the substrate
+area. The PDK supplies the layer pairs and material/library facts.
+
+## Make the shared source and mapping
+
+```python
+from pathlib import Path
+import gdsfactory as gf
+import orpen_sc_pdk
+from orpen_sc_pdk.tech import LAYER
+from orpen_sc_pdk.materials import get_material_records
+from scgsim.aedt import LayerImport, ObjectBinding, PdkMaterial
+
+orpen_sc_pdk.activate()
+coupon = gf.Component()
+coupon << gf.components.rectangle(size=(500.0, 10.0), centered=True,
+                                  layer=LAYER.D0_TOP_M1_DRAW)
+upper = coupon << gf.components.rectangle(size=(500.0, 80.0), centered=True,
+                                          layer=LAYER.D0_TOP_M1_DRAW)
+upper.movey(51.0)
+lower = coupon << gf.components.rectangle(size=(500.0, 80.0), centered=True,
+                                          layer=LAYER.D0_TOP_M1_DRAW)
+lower.movey(-51.0)
+coupon << gf.components.rectangle(size=(500.0, 182.0), centered=True,
+                                  layer=LAYER.D0_SUBSTRATE_AREA)
+source_gds = Path(".artifacts/public-cpw-source/cpw.gds")
+source_gds.parent.mkdir(parents=True, exist_ok=True)
+coupon.write_gds(source_gds, with_metadata=False)
+
+records = get_material_records()
+materials = {
+    name: PdkMaterial(name, records[name]["material_kind"],
+                      records[name]["is_superconducting"],
+                      records[name]["aedt_library_name"])
+    for name in ("vacuum", "Si", "Nb")
+}
+layer_imports = (
+    LayerImport(1, 0, "D0_TOP_M1", 0.0, 0.0),
+    LayerImport(201, 0, "D0_SUBSTRATE", -500.0, 0.0),
+)
+object_bindings = (
+    ObjectBinding("D0_TOP_M1_1", 1, "signal", "Nb"),
+    ObjectBinding("D0_TOP_M1_2", 1, "ground", "Nb"),
+    ObjectBinding("D0_TOP_M1_3", 1, "ground", "Nb"),
+    ObjectBinding("D0_SUBSTRATE_4", 201, "substrate", "Si"),
+)
+ground_objects = ("D0_TOP_M1_2", "D0_TOP_M1_3")
+```
+
+The declared imported object names follow this pinned specimen/import order;
+SCGSim requires exact native readback later, not a semantic guess from a similar
+name. Zero metal Z thickness here means HFSS sheets. Q3D replaces that interval
+with finite thickness in its lesson. Material identity remains Nb even though
+the superconducting approximation lowers to PEC. Si and vacuum reference the
+PDK's exact AEDT library names; SCGSim does not manufacture their properties.
+
+Read `layer_imports` and `object_bindings` together. A binding's role tells the
+family which imported conductor is signal or ground, while `material_id` keeps
+PDK provenance. Each GDS layer/datatype pair must match the declared imports.
+Inspecting the coupon is source observation only; actual native object type,
+material and assignments are read back during execution.
+
+The native six-face padding order is `(+X, -X, +Y, -Y, +Z, -Z)`, matching PyAEDT.
+It differs from the Q2D four-value order. Use the spec's documented order rather
+than copying comments from a different family.
+
+Keep `source_gds`, `materials`, `layer_imports`, `object_bindings` and
+`ground_objects` in this preparation session. Continue to
+[ordinary Eigenmode](aedt-eigenmode.qmd), [Driven Modal](aedt-driven-modal.qmd),
+[Driven Terminal](aedt-driven-terminal.qmd), or [Q3D](aedt-q3d.qmd).
+This shared lesson authors no component notebook; the canonical OrPen notebooks
+remain the execution source for their complete consumer workflow.

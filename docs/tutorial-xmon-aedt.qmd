@@ -1,5 +1,9 @@
 ---
 title: "Public Xmon: AEDT Route B Eigenmode"
+description: "Bind junction-aware catalogue sources and prepare the shared-source AEDT EPR request."
+scgsim-kind: "course"
+scgsim-status: "STABILIZED"
+scgsim-id: "docs/tutorial-xmon-aedt"
 execute:
   enabled: false
 ---
@@ -18,7 +22,7 @@ solve this model.
 ## Configure surface and junction EPR
 
 The shared snapshot keeps authored `D0_TO_D1_GAP` separate from the generated
-outer vacuum domain. The AEDT candidate records HFSS's default Perfect E
+outer vacuum domain. The AEDT contract records HFSS's default Perfect E
 policy for background-exposed surfaces; Palace uses its natural PMC boundary.
 These backend choices are intentional and are not auto-converted. The
 [AEDT runtime reference](specs/aedt-runtime.qmd#public-epr-candidate-surface)
@@ -59,31 +63,32 @@ junction = planar_junction_from_port(
 )
 ```
 
-Build each valid MA/MS/SA contribution from the catalogue created from the
-same snapshot and junction. Partitioned rows can list both original and
-derived polygon IDs. In this example, `SurfaceEprSpec.source_polygon_id` uses
-the single original source polygon found by intersecting the row IDs with
-`snapshot.geometry_input.polygons`. The example raises if that row is
-ambiguous; other valid catalogue rows may require a deliberate source-polygon
-choice under the existing API. Film thickness, permittivity,
-loss tangent, and provenance come from OrPen's validated synthetic
-`LiteratureCentral` presets. Their values are modeling assumptions, not
-measured process properties. Each requested margin is an alternative to the
-automatically recorded unmasked baseline.
+Build each MA/MS/SA contribution from the catalogue prepared with the same
+snapshot and junction. A catalogue source identity can be an original conductor
+polygon, a junction-partition identity or an SA topology surface ID. It is not
+required to be a polygon in the original snapshot. Keep the contribution's
+field side and retained source identities; do not discard SA rows merely because
+their source ID starts with `SURF__SA__`.
+
+For this pinned Xmon example, selecting the first retained catalogue source ID
+binds each requested contribution, including the SA topology rows. This is a
+revision-bound specimen choice, not a rule for every component. For a different
+study, inspect the whole row and select a source identity retained by that
+contribution under the contract. Film thickness, permittivity, loss and source
+come from OrPen's synthetic `LiteratureCentral` presets; margins are alternative
+evaluations relative to the separately retained unmasked baseline.
 
 ```python
 from orpen_sc_pdk.materials import validate_interface_preset_records
 from scgsim.aedt import SurfaceEprSpec, prepare_planar_geometry_input
 
-catalogue = prepare_planar_geometry_input(
+prepared = prepare_planar_geometry_input(
     snapshot.geometry_input,
     prepared_stack=snapshot.stack,
     route="B",
     junctions=(junction,),
-).contribution_catalog
-original_polygon_ids = {
-    item.polygon_id for item in snapshot.geometry_input.polygons
-}
+)
+catalogue = prepared.contribution_catalog
 presets = validate_interface_preset_records()
 margins_um = (0.01, 0.05, 0.1)
 surface_specs = []
@@ -96,12 +101,7 @@ for record in catalogue:
     preset = presets[preset_name]
     if preset["interface_type"] != kind:
         raise ValueError(f"{preset_name} is not a {kind} preset")
-    original_sources = set(record["source_polygon_ids"]) & original_polygon_ids
-    if len(original_sources) != 1:
-        raise ValueError(
-            f"{record['contribution_id']} must resolve to one original source polygon"
-        )
-    source_polygon_id = next(iter(original_sources))
+    source_polygon_id = record["source_polygon_ids"][0]
     surface_specs.append(
         SurfaceEprSpec(
             contribution_id=record["contribution_id"],
@@ -117,18 +117,17 @@ for record in catalogue:
         )
     )
 
-if not {"MA", "MS", "SA"}.issubset(
-    {item.interface_kind for item in surface_specs}
-):
-    raise ValueError("the prepared Xmon catalogue must include MA, MS, and SA")
+print([(row["interface_kind"], row["field_side"], row["source_polygon_ids"])
+       for row in catalogue])
 ```
 
 ## Select reported rows and prepare a handoff
 
 The selection below requests mode 1, every catalogue-derived surface
-contribution, the declared junction, and the configured bulk domains. The
-`Region` bulk selector names AEDT's single native Region for the outer-vacuum
-envelope; it does not replace the snapshot's separate authored vacuum gap.
+contribution, the declared junction, and the configured bulk domains. Available bulk IDs come from the prepared solution records, replacing the
+logical outer-vacuum pieces with the single native `Region` selector. The pinned
+Xmon retains `D0_SUBSTRATE`, `D0_TO_D1_GAP`, `D1_SUBSTRATE` and `Region`; the
+outer-region replacement does not erase the authored inter-die gap.
 For AEDT requests, `None` selects all configured entries, `()` selects none,
 and an explicit tuple selects those IDs. These selections filter reported
 rows; they do not remove physical domains, junctions, or the surface model and
@@ -156,12 +155,13 @@ aedt_resources = AedtResources(
     cores=int(os.environ["SCGSIM_AEDT_CORES"]),
     ram_limit_percent=int(os.environ["SCGSIM_AEDT_RAM_LIMIT_PERCENT"]),
 )
-bulk_domain_ids = (
-    "D0_SUBSTRATE",
-    "D0_TO_D1_GAP",
-    "D1_SUBSTRATE",
-    "Region",
-)
+bulk_ids = {row["semantic_id"] for row in prepared.source["solution_regions"]}
+native_region = prepared.source.get("native_region")
+if native_region is not None:
+    bulk_ids.difference_update(native_region["logical_vacuum_ids"])
+    bulk_ids.add("Region")
+bulk_domain_ids = tuple(sorted(bulk_ids))
+print(bulk_domain_ids)
 
 sim = EigenmodeSim()
 sim.set_plan(snapshot)
@@ -212,55 +212,30 @@ handoff = sim.prepare_handoff()
 print(handoff.run_dir, handoff.script_path, handoff.archive_path)
 ```
 
-The run controls are preparation inputs, not convergence evidence or accuracy
-criteria. Use a new output directory for each preparation; SCGSim rejects an
+The run controls set the caller's native search and stopping request. They do
+not establish research sufficiency before a solve. Retain the actual criteria
+and any changes beside the returned native status and quantity history in the
+Notebook, then use the [research interpretation sequence](course/returned-results.qmd#interpret-for-scq-use)
+to explain whether that evidence answers the intended SCQ question. Use a new output directory for each preparation; SCGSim rejects an
 existing path. `prepare_handoff()` writes the portable package but does not
 open AEDT, create native geometry, or run the solver.
 
-## Run only on the AEDT host
+## Execute, resolve and continue the analysis
 
-Review the generated script and transfer the complete handoff directory to a
-machine with the required AEDT and PyAEDT versions. From inside that prepared
-directory on the AEDT host, run the script as a separate user action:
+[Execute the complete package](course/execute.qmd) explicitly on the AEDT host,
+then [restart and resolve the return](course/returned-results.qmd). The report
+reads sealed identity, numerical/history and benchmark evidence before physics.
+For the study's selected mode and surface contribution, inspect participation
+and its changes as well as frequency; frequency-only stopping does not describe
+the adequacy of a separate EPR quantity. Use the recorded criterion and native
+status as evidence without turning either into a universal acceptance rule.
+Preparation here constructs Python source/catalogue/request records; it does
+not create native CAD or establish calculator field-side accuracy.
 
-```bash
-bash run_aedt.sh
-```
-
-Retrieve the complete returned directory after the host run. The prepared
-inputs alone are not a completed simulation.
-
-## Resolve and show a returned package {#load-and-plot-a-returned-epr-record}
-
-Resolve the complete returned run directory, then show its receipt-bound
-primary, benchmark, and EPR results. `epr_result()` returns the captured
-adaptive history; it does not reopen AEDT.
-
-```python
-from pathlib import Path
-
-from scgsim.aedt import plot_epr_result, resolve_results
-
-returned_run_dir = Path(".artifacts/public-xmon-aedt-route-b")
-resolved = resolve_results(returned_run_dir)
-resolved.show_all_results()
-epr_result = resolved.epr_result()
-if epr_result is None:
-    raise RuntimeError("this Eigenmode handoff requested an adaptive EPR result")
-
-figure = plot_epr_result(epr_result, mode=1, show_convergence=True)
-figure.write_html("aedt-xmon-adaptive-epr.html")
-```
-
-`show_all_results()` uses the actual last completed native pass and shows the
-requested modes and adaptive history. `plot_epr_result()` also selects the
-recorded `solver_last_completed_pass` when `native_pass` is omitted; a partial
-row or missing mode remains unavailable, with no fallback to an earlier
-complete pass. For owner views and loss reanalysis at an explicitly selected
-pass, continue with the
-[adaptive-pass example](eigenmode-epr.qmd#select-an-adaptive-mode-and-pass),
-which supplies `native_pass` to `show_epr`. Saved-field analysis is a separate
-step and writes `results/epr/epr-result.json`; see the
-[offline AEDT example](eigenmode-epr.qmd#offline-aedt-result-example) for that
-analysis result. This page does not run saved-field analysis. `resolve_results`
-needs the complete returned run directory, not only an EPR JSON file.
+Adaptive history is separate from the final saved-field evaluation. Use
+[the saved-field analysis lesson](course/aedt-saved-fields.qmd) to verify the
+released cohort and evaluate its matching geometry/request in a native
+workcopy without solving again. Only then use its final `epr-result.json` in
+[offline EPR](course/offline-epr.qmd). Newly evaluated margins are not inserted
+into the old adaptive curve. Exact native bindings, inset construction and
+historical receipt rules remain in the [AEDT contract](specs/aedt-runtime.qmd).

@@ -2,16 +2,18 @@ project:
   type: website
   output-dir: _site
   render:
-    - README.md
+    - index.qmd
     - docs/*.qmd
     - docs/specs/*.qmd
+    - docs/course/*.qmd
+    - docs/concepts/*.qmd
 
 execute:
   enabled: false
 
 website:
   title: "SCGSim"
-  description: "Independent downstream research toolkit for superconducting-circuit simulation"
+  description: "Source geometry, explicit solver handoffs and verified electromagnetic results"
   page-navigation: true
   reader-mode: false
   search:
@@ -22,83 +24,76 @@ website:
   navbar:
     left:
       - text: "Start"
-        href: README.md
-      - text: "Tutorials"
+        href: index.qmd
+      - text: "Course"
         href: docs/examples.qmd
-      - text: "Guides"
-        href: docs/eigenmode-epr.qmd
-      - text: "Reference"
+      - text: "Concepts"
+        href: docs/concepts/geometry.qmd
+      - text: "Contracts"
         href: docs/backend-support.qmd
-      - text: "Project"
-        href: docs/goals-and-upstream.qmd
+      - text: "Implementation & project"
+        href: docs/architecture.qmd
   sidebar:
-    - id: start
-      title: "Pages"
+    - id: course
+      title: "Simulation course"
       style: docked
-      collapse-level: 2
+      collapse-level: 1
       contents:
-        - text: "Start"
-          href: README.md
-    - id: tutorials
-      title: "Pages"
+        - docs/examples.qmd
+        - section: "Mainline"
+          contents:
+            - docs/course/installation.qmd
+            - docs/tutorial-xmon-input.qmd
+            - docs/course/source-observations.qmd
+            - docs/course/solver-observations.qmd
+            - docs/course/execute.qmd
+            - docs/course/returned-results.qmd
+            - docs/course/offline-epr.qmd
+        - section: "Palace models"
+          contents:
+            - docs/course/palace-electrostatic.qmd
+            - docs/course/palace-eigenmode.qmd
+            - docs/tutorial-xmon-palace.qmd
+        - section: "AEDT models"
+          contents:
+            - docs/course/aedt-inputs.qmd
+            - docs/course/aedt-eigenmode.qmd
+            - docs/tutorial-xmon-aedt.qmd
+            - docs/course/aedt-saved-fields.qmd
+            - docs/course/aedt-driven-modal.qmd
+            - docs/course/aedt-driven-terminal.qmd
+            - docs/course/aedt-q3d.qmd
+            - docs/course/aedt-q2d.qmd
+    - id: concepts
+      title: "Concepts"
       style: docked
-      collapse-level: 2
       contents:
-        - text: "Examples"
-          href: docs/examples.qmd
-        - text: "Shared Xmon inputs"
-          href: docs/tutorial-xmon-input.qmd
-        - text: "Palace Route B Eigenmode"
-          href: docs/tutorial-xmon-palace.qmd
-        - text: "AEDT Route B Eigenmode + EPR"
-          href: docs/tutorial-xmon-aedt.qmd
-    - id: guides
-      title: "Pages"
+        - docs/concepts/geometry.qmd
+        - docs/eigenmode-epr.qmd
+    - id: contracts
+      title: "Contracts"
       style: docked
-      collapse-level: 2
       contents:
-        - text: "Eigenmode and offline EPR"
-          href: docs/eigenmode-epr.qmd
-        - text: "Execution profiles and handoff"
-          href: docs/execution-profiles.qmd
-        - text: "Headless geometry preview"
-          href: docs/geometry-preview.qmd
-        - text: "Tetrahedral mesh quality"
-          href: docs/mesh-quality.qmd
-        - text: "Unified report model"
-          href: docs/report-model.qmd
-    - id: reference
-      title: "Pages"
-      style: docked
-      collapse-level: 2
-      contents:
-        - text: "Backend support matrix"
-          href: docs/backend-support.qmd
-        - text: "GeometryPlan and SGB Route A/B"
-          href: docs/geometry-sgb.qmd
-        - text: "Notebook UX contracts"
-          href: docs/notebook-ux.qmd
-        - text: "AEDT Runtime Families"
-          href: docs/specs/aedt-runtime.qmd
-        - text: "Palace Electrostatic + SGB"
-          href: docs/specs/palace-electrostatic-sgb.qmd
+        - docs/backend-support.qmd
+        - docs/geometry-sgb.qmd
+        - docs/specs/palace-electrostatic-sgb.qmd
+        - docs/specs/palace-eigenmode.qmd
+        - docs/specs/aedt-runtime.qmd
+        - docs/execution-profiles.qmd
+        - docs/geometry-preview.qmd
+        - docs/mesh-quality.qmd
+        - docs/report-model.qmd
+        - docs/notebook-ux.qmd
     - id: project
-      title: "Pages"
+      title: "Implementation & project"
       style: docked
-      collapse-level: 2
       contents:
-        - text: "Goals and upstream relationship"
-          href: docs/goals-and-upstream.qmd
-        - text: "Architecture and data flow"
-          href: docs/architecture.qmd
-        - text: "Roadmap and priorities"
-          href: docs/roadmap.qmd
-        - text: "Provenance and data boundaries"
-          href: docs/provenance.qmd
-        - text: "Folder tree and ownership"
-          href: docs/ownership.qmd
-        - text: "Error archive"
-          href: docs/errors.qmd
+        - docs/architecture.qmd
+        - docs/goals-and-upstream.qmd
+        - docs/ownership.qmd
+        - docs/provenance.qmd
+        - docs/roadmap.qmd
+        - docs/errors.qmd
 
 format:
   askr-html:

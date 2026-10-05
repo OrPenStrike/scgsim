@@ -1,29 +1,33 @@
 ---
 title: "Backend Support Matrix"
+description: "Accepted V1 workflows, recorded exercise limits and explicit exclusions."
+scgsim-kind: "contract"
+scgsim-status: "STABILIZED"
+scgsim-id: "docs/backend-support"
 ---
 
 This matrix separates implementation state, the exercise evidence recorded for
-that scope, and claims that evidence does not establish. `CONVERGING` means an
-implementation candidate exists; it is not an accepted or stable V1 capability.
+that scope, and claims that evidence does not establish. The implemented V1 semantics are **STABILIZED** after reviewed assigned
+checks. Release delivery and the exercise evidence below remain separate.
 
-| Backend surface | Implementation | Exercise evidence recorded here | Current limit |
+| Backend surface | Implementation | Previously recorded exercise (not rerun here) | Current limit |
 |---|---|---|---|
-| Palace Electrostatic | Candidate; `CONVERGING` | Route A/B LTlab Slurm runs with strict resolution and reports exercised | Exercise scope does not establish all inputs or V1 stability. |
-| Palace Eigenmode | Candidate; `CONVERGING` | Route A/B LTlab Slurm runs with strict resolution and reports exercised | This does not validate every Eigenmode EPR output or numerical result. |
-| Palace Eigenmode EPR | Candidate APIs for surface, bulk, port, reanalysis, and reports; `CONVERGING` | The guide's paired component examples are static and make no native-solve or numerical-validation claim. | Sidewall energy may remain uncomputed; reported known-loss subtotal is not total device loss. |
+| Palace Electrostatic | Stabilized V1 | Route A/B Slurm runs with strict resolution and reports exercised | Exercise scope does not establish all inputs or V1 stability. |
+| Palace Eigenmode | Stabilized V1 | Route A/B Slurm runs with strict resolution and reports exercised | This does not validate every Eigenmode EPR output or numerical result. |
+| Palace Eigenmode EPR | Accepted surface, bulk, port, reanalysis and report APIs | The guide's paired component examples are static and make no native-solve or numerical-validation claim. | Sidewall energy may remain uncomputed; reported known-loss subtotal is not total device loss. |
 | Palace Driven | Not implemented | None | Planned for later. |
 | Palace Magnetostatic | Not implemented | None | Planned for later. |
-| HFSS Eigenmode | Candidate; `CONVERGING` | AEDT 2024.2 run and strict resolution exercised | Run/resolve exercise does not establish every saved-field EPR branch. |
-| HFSS Driven Modal | Candidate; `CONVERGING` | AEDT 2024.2 run and strict resolution exercised | Evidence is limited to the named run/resolve scope. |
-| HFSS Driven Terminal | Candidate; `CONVERGING` | AEDT 2024.2 run and strict resolution exercised | Evidence is limited to the named run/resolve scope. |
-| Q3D | Candidate; `CONVERGING` | AEDT 2024.2 run and strict resolution exercised | Evidence is limited to the named run/resolve scope. |
-| Q2D | Candidate; `CONVERGING` | AEDT 2024.2 run and strict resolution exercised | Evidence is limited to the named run/resolve scope. |
-| AEDT Eigenmode EPR | Candidate saved-field and history paths; `CONVERGING` | A bounded unsolved probe loaded four dependent expression definitions; the full inset-sheet library is not verified. | The probe does not establish field-side selection or numerical EPR accuracy. |
+| HFSS Eigenmode | Stabilized V1 | AEDT 2024.2 run and strict resolution exercised | Run/resolve exercise does not establish every saved-field EPR branch. |
+| HFSS Driven Modal | Stabilized V1 | AEDT 2024.2 run and strict resolution exercised | Evidence is limited to the named run/resolve scope. |
+| HFSS Driven Terminal | Stabilized V1 | AEDT 2024.2 run and strict resolution exercised | Evidence is limited to the named run/resolve scope. |
+| Q3D | Stabilized V1 | AEDT 2024.2 run and strict resolution exercised | Evidence is limited to the named run/resolve scope. |
+| Q2D | Stabilized V1 | AEDT 2024.2 run and strict resolution exercised | Evidence is limited to the named run/resolve scope. |
+| AEDT Eigenmode EPR | Accepted saved-field and history paths | A bounded unsolved probe loaded four dependent expression definitions; the full inset-sheet library is not verified. | The probe does not establish field-side selection or numerical EPR accuracy. |
 | Meep | Excluded | None | Not planned. |
 
 An exercised run is evidence only for its named scope. It does not establish
 universal solver correctness, numerical convergence, cross-backend agreement,
-or V1 acceptance. A namespace name or source-lane identity is not support.
+or independently grant V1 acceptance. A namespace name or source-lane identity is not support.
 
 Use the [Eigenmode and Offline EPR guide](eigenmode-epr.qmd) for the method and
 static workflow. The backend specifications own exact behavior:
@@ -31,3 +35,11 @@ static workflow. The backend specifications own exact behavior:
 [Palace Electrostatic + SGB](specs/palace-electrostatic-sgb.qmd). The
 [Unified Report Model](report-model.qmd) describes result presentation and
 availability.
+
+## Learn an implemented workflow
+
+Use the [course map](examples.qmd#choose-the-physical-question) for the
+Electrostatic, ordinary Eigenmode, Eigenmode/EPR, Driven Modal/Terminal, Q3D
+and Q2D lessons. The common course distinguishes source preparation, native
+geometry observation, explicit solve and verified return. A new documentation
+render is evidence of the readable site, not another solver exercise.

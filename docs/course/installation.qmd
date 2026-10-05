@@ -1,0 +1,91 @@
+---
+title: "1. Choose an environment"
+description: "Install the Python tools for your workflow and distinguish preparation from native execution."
+scgsim-kind: "course"
+scgsim-status: "STABILIZED"
+scgsim-id: "docs/course/installation"
+---
+
+The first choice is where each operation happens. A preparation computer builds
+source inputs and a portable handoff. A solver host has the native executable,
+license where required, and resources to run it. An analysis computer reads the
+complete returned package. These may be the same machine, but installing a
+Python extra does not install either solver.
+
+Start with Python 3.12 or 3.13 and a fresh virtual environment. These lessons
+describe the stabilized V1 source. The `develop` lane uses prerelease
+metadata, including `1.0.0rc1`; first stable `main` uses `1.0.0`. The version number
+alone does not promise the same API. Use the source revision recorded by the
+selected documentation build and the [matched public inputs](../examples.qmd#public-inputs).
+For a prerelease checkout, install that checkout rather than an older package.
+Select stable `main` only after its publication is confirmed, and use
+documentation matched to that release:
+
+```bash
+git clone --branch develop https://github.com/OrPenStrike/scgsim.git
+cd scgsim
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[palace]'
+```
+
+If reproducing a particular documentation build, select its recorded source
+revision in this clone before installing. Choose the extra for the actual work:
+
+| Work on this computer | Installation from the matching checkout | What it supplies |
+|---|---|---|
+| Resolve and plot returned results | `pip install -e .` | SCGSim, NumPy and Plotly |
+| Prepare Palace geometry/mesh/config | `pip install -e '.[palace]'` | GDSFactory 9.x, GDS reader and Gmsh |
+| Prepare ordinary HFSS or Q3D; use Q2D | `pip install -e '.[aedt]'` | GDS reader and PyAEDT 1.3.0 |
+| Prepare source-first AEDT Surface EPR | `pip install -e '.[aedt-epr]'` | AEDT dependencies plus GDSFactory 9.x and KLayout 0.30.x |
+| Inspect solver-bound geometry | `pip install -e '.[visualization]'` | Mesh reader, image tools and PyVista; combine with the backend extra |
+
+A visualization installation can be combined with a backend, for example
+`pip install -e '.[palace,visualization]'`. Rendering needs a usable native
+OpenGL/EGL context; an unavailable context is a rendering error, not a reason to
+show invented geometry. The [preview contract](../geometry-preview.qmd) describes
+which modes can be unavailable.
+
+## Match the public PDK and kernel
+
+The public component facts and executable notebooks belong to OrPen SC PDK.
+Use its pinned source listed on the course map, and resolve OrPen and SCGSim
+in the same environment. Their shared GDSFactory, kfactory and KLayout versions
+must come from one dependency resolution rather than two independent installs.
+For the public Palace source example, pass both sources to one pip resolution:
+
+```bash
+python -m pip install -e '.[palace]' 'orpen-sc-pdk @ git+https://github.com/OrPenStrike/orpen-sc-pdk.git@35b4dc1cdd3f921badcac2fe57a98366315ae8d9'
+```
+
+Change the SCGSim extra to the branch you need; keep the PDK revision matched to
+this course. Select that environment's Python kernel in your notebook frontend. Notebook
+frontend tooling is a user environment choice, not a SCGSim runtime API.
+
+```python
+from importlib.metadata import version
+print(version("scgsim"))
+```
+
+This observes the installed distribution version. Keep the checkout revision
+with your study notes too: two source checkpoints can expose different APIs
+under a development version. A successful import establishes Python package
+availability, not native solver availability or geometry correctness.
+
+## Prepare the solver host separately
+
+Palace handoffs require your real Palace executable or wrapper, its supported
+native configuration and the site's launch environment. You supply executable,
+resources and setup commands. SCGSim generates the selected local or Slurm
+script; it does not install Palace or submit jobs during preparation.
+
+AEDT execution targets AEDT **2024.2** with **PyAEDT 1.3.0** and an appropriate
+license. The package's Python 3.13 support is separate from evidence for a
+particular native AEDT run. The generated script owns one new Desktop session,
+saves and releases it, then records the observed result. Reading results later
+does not require opening Desktop.
+
+You are ready to [author the shared Xmon snapshot](../tutorial-xmon-input.qmd).
+For the ordinary CPW AEDT families, use the [CPW input branch](aedt-inputs.qmd).
+If you already have a complete returned run, start at
+[restart and resolve](returned-results.qmd).

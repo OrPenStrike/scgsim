@@ -1,0 +1,76 @@
+---
+title: "AEDT: analyze a sealed saved-field solution"
+description: "Verify a saved cohort and evaluate EPR in a native workcopy without requesting another solve."
+scgsim-kind: "course"
+scgsim-status: "STABILIZED"
+scgsim-id: "docs/course/aedt-saved-fields"
+---
+
+Prerequisite: a completed source-first
+[AEDT Eigenmode/EPR run](../tutorial-xmon-aedt.qmd), the complete returned
+saved-field cohort, and its matching prepared geometry and request. Follow
+[full-run resolution](returned-results.qmd) first. A project file alone is
+insufficient: the released project, entire result directory and sealed native
+saved-field evidence must identify the same model, design, setup, variation and
+pass.
+
+This stage evaluates fields through **native AEDT** in an owned disposable
+workcopy. It does not solve again, but it requires AEDT 2024.2, PyAEDT 1.3.0 and
+a license. The next lesson's JSON loss reanalysis is the operation that can run
+without opening the solver.
+
+## Recover the exact prepared model
+
+Retain the portable spec with the returned run. Reparse that spec rather than
+reconstructing geometry from display labels or rerunning a possibly changed PDK
+component. The EPR spec owns its exact `geometry`, `run_control` and
+`epr_request`:
+
+```python
+import json
+from pathlib import Path
+from scgsim.aedt import parse_aedt_spec, resolve_saved_solution
+
+returned_run_dir = Path(".artifacts/returned-aedt-epr")
+spec = parse_aedt_spec(json.loads(
+    (returned_run_dir / "aedt_spec.json").read_text(encoding="utf-8")
+))
+saved = resolve_saved_solution(returned_run_dir / "saved-solution-manifest.json")
+```
+
+Use the actual returned directory. This block verifies the sealed saved cohort
+offline before Desktop is opened. Its manifest identifies every retained result
+member; corrupt bytes, missing results or mismatched identities fail explicitly.
+The initial solve must have produced the EPR saved-field cohort and request;
+an ordinary Eigenmode spec cannot acquire them by reading this lesson.
+
+## Evaluate in a new analysis directory
+
+```python
+from scgsim.aedt import analyze_epr
+
+final_epr = analyze_epr(
+    saved_solution=saved,
+    geometry=spec.geometry,
+    project_name=spec.project_name,
+    design_name=spec.design_name,
+    run_control=spec.run_control,
+    epr_request=spec.epr_request,
+    output_dir=Path(".artifacts/public-xmon-saved-field-analysis"),
+)
+```
+
+The new output directory preserves the original released solution and normal
+run receipt. SCGSim archives/copies the immutable evidence, reopens the working
+copy, checks bound context and expression definitions, then evaluates the
+requested fields without a solve or export call. If the fields or definitions
+are unavailable, it fails rather than inventing EPR from adaptive history.
+
+The separate analysis receipt and `results/epr/epr-result.json` describe the
+final saved-field evaluation. Requested fresh margins use this final field
+result; they must not be inserted as though measured during an earlier adaptive
+pass. Read the actual selected mode and coverage before applying loss
+assumptions. Continue to [offline EPR](offline-epr.qmd), where `reanalyze_epr`
+updates assumptions on these recorded numerators without native execution.
+The [runtime contract](../specs/aedt-runtime.qmd) owns exact saved-field context,
+material-side support and analysis failure behavior.

@@ -1,14 +1,17 @@
 ---
 title: "Public Xmon: Palace Route B Eigenmode"
+description: "Add attributed films and a source-linked inductive port to Palace Eigenmode."
+scgsim-kind: "course"
+scgsim-status: "STABILIZED"
+scgsim-id: "docs/tutorial-xmon-palace"
 execute:
   enabled: false
 ---
 
 Run the [shared Xmon input tutorial](tutorial-xmon-input.qmd) first in the
-same Python session. It defines `snapshot`, `port_name`, `gds_path`, and
-`stack_path` from public component and coupon inputs. This page follows the
-OrPen Palace Route B workflow linked from [Examples](examples.qmd). It prepares
-a manual handoff; the documentation build does not mesh or run Palace.
+same Python session. It defines `snapshot` and `port_name` from public component and coupon inputs. This extends [ordinary Palace Eigenmode](course/palace-eigenmode.qmd) with
+attributed films and a source-linked inductive port. Configure these before
+meshing. The documentation build does not mesh or run Palace.
 
 ## Configure Eigenmode and EPR outputs
 
@@ -107,105 +110,24 @@ from IPython.display import display
 display(sim.input_summary())
 ```
 
-## Prepare a manual handoff
-
-Supply the executable, resource mapping, and any target-host setup commands
-from your own environment. These example variable names are not SCGSim
-settings; no site path, module command, process count, or thread count is
-assumed by this tutorial. See [Execution Profiles](execution-profiles.qmd)
-before choosing `direct-local` or a Slurm profile.
-
-```python
-import json
-import os
-
-palace_profile = os.environ["SCGSIM_PALACE_PROFILE"]
-palace_executable = os.environ["SCGSIM_PALACE_EXECUTABLE"]
-palace_resources = json.loads(os.environ["SCGSIM_PALACE_RESOURCES_JSON"])
-raw_setup_commands = json.loads(
-    os.environ.get("SCGSIM_PALACE_SETUP_COMMANDS_JSON", "[]")
-)
-if not isinstance(raw_setup_commands, list) or any(
-    not isinstance(command, str) for command in raw_setup_commands
-):
-    raise TypeError("SCGSIM_PALACE_SETUP_COMMANDS_JSON must be a JSON string list")
-palace_setup_commands = tuple(raw_setup_commands)
-```
-
-This cell reads caller-provided values and fails if required variables are
-missing or malformed. It does not install Palace or configure the remote host.
-The resource keys and their profile-specific requirements are listed in the
-[execution profile reference](execution-profiles.qmd#fixed-handoff-profiles).
-
-The following calls build a local mesh, write Palace configuration, and create
-a manual handoff. They do not execute Palace.
+## Build inputs, execute and read the return
 
 ```python
 mesh_path = sim.mesh()
 config_path = sim.write_config()
-handoff = sim.prepare_handoff(
-    profile=palace_profile,
-    executable=palace_executable,
-    resources=palace_resources,
-    setup_commands=palace_setup_commands,
-)
-handoff_id_note = Path.cwd() / ".artifacts" / "public-xmon-palace-handoff-id.txt"
-handoff_id_note.parent.mkdir(parents=True, exist_ok=True)
-handoff_id_note.write_text(handoff.handoff_id + "\n", encoding="utf-8")
-print(mesh_path, config_path, handoff.run_dir, handoff.script_path, handoff.archive_path)
+print(mesh_path, config_path)
 ```
 
-Inspect the generated script and transfer the complete handoff package to the
-target host. Run the generated command there manually. For a direct-local
-profile, from inside the handoff directory:
+These are real local preparation operations. The written index binds each
+surface baseline/margin and configured port to its mesh identity; it is not a
+field result. [Inspect the backend](course/solver-observations.qmd) if useful,
+then [prepare and execute its handoff](course/execute.qmd). Retain the Palace
+handoff ID on the preparation side, outside the transferred package.
 
-```bash
-bash run_palace.sh
-```
-
-For a Slurm profile, submit the generated `run_palace.sbatch` with `sbatch`;
-the script invokes the selected launcher inside the allocation. These commands
-are separate user actions and Quarto never runs them. Keep `handoff_id_note`
-on the preparation side, outside the handoff directory and archive, and make
-that independently retained value available when resolving the returned
-package.
-
-## Resolve a returned run
-
-Use this block only after the complete returned Palace run directory is
-available. Resolve it against the preparation-side ID note; the expected ID
-must not be read from the returned package.
-
-```python
-import json
-from pathlib import Path
-
-from scgsim.palace import resolve_palace_result
-
-returned_run_dir = Path(".artifacts/public-xmon-palace-route-b")
-handoff_id_note = Path(".artifacts/public-xmon-palace-handoff-id.txt")
-expected_handoff_id = handoff_id_note.read_text(encoding="utf-8").strip()
-if not expected_handoff_id:
-    raise ValueError("the returned run must be matched to its prepared handoff ID")
-resolved = resolve_palace_result(
-    returned_run_dir,
-    expected_handoff_id=expected_handoff_id,
-)
-resolved.show_all_results()
-epr_result = resolved.epr_result()
-if epr_result is None:
-    raise RuntimeError("this Eigenmode handoff requested a Palace EPR result")
-epr_json = returned_run_dir / "results" / "palace-epr-result.json"
-epr_json.write_text(
-    json.dumps(epr_result.to_payload(), indent=2),
-    encoding="utf-8",
-)
-```
-
-The resolver verifies the complete returned run against the ID retained during
-preparation. `show_all_results()` presents the resolved run, and
-`epr_result()` returns its detached EPR record. The final lines save that
-record as a standalone JSON file for the
-[offline EPR workflow](eigenmode-epr.qmd#offline-palace-result-example), where
-you can select a mode, change loss assumptions, compare owner-labeled views,
-and export Plotly HTML without reopening Palace.
+After full retrieval, [restart and strictly resolve](course/returned-results.qmd).
+The report presents identity/numerical/cost evidence before available physics.
+`resolved.epr_result()` detaches available final Eigenmode EPR. Follow
+[offline EPR](course/offline-epr.qmd) to retain it, select a recorded mode and
+change attributed assumptions without solving again. The
+[Palace Eigenmode contract](specs/palace-eigenmode.qmd) owns exact selections;
+[EPR concepts](eigenmode-epr.qmd) explain normalization and signed port meaning.
