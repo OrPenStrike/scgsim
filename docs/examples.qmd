@@ -2,7 +2,7 @@
 title: "Simulation course"
 description: "Follow the input-to-results mainline, then choose a complete implemented backend branch."
 scgsim-kind: "course"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/examples"
 ---
 
@@ -13,7 +13,7 @@ fresh session. Optional EPR reanalysis changes attributed assumptions on actual
 recorded evidence. No page supplies synthetic solver output or runs a solver
 during site rendering.
 
-These are current **CONVERGING** package lessons, not Human acceptance or proof
+These lessons describe accepted V1 behavior; the lessons themselves are not proof
 of numerical accuracy. The [support matrix](backend-support.qmd) records
 capabilities and evidence limits. Executable public component notebooks remain
 owned by OrPen SC PDK; SCGSim owns the APIs and explanations they use.

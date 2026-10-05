@@ -2,7 +2,7 @@
 title: "Public Xmon: AEDT Route B Eigenmode"
 description: "Bind junction-aware catalogue sources and prepare the shared-source AEDT EPR request."
 scgsim-kind: "course"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/tutorial-xmon-aedt"
 execute:
   enabled: false
@@ -22,7 +22,7 @@ solve this model.
 ## Configure surface and junction EPR
 
 The shared snapshot keeps authored `D0_TO_D1_GAP` separate from the generated
-outer vacuum domain. The AEDT candidate records HFSS's default Perfect E
+outer vacuum domain. The AEDT contract records HFSS's default Perfect E
 policy for background-exposed surfaces; Palace uses its natural PMC boundary.
 These backend choices are intentional and are not auto-converted. The
 [AEDT runtime reference](specs/aedt-runtime.qmd#public-epr-candidate-surface)

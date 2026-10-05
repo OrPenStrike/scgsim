@@ -2,7 +2,7 @@
 title: "6. Restart and resolve the complete return"
 description: "Bind returned evidence, then interpret quantities and history for the stated SCQ research use."
 scgsim-kind: "course"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/course/returned-results"
 ---
 

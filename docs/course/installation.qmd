@@ -2,7 +2,7 @@
 title: "1. Choose an environment"
 description: "Install the Python tools for your workflow and distinguish preparation from native execution."
 scgsim-kind: "course"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/course/installation"
 ---
 
@@ -13,10 +13,13 @@ complete returned package. These may be the same machine, but installing a
 Python extra does not install either solver.
 
 Start with Python 3.12 or 3.13 and a fresh virtual environment. These lessons
-describe the current SCGSim development source; the published version number
+describe the stabilized V1 source. The `develop` lane uses prerelease
+metadata, including `1.0.0rc1`; first stable `main` uses `1.0.0`. The version number
 alone does not promise the same API. Use the source revision recorded by the
 selected documentation build and the [matched public inputs](../examples.qmd#public-inputs).
-For a development checkout, install that checkout rather than an older package:
+For a prerelease checkout, install that checkout rather than an older package.
+Select stable `main` only after its publication is confirmed, and use
+documentation matched to that release:
 
 ```bash
 git clone --branch develop https://github.com/OrPenStrike/scgsim.git

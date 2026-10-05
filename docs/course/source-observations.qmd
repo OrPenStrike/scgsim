@@ -2,7 +2,7 @@
 title: "3. Inspect and retain source inputs"
 description: "Read normalized source facts and save the paired GDS and stack without claiming native geometry."
 scgsim-kind: "course"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/course/source-observations"
 ---
 

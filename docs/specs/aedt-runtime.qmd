@@ -2,15 +2,16 @@
 title: "AEDT Runtime Families"
 description: "AEDT family specifications, native readback, receipt cohorts and saved-field analysis."
 scgsim-kind: "contract"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/specs/aedt-runtime"
 ---
 
 The [course map](../examples.qmd) links every implemented AEDT family lesson. This page owns exact specifications, failure rules and historical reader contracts.
 
-::: {.callout-note title="CONVERGING candidate contract"}
+::: {.callout-note title="Stabilized V1 contract"}
 HFSS Driven Terminal/Modal, HFSS Eigenmode, Q3D, and Q2D have live run and
-strict resolve evidence. The scope remains converging rather than V1 stable.
+strict resolve evidence. These semantics are Human-accepted; stabilization and release delivery
+remain separate.
 :::
 
 ## One shared lifecycle
@@ -49,7 +50,7 @@ run.py: release Desktop -> write final receipt
 ```
 
 The normal command and diagnostic instrumentation use the same private family
-preparation functions. The EPR candidate adds `--execute --prepare-only`
+preparation functions. The EPR path adds `--execute --prepare-only`
 through this same transaction and native builder. It saves and reads back the
 prepared model, releases the owned Desktop, and reports
 `native_preparation_only` with `solver_invoked=false`; it is a native
@@ -173,8 +174,7 @@ checked by the resolver has that meaning.
 
 ### HFSS Driven caller-owned sweep count {#hfss-driven-sweep-count}
 
-Human selected this implementation direction for the current **CONVERGING**
-candidate. `FrequencySweepSpec(start_ghz, stop_ghz, points=20000)` keeps its
+The Human-accepted V1 contract provides this behavior. `FrequencySweepSpec(start_ghz, stop_ghz, points=20000)` keeps its
 existing public `points` field and default. The caller chooses the sample count
 for the study. Exact whole-number numeric inputs, including `20000.0`, are
 accepted and converted losslessly to the native/count integer. A non-whole
@@ -200,8 +200,7 @@ chosen by SCGSim.
 
 ### HFSS convergence observations {#hfss-convergence-observations}
 
-Human selected this implementation direction for the current **CONVERGING**
-candidate, covering HFSS Driven and Eigenmode only. Native convergence status,
+This accepted observation contract covers HFSS Driven and Eigenmode only. Native convergence status,
 caller-authored criteria and changes, reported delta, final pass and available
 native records remain observations. For Eigenmode, `Current Consecutive Passes`
 and native convergence history remain in the hash-bound
@@ -230,17 +229,17 @@ FAILED receipt.
 Request-setting identity (C4), cross-export self-consistency (C5), native/source
 identity, required formats and artifact hashes remain checked. Requested
 controls and returned evidence must still belong to the same run. The separate
-[Q2D/Q3D observation candidate](#q2d-q3d-convergence-observations) below covers
+[Q2D/Q3D observation contract](#q2d-q3d-convergence-observations) below covers
 matrix-family qualifications. The caller interprets quantity/history
 for the intended SCQ use as taught in the
 [result-reading lesson](../course/returned-results.qmd#interpret-for-scq-use);
-this direction adds no numerical sufficiency threshold or whole-V1 acceptance.
+this direction adds no numerical sufficiency threshold or scientific certification.
 
 ### Q2D/Q3D convergence observations {#q2d-q3d-convergence-observations}
 
-The current **CONVERGING** Q2D/Q3D candidate applies the native-observation
-direction to these two additional qualifications, separately from the earlier
-HFSS-only scope:
+The accepted Q2D/Q3D contract applies the native-observation direction to
+these two additional qualifications, separately from the earlier HFSS-only
+scope:
 
 - A native converged classification is not rejected solely because its final
   reported delta exceeds the configured target.
@@ -259,8 +258,8 @@ their failure meaning; existing FAILED receipts are not reclassified. Required
 metric/control formats, configured-control identity, native/source identity and
 artifact custody remain checked. The accepted Q2D one-file primary matrix
 export, finite C/G/L/R data, units, frequency, conductor order and historical
-readers are unchanged. This candidate changes no API/schema or numeric
-precision and establishes no research threshold or whole-V1 acceptance.
+readers are unchanged. This behavior changes no API/schema or numeric
+precision and establishes no research threshold or scientific certification.
 
 ### HFSS Eigenmode native frequency export {#hfss-eigenmode-native-frequency-export}
 
@@ -351,10 +350,10 @@ creating a second artifact.
 Resolution fails closed unless the connected AEDT/PyAEDT versions, declared
 setup and `LastAdaptive` solution, frequency, per-unit-length units, conductor
 order, and every primary matrix value match the sealed run and are finite.
-This Q2D contract is accepted V1 behavior; the broader AEDT surface remains
-`CONVERGING` and is not V1 stable.
+This Q2D contract is accepted V1 behavior; the broader implemented AEDT surface is also
+`STABILIZED`, with stabilization and release delivery tracked separately.
 
-## Q3D extraction and Region-ground candidate
+## Q3D extraction and Region-ground contract {#q3d-extraction-and-region-ground-candidate}
 
 `Q3dSpec.solve_ac_rl` is a strict boolean and defaults to `true`. The default
 therefore preserves the existing combined capacitance/conductance plus AC
@@ -404,11 +403,11 @@ the requested padding and this zero-offset finalization explicitly.
 
 The prior failed `_01` project remains immutable diagnostic evidence. There is
 no compatibility fallback, physical bridge, or unite path. This replacement
-contract remains `CONVERGING`.
+contract is `STABILIZED`; historical diagnostic evidence is not relabeled.
 
 ## Eigenmode saved fields and Surface-EPR direction
 
-The converging Eigenmode Surface-EPR path is an additive lifecycle, not a
+The accepted Eigenmode Surface-EPR path is an additive lifecycle, not a
 reinterpretation of a completed V1/V2/V3 receipt. It starts from shared source
 polygons, holes, material/domain facts, route profile, and declared junction
 intent, then records a separate AEDT binding from those facts to native bodies,
@@ -574,7 +573,7 @@ and an `unavailable` list. That saved configuration still does not establish
 that the solver applied the criterion or that it changed the adaptive stop;
 those outcomes require an actual target-run observation.
 
-### Public EPR candidate surface
+### Public EPR surface {#public-epr-candidate-surface}
 
 `prepare_planar_geometry_input()` validates and detaches shared source
 polygons, holes, entities, solution domains, Route A/B selection, junctions,
@@ -736,7 +735,7 @@ interval must satisfy `L < U`.
 The full-width corridor, including its side boundaries, must be clear of other
 metal. The A end may contact only terminal A and the B end only terminal B;
 cross-terminal or third-net contact is rejected. If these preconditions do
-not hold, the candidate reports unsupported topology/search assumptions
+not hold, the implementation reports unsupported topology/search assumptions
 rather than universal infeasibility.
 
 Search uses the source-local DBU `h` recorded with the partition evidence. It
@@ -1062,7 +1061,7 @@ offline APIs substitutes a historical cache row for a final saved-field row.
 
 The earlier A-r5 no-solve attempt loaded same-side surface expressions but
 failed to load an opposite-side sheet expression written with an unverified
-CLC command. The current candidate compiles dependency-ordered CLC definitions
+CLC command. The current implementation compiles dependency-ordered CLC definitions
 locally, including an adjacent-side integrand and the native-serialized
 `EnterAdjacentSurface` command, then submits the complete definition library
 through one native `LoadNamedExpressions` call. Preparation and saved-field
@@ -1322,7 +1321,7 @@ runtime dependency or an authority that replaces the formulas above.
 
 ## Current exclusions
 
-This candidate does not provide S-parameter circuit models, automatic solver
+This V1 does not provide S-parameter circuit models, automatic solver
 selection, arbitrary legacy recipe ingestion, custom AEDT material definitions,
 or compatibility fallbacks for old private runtimes. Those are independent
 future scopes.

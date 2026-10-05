@@ -2,17 +2,17 @@
 title: "Interpreting Eigenmode EPR"
 description: "Energy normalization, physical partitions, masks and attributed loss assumptions."
 scgsim-kind: "concept"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/eigenmode-epr"
 ---
 
-::: {.callout-note title="CONVERGING candidate contract"}
+::: {.callout-note title="Stabilized V1 interpretation contract"}
 Both backends provide one solver-specific `EigenmodeSim` with surface, bulk,
 and port/junction EPR analysis. Their preparation and result types remain
 backend-owned. Offline film reanalysis uses recorded result evidence and does
-not reopen a solver. This page documents the current candidate; it does not
-claim V1 stability. The [Backend Support Matrix](backend-support.qmd) separates
-the implemented candidate from the currently documented exercise evidence and
+not reopen a solver. This page documents accepted V1 semantics; assigned stabilization and
+release delivery remain separate. The [Backend Support Matrix](backend-support.qmd) separates
+accepted implementation from the currently documented exercise evidence and
 limits.
 :::
 
@@ -108,7 +108,7 @@ That native value does not turn an unknown assumption into a known zero: the
 Palace v2 index and detached EPR result preserve `loss_tangent=None`, and
 SCGSim's analysis keeps the inverse-Q contribution unavailable. A native
 infinite-Q or zero-loss display is not evidence that the loss is known to be
-zero. The selected Palace candidate retains only native Eigenmode `eig.csv`
+zero. The accepted Palace behavior retains only native Eigenmode `eig.csv`
 `Q=+inf` as explicitly reported native infinity, with its finite Q-based view
 unavailable. This preserves what the solver reported without supplying a
 physical lossless inference. The [Palace native Q contract](specs/palace-eigenmode.qmd#native-eigenmode-q)

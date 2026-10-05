@@ -2,7 +2,7 @@
 title: "Palace: resonant modes"
 description: "Prepare ordinary Eigenmode inputs before adding optional surface, bulk and port EPR requests."
 scgsim-kind: "course"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/course/palace-eigenmode"
 ---
 
@@ -65,7 +65,7 @@ criteria/status retained. An eigenpair residual or AMR indicator describes its
 own native quantity; it does not by itself establish adequacy of the frequency
 or EPR contribution you plan to use.
 
-On return, the selected candidate retains a native `eig.csv` `Q=+inf` as
+On return, the accepted contract retains a native `eig.csv` `Q=+inf` as
 **native-reported infinite Q**. Its finite Q-based view is unavailable. Keep
 that native observation separate from a physical lossless-model claim; it
 does not replace a missing loss assumption or determine a device lifetime.

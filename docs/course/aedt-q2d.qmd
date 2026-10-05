@@ -2,7 +2,7 @@
 title: "AEDT: Q2D cross-section extraction"
 description: "Author explicit rectangles and conductor groups, then read one native per-unit-length matrix export."
 scgsim-kind: "course"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/course/aedt-q2d"
 ---
 
@@ -78,4 +78,4 @@ scope when interpreting the result. Historical separate CG/RL and normalized
 Q2D files are not emitted for new requests. The
 [AEDT contract](../specs/aedt-runtime.qmd#q2d-native-combined-matrix-export)
 owns the exact export, historical readers and failure behavior; broader AEDT
-semantics remain CONVERGING.
+semantics are STABILIZED, with stabilization and release delivery separate.

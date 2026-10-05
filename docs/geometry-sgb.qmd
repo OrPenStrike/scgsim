@@ -2,7 +2,7 @@
 title: "GeometryPlan and SGB Route A/B"
 description: "GeometryPlan source identity, occurrence and Net ownership, route lowering and input summary."
 scgsim-kind: "contract"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/geometry-sgb"
 ---
 
@@ -34,7 +34,7 @@ does not infer electrical connectivity or merge child net maps.
 
 ## Component-to-backend geometry contract
 
-The current candidate makes local component geometry and hierarchy explicit
+The accepted contract makes local component geometry and hierarchy explicit
 before Palace or AEDT preparation. The public `scgsim.sgb.GeometryPlan` is the
 mutable Notebook builder: it inventories expanded component entities and
 stores the final `Net -> Entity` assignment. Its `prepare()` method returns an
@@ -111,7 +111,7 @@ example, `chip/q0/o_junction_lumped`. Palace binds that qualified port name to
 its target logical layer; an AEDT junction uses the same normalized source
 sheet and its recorded overlaps.
 
-| Fact or operation | Candidate contract |
+| Fact or operation | Accepted contract |
 |---|---|
 | Component definition | Holds local polygons, source Entity IDs, ports, topology selectors, and local component facts. Reusing a component does not rewrite its local IDs. Schema v2 does not assign final Nets or expose a public `Group` API inside the component. |
 | Component occurrence | `register_instance(path, reference)` binds a named path to the actual GDSFactory occurrence. Parent segments are registered before children. The path scopes entity and polygon identities before flattening; rotation and reflection apply consistently to geometry, selectors, and ports. |
@@ -124,7 +124,7 @@ sheet and its recorded overlaps.
 | AEDT object names | New native names are readable and deterministic, sanitized and disambiguated as needed, and remain bound to the original qualified Entity ID. Historical prepared names keep their version-specific reader policy. |
 | Boundary defaults | Palace leaves an unspecified external vacuum boundary at its natural PMC condition. AEDT uses HFSS's default Perfect E. The shared input does not convert one policy into the other. |
 
-These are the current CONVERGING semantics. Source preparation establishes
+These are the accepted V1 semantics. Source preparation establishes
 the geometry input contract; it does not imply native geometry validation or
 solver execution.
 
@@ -132,8 +132,8 @@ solver execution.
 
 | Route | Public intent | Current state |
 |---|---|---|
-| Route A | Zero-thickness face-metal PEC sheets with finite bump shells | Implemented, converging |
-| Route B | The closed exterior boundary shell of a finite construction metal volume is PEC; its interior is excluded from Palace solution domains and receives no tetrahedra | Implemented, converging |
+| Route A | Zero-thickness face-metal PEC sheets with finite bump shells | Implemented, accepted |
+| Route B | The closed exterior boundary shell of a finite construction metal volume is PEC; its interior is excluded from Palace solution domains and receives no tetrahedra | Implemented, accepted |
 
 Only Route A and Route B are in the current direction.
 

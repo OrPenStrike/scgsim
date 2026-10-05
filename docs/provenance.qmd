@@ -2,7 +2,7 @@
 title: "Provenance and Data Boundaries"
 description: "Source and result identity categories plus public/private publication boundaries."
 scgsim-kind: "contract"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/provenance"
 ---
 

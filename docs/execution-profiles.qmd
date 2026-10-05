@@ -2,7 +2,7 @@
 title: "Execution Profiles and Local/Manual-HPC Handoff"
 description: "Exact launch profiles, caller resources, handoff identity and return requirements."
 scgsim-kind: "contract"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/execution-profiles"
 ---
 

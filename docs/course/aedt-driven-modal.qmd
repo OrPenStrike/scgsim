@@ -2,7 +2,7 @@
 title: "AEDT: HFSS Driven Modal"
 description: "Bind explicit integration lines and prepare the current two-port modal network request."
 scgsim-kind: "course"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/course/aedt-driven-modal"
 ---
 
@@ -43,7 +43,7 @@ print(handoff.spec_path, handoff.script_path)
 Endpoints and mesh length are micrometres; sweep bounds are GHz. The current
 public interface retains ordered ports 1 and 2. The example explicitly requests
 20,000 points, the unchanged default of `FrequencySweepSpec`; the selected
-candidate lets the caller choose `points` for the study. Exact whole-number
+contract lets the caller choose `points` for the study. Exact whole-number
 numeric inputs, including `20000.0`, preserve their count without truncation.
 The count is bound through native setup, export and returned readback; valid
 historical 20,000-point data retains its original custody. These values do not

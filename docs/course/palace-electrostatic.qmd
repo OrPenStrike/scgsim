@@ -2,7 +2,7 @@
 title: "Palace: terminal capacitance"
 description: "Bind exact Nets as terminals and physical grounds, then prepare an Electrostatic mesh and config."
 scgsim-kind: "course"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/course/palace-electrostatic"
 ---
 

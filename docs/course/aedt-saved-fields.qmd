@@ -2,7 +2,7 @@
 title: "AEDT: analyze a sealed saved-field solution"
 description: "Verify a saved cohort and evaluate EPR in a native workcopy without requesting another solve."
 scgsim-kind: "course"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/course/aedt-saved-fields"
 ---
 

@@ -2,7 +2,7 @@
 title: "2. Author shared Xmon inputs"
 description: "Author named public Xmon occurrences and final Nets into one immutable source snapshot."
 scgsim-kind: "course"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/tutorial-xmon-input"
 execute:
   enabled: false

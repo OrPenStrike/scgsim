@@ -2,18 +2,18 @@
 title: "Headless Geometry Preview"
 description: "Solver-metadata-bound preview APIs, artifact identity and explicit unavailable modes."
 scgsim-kind: "contract"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/geometry-preview"
 ---
 
 For stage-by-stage use, follow [solver observations](course/solver-observations.qmd). This page owns preview binding and availability.
 
-::: {.callout-note title="CONVERGING local candidate"}
-The public V1 preview runtime now exists as a local `CONVERGING` candidate.
+::: {.callout-note title="Stabilized V1 preview contract"}
+The public V1 preview runtime is part of the Human-accepted scope.
 Public Palace and AEDT 2024.2 non-graphical previews have been produced for
-Human visual review. This does not make the scope Human-accepted, stable, or
-delivered. Durable stabilization tests and PR delivery remain pending that
-Human review and acceptance.
+Human visual review. These observations retain their original scope; acceptance
+does not independently establish numerical accuracy, completed stabilization
+or stable-release delivery.
 :::
 
 ## Purpose and ownership

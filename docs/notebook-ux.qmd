@@ -2,7 +2,7 @@
 title: "Notebook consumer contract"
 description: "OrPen notebook ownership and stage-local package consumer behavior."
 scgsim-kind: "contract"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/notebook-ux"
 ---
 

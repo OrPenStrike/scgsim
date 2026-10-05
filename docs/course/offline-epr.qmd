@@ -2,7 +2,7 @@
 title: "7. Change loss assumptions without solving"
 description: "Reanalyze recorded EPR evidence and export honest owner-labeled figures offline."
 scgsim-kind: "course"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/course/offline-epr"
 ---
 

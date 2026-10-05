@@ -2,7 +2,7 @@
 title: "Public Xmon: Palace Route B Eigenmode"
 description: "Add attributed films and a source-linked inductive port to Palace Eigenmode."
 scgsim-kind: "course"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/tutorial-xmon-palace"
 execute:
   enabled: false

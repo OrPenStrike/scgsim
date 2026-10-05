@@ -2,7 +2,7 @@
 title: "AEDT: ordinary HFSS Eigenmode"
 description: "Prepare a port-free mode request and retain native frequency and Q on return."
 scgsim-kind: "course"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/course/aedt-eigenmode"
 ---
 

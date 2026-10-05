@@ -2,7 +2,7 @@
 title: "AEDT branch: prepare the public CPW inputs"
 description: "Share one explicit GDS and PDK mapping across ordinary HFSS and Q3D lessons."
 scgsim-kind: "course"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/course/aedt-inputs"
 ---
 

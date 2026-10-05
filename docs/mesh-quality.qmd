@@ -2,7 +2,7 @@
 title: "Tetrahedral Mesh Quality"
 description: "Stored tetrahedron diagnostics, numerical status, units and strict serialization."
 scgsim-kind: "contract"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/mesh-quality"
 ---
 

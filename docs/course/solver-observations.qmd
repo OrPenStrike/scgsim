@@ -2,7 +2,7 @@
 title: "4. Inspect the prepared backend"
 description: "Read bound mesh or native assignments before interpreting a solver result."
 scgsim-kind: "course"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/course/solver-observations"
 ---
 

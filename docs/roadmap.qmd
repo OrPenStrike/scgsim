@@ -1,8 +1,8 @@
 ---
 title: "Roadmap and Priorities"
-description: "Current convergence priorities and deliberately deferred solver families."
+description: "Release-delivery priorities and deliberately deferred solver families."
 scgsim-kind: "project"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/roadmap"
 ---
 
@@ -16,8 +16,11 @@ status.
 
 ## Near term
 
-1. Continue converging the solver runtime contracts.
-2. Continue solver-specific report presentation without flattening physics.
+The reviewed Human-assigned minimal stabilization is complete. Remaining
+delivery priorities are:
+
+1. Integrate the reviewed prerelease checkpoint and its version-bound knowledge.
+2. Verify the first stable main delivery and workspace synchronization separately.
 
 ## Later
 

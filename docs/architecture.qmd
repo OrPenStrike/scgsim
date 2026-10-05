@@ -2,7 +2,7 @@
 title: "Architecture and Data Flow"
 description: "Module ownership, native transaction phases and staged persistence boundaries."
 scgsim-kind: "implementation"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/architecture"
 ---
 
@@ -29,7 +29,7 @@ flowchart LR
   RESULTS --> REPORT["Unified Plotly report envelope"]
 ```
 
-The current geometry candidate starts from component-local source facts and
+The current geometry implementation starts from component-local source facts and
 named occurrences. A `GeometryPlan` holds the expanded entity inventory and
 the Notebook's final `Net -> Entity` map, then prepares one immutable source
 snapshot for the normalized `GeometryBuildInput` boundary. Palace and AEDT
@@ -183,7 +183,7 @@ also keep source material identity distinct from verified native PEC
 implementation: solids are native `pec` with Solve Inside disabled, while
 sheets receive Perfect E and must have complete native face coverage.
 
-The converging Eigenmode EPR lifecycle is an explicit additive path under that
+The accepted Eigenmode EPR lifecycle is an explicit additive path under that
 same transaction owner. It does not reinterpret the historical one-shot
 prepare--solve--export path or broaden the meaning of an ordinary completed
 receipt. Before its one solve, the EPR path declares geometry bindings,

@@ -28,9 +28,10 @@ that research judgement.
 
 ## Capabilities and interpretation
 
-The [backend support matrix](docs/backend-support.qmd) records implemented
-candidate workflows and their current evidence limits. Broad V1 semantics
-remain **CONVERGING**. Palace Driven and Magnetostatic are not implemented;
+The [backend support matrix](docs/backend-support.qmd) records accepted V1
+workflows and their current evidence limits. The Human accepted
+the implemented V1 semantics, and the reviewed assigned stabilization is
+complete. Release delivery remains separate. Palace Driven and Magnetostatic are not implemented;
 Meep is excluded.
 
 Read [geometry concepts](docs/concepts/geometry.qmd) to understand source
@@ -40,6 +41,11 @@ behavior belongs to the linked contracts; [architecture](docs/architecture.qmd)
 explains implementation responsibilities.
 
 ## Documentation and ownership
+
+The `develop` lane uses prerelease versions, including `1.0.0rc1`; the first
+stable `main` version is `1.0.0`. Use a branch or artifact only after its
+publication is confirmed and keep its recorded source identity. Stabilization
+does not itself publish a stable site.
 
 The [documentation home](https://orpenstrike.github.io/scgsim/) lists published
 versions. The [development site](https://orpenstrike.github.io/scgsim/develop/)

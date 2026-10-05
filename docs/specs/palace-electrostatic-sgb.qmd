@@ -2,17 +2,18 @@
 title: "Palace Electrostatic + SGB"
 description: "Electrostatic Net binding, physical ground, shared Palace configuration and native margins."
 scgsim-kind: "contract"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/specs/palace-electrostatic-sgb"
 ---
 
-::: {.callout-note title="CONVERGING candidate contract"}
+::: {.callout-note title="Stabilized V1 contract"}
 The backend, Route A/B lowering, handoff, Slurm execution, strict result
-resolution, and report summaries have live candidate evidence. They remain
-CONVERGING and are not V1 stable.
+resolution and report summaries are part of the accepted V1 scope. Recorded
+exercise evidence retains its limits; stabilization and release delivery remain
+separate.
 :::
 
-## Candidate surface
+## Public surface {#candidate-surface}
 
 The public backend object is `scgsim.palace.ElectrostaticSim`. Staged calls
 expose geometry, terminals, solver configuration, mesh, config, handoff, and
@@ -51,7 +52,7 @@ If this preflight fails, the returned receipt records
 preflight and pipeline exit codes, and `solver_exit_code=null`. Receipts use
 `execution_stage="solver"` only after the solver command was actually invoked.
 
-| Stage | Candidate method | Intended responsibility |
+| Stage | Public method | Intended responsibility |
 |---|---|---|
 | Shared source | `set_plan` | Bind the immutable shared source snapshot. |
 | Standalone geometry | `set_geometry` | Bind the public Component input to the SGB geometry route. |
@@ -64,7 +65,7 @@ preflight and pipeline exit codes, and `solver_exit_code=null`. Receipts use
 | Mesh | `mesh` | Request the SGB-backed Palace mesh path. |
 | Config | `write_config` | Write the Palace Electrostatic configuration for the reviewed mesh identities. |
 
-These methods are reachable candidate APIs.
+These methods are accepted public APIs.
 
 Configuration setters are atomic with respect to this staged state. Airbox,
 Surface EPR, and Eigenmode controls validate every supplied value before
@@ -144,7 +145,7 @@ mismatch remains fatal. Repeated unmasked values or columns in native
 repeated baselines nor alternative margins may be summed into the physical
 loss total.
 
-This multi-margin Surface EPR surface remains **CONVERGING**. It is not a
+This multi-margin Surface EPR surface is **STABILIZED**. It is not a
 cumulative disjoint edge-band contract and introduces no scientific
 acceptance, convergence threshold, or geometry-exclusion claim.
 
@@ -163,11 +164,12 @@ terminals/ground and the real mesh/config sequence. The separate
 Neither preparation path starts Palace or submits a job. Shared private state
 invalidation/persistence implementation lives in [architecture](../architecture.qmd#palace-preparation-lifecycle).
 
-## Candidate Electrostatic defaults
+## Electrostatic defaults {#candidate-electrostatic-defaults}
 
-These values are **CONVERGING**, not accepted scientific defaults or Gates:
+These are accepted implementation defaults, not universal scientific
+recommendations or adequacy Gates:
 
-| Control | Candidate value |
+| Control | Default value |
 |---|---|
 | `save_fields` | `0` |
 | `unassigned_conductor_policy` | `"ground"` |

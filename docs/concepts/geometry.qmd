@@ -2,7 +2,7 @@
 title: "From source geometry to a solver model"
 description: "Understand occurrences, Entities, Nets, regions and the distinction between declared and observed geometry."
 scgsim-kind: "concept"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/concepts/geometry"
 ---
 

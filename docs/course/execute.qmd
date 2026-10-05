@@ -2,7 +2,7 @@
 title: "5. Execute a handoff on its host"
 description: "Transfer complete prepared inputs, launch explicitly and retain the returned run identity."
 scgsim-kind: "course"
-scgsim-status: "CONVERGING"
+scgsim-status: "STABILIZED"
 scgsim-id: "docs/course/execute"
 ---
 
