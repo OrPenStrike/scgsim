@@ -857,10 +857,13 @@ material, vacuum-region, and (for Route A) thin-film provenance. See
 [Geometry and SGB Route A/B](../geometry-sgb.qmd#shared-source-facts-for-aedt).
 The first call requests no analysis contributions and exposes the horizontal
 top/bottom `contribution_catalog` after applying the declared junctions. A row
-can include original and derived polygon IDs. In this helper, the caller
-selects the unique intersection with original `build_input.polygons` IDs; the
-selected source polygon is then checked against the catalogue before
-constructing `SurfaceEprSpec`. Supply the existing Route A profile
+can retain original or derived polygon IDs, or a planned SA surface ID. In
+this helper, the caller selects one contribution and explicitly supplies a
+source ID retained by that catalogue row; the ID need not belong to the
+original `build_input.polygons`. Missing or ambiguous contribution selection
+and a source ID not retained by the selected row fail before constructing
+`SurfaceEprSpec`. The helper does not choose a source for the caller. Supply the
+existing Route A profile
 (`substrate_face` or `metal_gap_equivalent`) explicitly as `route_a_profile`;
 no profile is defaulted.
 
@@ -932,12 +935,8 @@ def prepare_surface_epr_handoff(
     if len(matches) != 1:
         raise ValueError("select exactly one contribution_id from the catalogue")
     record = matches[0]
-    original_polygon_ids = {item.polygon_id for item in build_input.polygons}
-    original_sources = set(record["source_polygon_ids"]) & original_polygon_ids
-    if len(original_sources) != 1:
-        raise ValueError("catalogue row must resolve to one original source polygon")
-    if source_polygon_id not in original_sources:
-        raise ValueError("source_polygon_id must be the row's original source polygon")
+    if source_polygon_id not in record["source_polygon_ids"]:
+        raise ValueError("source_polygon_id must be retained by the selected catalogue row")
 
     surface = SurfaceEprSpec(
         contribution_id=record["contribution_id"],
