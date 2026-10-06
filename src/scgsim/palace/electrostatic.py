@@ -22,6 +22,7 @@ from ._inputs import (
     _validate_stack_material_kinds,
 )
 from ._mesh import MeshBuildResult, build_route_mesh
+from ._mesh_controls import MESH_CONTROL_KEYS
 from ._staged import (
     RouteAThinFilm,
     apply_airbox_to_stack,
@@ -236,19 +237,26 @@ class ElectrostaticSim:
         self.exterior_boundary_policy = exterior_boundary_policy
         self._invalidate_config()
 
-    def set_mesh(self, *, refined_mesh_size: float, max_mesh_size: float) -> None:
-        """Set the mesh-only numerical controls for the next mesh build."""
-        numerical = configure_numerical_controls(
-            **{
-                **self.numerical,
-                "refined_mesh_size": refined_mesh_size,
-                "max_mesh_size": max_mesh_size,
-            }
-        )
-        if (
-            numerical["refined_mesh_size"] != self.numerical["refined_mesh_size"]
-            or numerical["max_mesh_size"] != self.numerical["max_mesh_size"]
-        ):
+    def set_mesh(
+        self, *, refined_mesh_size: float | None = None,
+        max_mesh_size: float | None = None, algorithm_3d: str | None = None,
+        threads: int | None = None, surface_threads: int | None = None,
+        geometry_order: int | None = None, high_order_optimize: bool | None = None,
+    ) -> None:
+        """Set geometry-mesh controls; every omitted value retains its setting.
+
+        Geometry order is independent of ``set_numerical(order=...)``. Elevated
+        geometry is optimized with Gmsh HighOrder once when enabled.
+        """
+        proposed = dict(self.numerical)
+        proposed.update({key: value for key, value in {
+            "refined_mesh_size": refined_mesh_size, "max_mesh_size": max_mesh_size,
+            "algorithm_3d": algorithm_3d, "threads": threads,
+            "surface_threads": surface_threads, "geometry_order": geometry_order,
+            "high_order_optimize": high_order_optimize,
+        }.items() if value is not None})
+        numerical = configure_numerical_controls(**proposed)
+        if numerical != self.numerical:
             self.numerical = numerical
             self._invalidate_mesh()
 
@@ -301,6 +309,7 @@ class ElectrostaticSim:
             preconditioner=preconditioner,
             device=device,
             **mesh_sizes,
+            **{key: self.numerical[key] for key in MESH_CONTROL_KEYS},
             amr_max_passes=amr_max_passes,
             amr_nonconformal=amr_nonconformal,
             amr_tolerance=amr_tolerance,
@@ -352,7 +361,9 @@ class ElectrostaticSim:
                 output_dir=self.output_dir,
                 refined_mesh_size=self.numerical["refined_mesh_size"],
                 max_mesh_size=self.numerical["max_mesh_size"],
+                **{key: self.numerical[key] for key in MESH_CONTROL_KEYS},
                 source_gds_bytes=self._plan_snapshot.gds_bytes,
+                source_geometry_input=self._plan_snapshot.geometry_input,
             )
             return self._mesh_result.mesh_path
         prepared = prepare_mesh_input(
@@ -372,9 +383,21 @@ class ElectrostaticSim:
             output_dir=self.output_dir,
             refined_mesh_size=self.numerical["refined_mesh_size"],
             max_mesh_size=self.numerical["max_mesh_size"],
+            **{key: self.numerical[key] for key in MESH_CONTROL_KEYS},
             indium_ground_bump_fill=prepared.indium_ground_bump_fill,
         )
         return self._mesh_result.mesh_path
+
+    def mesh_summary(self) -> dict[str, Any]:
+        """Detach actual mesh observations and the current FEM topology estimate."""
+        from ._mesh_summary import summary_from_files
+
+        if self._mesh_result is None:
+            raise RuntimeError("mesh_summary requires a generated mesh.")
+        return summary_from_files(
+            self._mesh_result.mesh_path, self._mesh_result.mesh_manifest_path,
+            problem="Electrostatic", fem_order=self.numerical["order"],
+        )
 
     def check_mesh_quality(self) -> MeshQualityReport:
         """Inspect the current mesh without changing simulation state."""

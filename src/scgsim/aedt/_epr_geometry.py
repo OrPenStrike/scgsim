@@ -1059,6 +1059,8 @@ def prepare_planar_geometry_input(
 
     if not isinstance(build_input, GeometryBuildInput):
         raise TypeError("build_input must be GeometryBuildInput")
+    if build_input.boundary_curves or build_input.boundary_reconstruction:
+        raise NotImplementedError("AEDT planar lowering does not support active source curve intent")
     if route not in {"A", "B"}:
         raise ValueError("HFSS planar EPR supports only Route A or Route B")
     if not isinstance(prepared_stack, Mapping):

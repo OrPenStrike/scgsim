@@ -219,7 +219,7 @@ def _append_lumped_port_mesh_conformality(
                             and surface.surface_role == "cutout_boundary_shell"
                             and str(
                                 surface.geometry_ref.get("shell_part", "")
-                            ).startswith("sidewall_")
+                            ).startswith("sidewall")
                             and surface.metadata.get(
                                 "route_b_port_sheet_sidewall_partition"
                             )
@@ -373,6 +373,8 @@ def _route_b_expected_terminal_curve_ids(
 ) -> tuple[str, ...]:
     if overlap is None:
         return ()
+    if "native_terminal_curve_ids" in overlap:
+        return tuple(overlap["native_terminal_curve_ids"])
     overlap_loop = overlap.get("overlap_loop")
     if not isinstance(overlap_loop, Sequence):
         return ()

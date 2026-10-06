@@ -2,7 +2,7 @@
 title: "Tetrahedral Mesh Quality"
 description: "Stored tetrahedron diagnostics, numerical status, units and strict serialization."
 scgsim-kind: "contract"
-scgsim-status: "STABILIZED"
+scgsim-status: "CONVERGING"
 scgsim-id: "docs/mesh-quality"
 ---
 
@@ -13,6 +13,14 @@ file without starting Gmsh or Palace. It returns an immutable
 `MeshQualityReport` for the linear four-node tetrahedra that are actually in
 that file. This is a diagnostic reading surface, not a mesh repair step and not
 a scientific acceptance gate.
+
+Palace meshes can store curved high-order elements. This reader computes quality
+metrics only for native Gmsh type-4 four-node tetrahedra.
+Higher-order elements are counted separately and excluded from these metrics,
+so a mesh containing only higher-order tetrahedra has no 3D quality metric.
+Use the Palace
+[mesh summary](specs/palace-electrostatic-sgb.qmd#mesh-manifest-and-detached-summary-110-candidate)
+for recorded geometric order, native element types, and generation statistics.
 
 ## Input and ownership
 

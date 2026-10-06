@@ -282,6 +282,12 @@ class PalaceTrustReport:
     theme: ReportTheme = "light"
     show_details: bool = False
 
+    def mesh_summary(self) -> dict[str, Any]:
+        """Read the same detached mesh authority used by resolved results."""
+        import copy
+
+        return copy.deepcopy(self.provenance["mesh_summary"])
+
     def with_theme(self, theme: ReportTheme) -> PalaceTrustReport:
         checked = _checked_theme(theme)
         return self if self.theme == checked else replace(self, theme=checked)
@@ -307,6 +313,7 @@ class PalaceTrustReport:
         attempted = _read_optional_json(self.run_dir / "results/palace/palace.json")
         data = {
             "cost": dict(self.cost),
+            "mesh_summary": self.mesh_summary(),
             "performance": {"counts": {}, "durations": dict(self.durations)},
             "attempted_run": {
                 "cost": _cost_cards(attempted, None),
@@ -867,6 +874,7 @@ class SimulationBenchmarkReport:
         from IPython.display import HTML, display
 
         display(HTML(self.trust._benchmark_cards_html()))
+        display(HTML(_mesh_summary_html(self.data["mesh_summary"])))
         timing = self.trust._benchmark_time_figure()
         if isinstance(timing, str):
             display(HTML(timing))
@@ -1111,6 +1119,7 @@ def _resolved_benchmark_data(result: ResolvedPalaceResult) -> dict[str, Any]:
             "receipt_status": result.returned_receipt.status,
             "receipt_exit_code": result.returned_receipt.exit_code,
         },
+        "mesh_summary": result.mesh_summary(),
         "error_indicators": {
             "rows": len(result.tables["error-indicators"].rows),
             "headers": result.tables["error-indicators"].headers,
@@ -1222,6 +1231,19 @@ def _build_trust_report(
         )
         if handoff.get(key) is not None
     }
+    from ._mesh_summary import mesh_summary
+
+    hashes = {entry["path"]: entry["sha256"] for entry in (handoff.get("hashes") or ())}
+    solver = config.get("Solver", {}) if config is not None else {}
+    fem_order = solver.get("Order")
+    provenance["mesh_summary"] = mesh_summary(
+        mesh_manifest if mesh_manifest is not None else {}, problem=problem,
+        fem_order=fem_order,
+        mesh_sha256=hashes.get("palace.msh"),
+        manifest_sha256=hashes.get("metadata/mesh_manifest.json"),
+    )
+    if fem_order is None and problem == "Eigenmode":
+        provenance["mesh_summary"]["dof_estimate"]["reason"] = "FEM order not recorded"
     if receipt is not None:
         provenance["returned_receipt"] = receipt
     return PalaceTrustReport(
@@ -3061,3 +3083,19 @@ __all__ = [
     "PhysicsQuantitiesReport",
     "inspect_run_trustworthiness",
 ]
+
+
+def _mesh_summary_html(summary: Mapping[str, Any]) -> str:
+    """Keep geometric discretization distinct from native solver measurements."""
+    if summary["status"] == "not_recorded":
+        return "<section><h4>Geometry mesh</h4><p>Mesh observations were not recorded in this historical manifest.</p></section>"
+    meshing = summary["meshing"]
+    estimate = summary["dof_estimate"]
+    rows = [("Gmsh", meshing["gmsh_version"]),
+            ("Geometry order", meshing["effective"]["geometry_order"]),
+            ("HighOrder optimization", meshing["high_order_optimization"]["status"]),
+            ("Native nodes", meshing["statistics"]["node_count"]),
+            ("ND topological DOF estimate", estimate.get("value", "unavailable"))]
+    body = "".join("<tr>" + _html_cell("th", label) + _html_cell("td", str(value)) + "</tr>" for label, value in rows)
+    return ("<section><h4>Geometry mesh</h4><table>" + body + "</table>"
+            "<p>The ND estimate uses the configured FEM order and tetrahedral primary-corner topology before boundary constraints; it is not actual solver DOF. Electrostatic H1 estimation is unavailable.</p></section>")

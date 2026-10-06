@@ -54,6 +54,68 @@ Declare the outer vacuum envelope with `plan.set_vacuum_region(...)` and call
 Net assignment or envelope needs a new snapshot. Changing a detached summary
 dictionary does not edit the geometry that a solver will receive.
 
+### Carry a curved source into the Palace plan
+
+For a circular example, start from the OrPen `circular_pad_capacitor` with
+`R=100 µm`, `gap=20 µm`, `die=1000 µm`, and ring inner radius `80 µm`. Keep the
+stack and material definitions in OrPen; GeometryPlan consumes the component,
+stack, and material records supplied by that source.
+
+Import and construct that public source cell from the OrPen revision selected
+in the [installation lesson](installation.qmd#select-the-curved-source-cell):
+
+```python
+from orpen_sc_pdk.cells import circular_pad_capacitor
+
+component = circular_pad_capacitor(
+    outer_radius_um=100.0,
+    inner_radius_um=80.0,
+    gap_um=20.0,
+    die_side_um=1000.0,
+)
+```
+
+This creates the source component; curve-aware use in the GeometryPlan flow
+requires an SCGSim checkout with source-curve support.
+
+Choose the curve description from the source you have. For authored geometry,
+the component can carry `BoundaryCurveChainSpec` records in
+`component.info["component_semantics"]["boundary_curves"]`, naming an existing
+Entity and boundary and listing its ordered line, arc, or spline segments.
+GeometryPlan qualifies those local identities for the registered occurrence
+and transforms the curve chain with it. For records authored after assembly,
+use `plan.set_boundary_curves(...)` with qualified IDs in assembled coordinates.
+If you have only GDS boundary vertices,
+select a `GdsBoundaryReconstructionSpec` in
+`component.info["component_semantics"]["boundary_reconstruction"]` or pass
+qualified records to `plan.set_boundary_reconstruction(...)`. Use segment and
+anchor identities from the source boundary; unselected segments remain
+straight. SCGSim does not infer curve intent from a preview or smooth polygon
+edges implicitly.
+
+Continue with the plan flow above: register the source's actual references,
+inspect `plan.entities`, assign the intended final Net IDs with
+`plan.set_nets(net_membership)`, set the vacuum region, and call
+`plan.prepare()`. The snapshot retains the selected curve declarations and
+their Entity and occurrence identities. Palace Routes A and B lower active
+curves; Route C and AEDT planar preparation do not. With no curve declaration,
+existing polygon-only behavior is unchanged.
+
+::: {.callout-note title="Authored curves and GDS reconstruction are separate inputs"}
+The two `GeometryPlan` setters replace only their caller-owned lists;
+`prepare()` also adds component declarations. So
+`plan.set_boundary_curves([])` does not remove OrPen-authored curves, and a GDS
+reconstruction overlapping an authored full ring is rejected rather than used
+as an override. To reconstruct from polygon data, create a detached raw
+`GeometryBuildInput` with the selected reconstruction record and without the
+authored curve declaration, then pass it to the existing public
+`SemanticGeometryBuilder` API. `set_plan(snapshot)` continues to honor the
+snapshot's declarations. See the
+[GeometryPlan and SGB source-curve contract](../geometry-sgb.qmd#source-curves)
+for curve record and boundary ownership. This does not mutate the component or
+its snapshot.
+:::
+
 ## Change the physical model
 
 Ask which quantity you now need. Terminal capacitance requires terminal and

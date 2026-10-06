@@ -1,15 +1,17 @@
 ---
 title: "Palace Electrostatic + SGB"
-description: "Electrostatic Net binding, physical ground, shared Palace configuration and native margins."
+description: "Electrostatic Net binding, shared Palace mesh controls, native margins and detached mesh summaries."
 scgsim-kind: "contract"
-scgsim-status: "STABILIZED"
+scgsim-status: "CONVERGING"
 scgsim-id: "docs/specs/palace-electrostatic-sgb"
 ---
 
-::: {.callout-note title="Stabilized V1 contract"}
+::: {.callout-note title="Accepted behavior and current candidate"}
 The backend, Route A/B lowering, handoff, Slurm execution, strict result
-resolution and report summaries are part of the accepted V1 scope. Recorded
-exercise evidence retains its limits; stabilization and release delivery remain
+resolution and existing report summaries are part of the accepted V1 scope.
+The Palace mesh controls and detached mesh summary documented below are part of
+the 1.1.0 development candidate and remain CONVERGING. Recorded exercise
+evidence retains its limits; stabilization and release delivery remain
 separate.
 :::
 
@@ -62,6 +64,7 @@ preflight and pipeline exit codes, and `solver_exit_code=null`. Receipts use
 | Physical Ground binding | `add_ground` | Select conductor components for Palace Ground by exact SGB net identity. |
 | Problem controls | `set_electrostatic` | Declare Electrostatic-specific config controls. |
 | Output identity | `set_output_dir` | Bind the mesh/config/handoff output location. |
+| Mesh controls | `set_mesh(...)` | Set retained mesh sizes and Palace meshing controls. |
 | Mesh | `mesh` | Request the SGB-backed Palace mesh path. |
 | Config | `write_config` | Write the Palace Electrostatic configuration for the reviewed mesh identities. |
 
@@ -74,6 +77,51 @@ configuration together with cached mesh, resolved-port, config, and handoff
 state. A successful change retains the existing mesh/config invalidation
 boundary; this does not change operational failures inside `mesh()` or
 `write_config()`.
+
+## Palace mesh controls (1.1.0 candidate)
+
+Both Palace facades accept the following optional controls through
+`set_mesh(...)`. Omitted fields retain their current effective settings;
+initial values for the new controls are shown below.
+
+| Control | Initial value | Meaning |
+|---|---:|---|
+| `algorithm_3d` | `"Delaunay"` | Select the 3D Gmsh algorithm: Delaunay or HXT. |
+| `threads` | `1` | Set Gmsh general and 3D volume thread counts. |
+| `surface_threads` | `1` | Set Gmsh 1D/2D surface thread counts. |
+| `geometry_order` | `1` | Set mesh geometry order independently of Palace FEM order. |
+| `high_order_optimize` | `True` | At elevated geometry order, select one native high-order optimization invocation. |
+
+At geometry order 1, high-order optimization is not applicable. At an elevated
+order, the default enables one explicit native optimization after order
+elevation. The worker disables Gmsh's automatic optimization so this choice has
+one recorded outcome. `set_numerical(...)` retains these mesh controls. An
+effective mesh-control update invalidates the mesh, config and handoff; an
+invalid proposed update leaves prior facade state intact.
+
+Mesh construction generates the 3D mesh, applies the selected geometric order,
+performs the chosen optimization once, and then saves the final mesh. Native
+construction or fitting errors propagate as errors; the preparation path does
+not replace a curved mesh with a straight or lower-order fallback.
+
+## Mesh manifest and detached summary (1.1.0 candidate)
+
+The mesh manifest retains its existing groups and adds `meshing` evidence for
+the actual Gmsh version, requested and effective controls, high-order
+optimization outcome, node and element types, physical-region element counts,
+and edge-length statistics. Edge lengths for high-order meshes are explicitly
+labeled as primary-corner chords and reported in micrometres; they are not
+curved-edge arc lengths.
+
+Both Palace facades and a resolved Palace run expose `mesh_summary()`. It returns
+a detached value bound to the mesh and manifest identities. The Palace report
+reads this same summary authority. Eigenmode includes an Nédélec topological
+degree-of-freedom estimate based on primary-corner tetrahedron topology and the
+configured FEM order. It is not an actual solver degree-of-freedom count;
+changing FEM order updates the estimate without remeshing. Electrostatic's
+H1 estimate is unavailable. The existing linear-tetrahedron
+[mesh-quality reader](../mesh-quality.qmd) does not calculate curved-element
+quality.
 
 ## Native multi-margin Surface EPR
 
@@ -104,14 +152,23 @@ relative mesh-length scale, $L_c / \mathrm{Model.L0}$. It does not divide the
 configured `Margin` by `Model.L0` as a separate conversion.
 
 At each retained pass, all baseline and masked coefficients are evaluated from
-the same field solution; no margin requests another PDE solve. At quadrature
-points, a positive `Inset` margin selects by distance from the perimeter of the
-exact chosen surface patch. It does not alter the PDE, mesh, or notebook model.
-A zero margin uses the native full-integration coefficient and must equal the
-unmasked integration for the same interface. A positive margin requires an
-open three-dimensional selected patch with a perimeter; the native
-no-perimeter error remains a truthful failure rather than an approximated
-result.
+the same field solution; no margin requests another PDE solve.
+
+### Positive inset on curved boundaries {#curved-positive-inset-distance}
+
+For straight polygonal boundaries, positive `Inset` distance follows the
+retained straight boundary segments. On a curved boundary, quadrature evaluates
+the actual curved surface, while the perimeter-distance calculation uses
+straight segments between retained boundary vertices. Positive inset therefore
+uses a polyline approximation rather than exact distance to the curved
+perimeter. This distance calculation does not alter the PDE, mesh, or notebook
+model. An unmasked baseline and zero margin continue to use the native
+full-integration coefficient; zero margin must equal the unmasked integration
+for the same interface.
+
+A positive margin requires an open three-dimensional selected patch with a
+perimeter; the native no-perimeter error remains a truthful failure rather
+than an approximated result.
 
 Local sheet patches may retain more than one semantic side contribution. MS
 and MA contributions continue to use their existing separate native types. If

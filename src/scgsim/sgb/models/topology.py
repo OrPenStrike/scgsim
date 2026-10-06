@@ -129,6 +129,10 @@ class MMContactRecord:
     Contacts are topology records, never physical groups.  They preserve the
     original faces/fragments that were normalized into one PEC component while
     keeping Route A/B solver geometry free of an internal contact boundary.
+
+    Polygon contacts keep their outer loop and plane normal. Curved contacts
+    carry a detached canonical graph in geometry_ref; their polygon loop is
+    absent, and a curved wall has no fictitious constant normal.
     """
 
     contact_id: str
@@ -138,15 +142,16 @@ class MMContactRecord:
     upper_source_face_id: str
     lower_source_fragment_ids: tuple[str, ...]
     upper_source_fragment_ids: tuple[str, ...]
-    outer_loop: tuple[tuple[float, float], ...]
+    outer_loop: tuple[tuple[float, float], ...] | None
     area_um2: float
-    normal: Vector3D
+    normal: Vector3D | None
     conductor_component_id: str
     net_id: str | None
     equipotential_id: str | None = None
     layer_provenance: Mapping[str, Any] = field(default_factory=dict)
     material_provenance: Mapping[str, Any] = field(default_factory=dict)
     source_provenance: Mapping[str, Any] = field(default_factory=dict)
+    geometry_ref: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -195,6 +200,8 @@ class CurvePlanRecord:
     used_by_surface_ids: tuple[str, ...] = ()
     boundary_volume_ids: tuple[str, ...] = ()
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    geometry: Mapping[str, Any] = field(default_factory=dict)
+    parameter_interval: tuple[float, float] | None = None
 
 
 @dataclass(frozen=True)

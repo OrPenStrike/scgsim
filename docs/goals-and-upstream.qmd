@@ -16,6 +16,17 @@ The package connects geometry and material facts to explicit computations,
 then preserves the returned quantity's units, source and model context.
 See [supported calculations](backend-support.qmd) and the [tutorials](examples.qmd).
 
+The 1.1.0 development candidate adds explicit authored curve boundaries and
+caller-selected GDS boundary reconstruction to the shared source model. Curves
+remain bound to source Entities and placed occurrences; polygon-only inputs
+retain their polygon boundaries. Palace consumes curve intent through the
+in-tree SGB path, while AEDT curve lowering remains unsupported. The Palace
+candidate also separates Gmsh geometric order from finite-element order and
+exposes mesh-generation records through a detached summary. These changes are
+still converging; the [GeometryPlan contract](geometry-sgb.qmd) owns exact
+curve records and the [Palace contracts](specs/palace-electrostatic-sgb.qmd)
+own mesh-control and summary meaning.
+
 ## Scope
 
 Palace Electrostatic/Eigenmode and AEDT HFSS Eigenmode/Driven, Q3D and Q2D are

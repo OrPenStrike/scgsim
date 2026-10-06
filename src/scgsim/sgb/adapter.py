@@ -274,12 +274,17 @@ def build_gds_stack_geometry_input(
         host_polygons=polygons,
     )
 
+    from scgsim.sgb.source_curves import boundary_binding
+
     return GeometryBuildInput(
         polygons=tuple(polygons),
         entities=tuple(entities),
         port_sheet_regions=port_sheet_regions,
         solution_regions=dict(solution_regions),
         metadata=combined_metadata,
+        boundary_curves=tuple(boundary_binding(value) for value in stack_metadata.get("boundary_curves", ())),
+        boundary_reconstruction=tuple(boundary_binding(value, reconstruction=True)
+                                      for value in stack_metadata.get("boundary_reconstruction", ())),
     )
 
 

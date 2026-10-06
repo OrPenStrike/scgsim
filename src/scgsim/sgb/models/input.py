@@ -36,6 +36,66 @@ class LayoutPolygonSpec:
 
 
 @dataclass(frozen=True)
+class SourceCurveSpec:
+    """Component-authored XY geometry; control points are not topology vertices.
+
+    A circular arc uses start, on-arc, and end points. B-spline knots are
+    distinct values with corresponding multiplicities; an optional interval
+    trims the native source parameter domain without changing its geometry.
+    """
+
+    kind: str
+    points_um: tuple[tuple[float, float], ...]
+    degree: int | None = None
+    weights: tuple[float, ...] = ()
+    knots: tuple[float, ...] = ()
+    multiplicities: tuple[int, ...] = ()
+    parameter_interval: tuple[float, float] | None = None
+
+
+@dataclass(frozen=True)
+class BoundaryCurveChainSpec:
+    """Ordered source boundary bound to one Entity-owned source polygon.
+
+    The selector chooses a polygon in that Entity, not an arbitrary surface.
+    Hole indices address that selected polygon's recorded hole order.
+    """
+
+    boundary_id: str
+    entity_id: str
+    selector_point_um: tuple[float, float]
+    curves: tuple[SourceCurveSpec, ...]
+    role: str = "outer"
+    hole_index: int | None = None
+    source_occurrence_path: str | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class GdsBoundaryReconstructionSpec:
+    """Explicit caller selection of a polygon boundary reconstruction.
+
+    Circular reconstruction uses three caller-selected vertex indices. Spline
+    reconstruction uses the recorded boundary vertices, or explicit selected
+    indices. No polygon-only input is implicitly reconstructed.
+    """
+
+    boundary_id: str
+    entity_id: str
+    selector_point_um: tuple[float, float]
+    kind: str
+    role: str = "outer"
+    hole_index: int | None = None
+    segment_indices: tuple[int, ...] = ()
+    closed: bool = False
+    anchor_indices: tuple[int, ...] = ()
+    degree: int | None = None
+    parameter_interval: tuple[float, float] | None = None
+    source_occurrence_path: str | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class VacuumRegionSpec:
     """Cross-layer vacuum padding specification for auto envelope derivation."""
 
@@ -157,3 +217,5 @@ class GeometryBuildInput:
     solution_regions: Mapping[str, Any] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
     port_sheet_regions: tuple[PortSheetRegionRecord, ...] = ()
+    boundary_curves: tuple[BoundaryCurveChainSpec, ...] = ()
+    boundary_reconstruction: tuple[GdsBoundaryReconstructionSpec, ...] = ()

@@ -2,7 +2,7 @@
 title: "Palace: resonant modes"
 description: "Prepare ordinary Eigenmode inputs before adding optional surface, bulk and port EPR requests."
 scgsim-kind: "course"
-scgsim-status: "STABILIZED"
+scgsim-status: "CONVERGING"
 scgsim-id: "docs/course/palace-eigenmode"
 ---
 
@@ -23,6 +23,12 @@ sim.set_eigenmode(num_modes=2, target=2e9, tolerance=1e-6, save=0)
 sim.set_mesh(refined_mesh_size=5.0, max_mesh_size=300.0)
 display(sim.input_summary())
 ```
+
+Use `set_mesh(...)` to choose `algorithm_3d`, `threads`, `surface_threads`,
+`geometry_order`, and `high_order_optimize`. Geometric order controls the mesh
+representation; FEM order remains a separate numerical setting. Initial values
+and update behavior are in the shared
+[Palace mesh contract](../specs/palace-electrostatic-sgb.qmd#palace-mesh-controls-110-candidate).
 
 These are explicit example controls: target is in hertz and mesh sizes are in
 micrometres. Choose them in relation to the mode and quantities your
@@ -46,6 +52,11 @@ mesh_path = sim.mesh()
 config_path = sim.write_config()
 print(mesh_path, config_path)
 ```
+
+After meshing, `sim.mesh_summary()` exposes detached generation observations.
+For Eigenmode it also reports a topological Nédélec degree-of-freedom estimate
+for the configured FEM order. This estimate is not the solver's actual DOF
+count; changing FEM order refreshes it without regenerating the mesh.
 
 Meshing lowers source geometry through in-tree SGB to a conformal model and
 actual Gmsh mesh. The finite-metal PEC shell excludes conductor interiors from

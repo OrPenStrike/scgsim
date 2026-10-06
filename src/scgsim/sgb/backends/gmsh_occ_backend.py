@@ -85,6 +85,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from scgsim.sgb.native_construction import add_surface_first_volume
 from scgsim.sgb.engine_gates import (
     engine_gate_gmsh_brep_conformality,
 )
@@ -138,85 +139,117 @@ def write_occ_geometry_from_plan(
             )
             gmsh.model.add(f"semantic_geometry_route_{plan.route.lower()}")
 
-        point_tags: dict[str, int] = {}
-        with _debug_stage(
-            debug_logging,
-            f"add {len(plan.points)} OCC points",
-            timings,
-        ):
-            for point in plan.points:
-                point_tags[point.point_id] = gmsh.model.occ.addPoint(*point.coordinate)
-        curve_tags: dict[str, int] = {}
-        with _debug_stage(
-            debug_logging,
-            f"add {len(plan.curves)} OCC curves",
-            timings,
-        ):
-            for curve in plan.curves:
-                curve_tags[curve.curve_id] = gmsh.model.occ.addLine(
-                    point_tags[curve.start_point_id],
-                    point_tags[curve.end_point_id],
-                )
-        loop_tags: dict[str, int] = {}
-        surface_orientations = (
-            _chosen_surface_orientations(plan) if plan.route in {"A", "B"} else {}
-        )
-        with _debug_stage(
-            debug_logging,
-            f"add {len(plan.surface_loops)} OCC curve loops",
-            timings,
-        ):
-            for loop in plan.surface_loops:
-                if debug_logging and len(loop.curve_refs) > 512:
-                    print(
-                        "[sgb:gmsh] "
-                        f"large loop {loop.loop_id}: {len(loop.curve_refs)} curves",
-                        flush=True,
+        if "curved_boundary_xao" in plan.metadata:
+            import base64
+            import hashlib
+            from tempfile import TemporaryDirectory
+
+            payload = base64.b64decode(plan.metadata["curved_boundary_xao"])
+            if hashlib.sha256(payload).hexdigest() != plan.metadata["curved_boundary_xao_sha256"]:
+                raise ValueError("detached curved boundary XAO identity differs")
+            with TemporaryDirectory(prefix="scgsim-curved-lowering-") as temporary:
+                boundary_path = Path(temporary) / "boundaries.xao"
+                boundary_path.write_bytes(payload)
+                gmsh.merge(str(boundary_path))
+            gmsh.model.occ.synchronize()
+            curve_tags = {}
+            source_tags = {}
+            for dimension, group in gmsh.model.getPhysicalGroups():
+                name = gmsh.model.getPhysicalName(dimension, group)
+                tags = gmsh.model.getEntitiesForPhysicalGroup(dimension, group).tolist()
+                if name.startswith("SGB_CURVE::"):
+                    if dimension != 1 or len(tags) != 1:
+                        raise ValueError("detached curved topology has an invalid curve binding")
+                    curve_tags[name.removeprefix("SGB_CURVE::")] = tags[0]
+                elif name.startswith("SGB_SURFACE::"):
+                    if dimension != 2 or len(tags) != 1:
+                        raise ValueError("detached curved topology has an invalid surface binding")
+                    source_tags[("surface", name.removeprefix("SGB_SURFACE::"))] = [(2, tags[0])]
+            gmsh.model.removePhysicalGroups()
+            if set(curve_tags) != {curve.curve_id for curve in plan.curves} or set(source_tags) != {
+                ("surface", surface.surface_id) for surface in plan.surfaces if not surface.construction_only
+            }:
+                raise ValueError("detached curved topology does not cover its planned boundaries")
+        else:
+            point_tags: dict[str, int] = {}
+            with _debug_stage(
+                debug_logging,
+                f"add {len(plan.points)} OCC points",
+                timings,
+            ):
+                for point in plan.points:
+                    point_tags[point.point_id] = gmsh.model.occ.addPoint(*point.coordinate)
+            curve_tags: dict[str, int] = {}
+            with _debug_stage(
+                debug_logging,
+                f"add {len(plan.curves)} OCC curves",
+                timings,
+            ):
+                for curve in plan.curves:
+                    curve_tags[curve.curve_id] = gmsh.model.occ.addLine(
+                        point_tags[curve.start_point_id],
+                        point_tags[curve.end_point_id],
                     )
-                if plan.route in {"A", "B"}:
-                    reverse = (
-                        surface_orientations.get(loop.surface_id, "forward")
-                        == "reversed"
-                    )
-                    loop_tags[loop.loop_id] = _add_curve_loop_from_plan(
-                        gmsh,
-                        loop,
-                        curve_tags,
-                        reverse=reverse,
-                    )
-                else:
-                    loop_tags[loop.loop_id] = _add_curve_loop_from_plan(
-                        gmsh,
-                        loop,
-                        curve_tags,
-                    )
-        source_tags: dict[tuple[str, str], list[GmshDimTag]] = {}
-        live_surfaces = tuple(
-            surface for surface in plan.surfaces if not surface.construction_only
-        )
-        with _debug_stage(
-            debug_logging,
-            f"add {len(live_surfaces)} OCC plane surfaces",
-            timings,
-        ):
-            for surface in live_surfaces:
-                if debug_logging:
-                    edge_count = _surface_edge_count(surface, plan.surface_loops)
-                    if edge_count > 512:
+            loop_tags: dict[str, int] = {}
+            surface_orientations = (
+                _chosen_surface_orientations(plan) if plan.route in {"A", "B"} else {}
+            )
+            with _debug_stage(
+                debug_logging,
+                f"add {len(plan.surface_loops)} OCC curve loops",
+                timings,
+            ):
+                for loop in plan.surface_loops:
+                    if debug_logging and len(loop.curve_refs) > 512:
                         print(
                             "[sgb:gmsh] "
-                            f"large surface {surface.surface_id}: {edge_count} edges",
+                            f"large loop {loop.loop_id}: {len(loop.curve_refs)} curves",
                             flush=True,
                         )
-                surface_tag = gmsh.model.occ.addPlaneSurface(
-                    [
-                        loop_tags[surface.outer_loop_ref],
-                        *(loop_tags[loop_id] for loop_id in surface.hole_loop_refs),
-                    ]
-                )
-                source_tags.setdefault(("surface", surface.surface_id), []).append(
-                    (2, surface_tag)
-                )
+                    if plan.route in {"A", "B"}:
+                        reverse = (
+                            surface_orientations.get(loop.surface_id, "forward")
+                            == "reversed"
+                        )
+                        loop_tags[loop.loop_id] = _add_curve_loop_from_plan(
+                            gmsh,
+                            loop,
+                            curve_tags,
+                            reverse=reverse,
+                        )
+                    else:
+                        loop_tags[loop.loop_id] = _add_curve_loop_from_plan(
+                            gmsh,
+                            loop,
+                            curve_tags,
+                        )
+            source_tags: dict[tuple[str, str], list[GmshDimTag]] = {}
+            live_surfaces = tuple(
+                surface for surface in plan.surfaces if not surface.construction_only
+            )
+            with _debug_stage(
+                debug_logging,
+                f"add {len(live_surfaces)} OCC plane surfaces",
+                timings,
+            ):
+                for surface in live_surfaces:
+                    if debug_logging:
+                        edge_count = _surface_edge_count(surface, plan.surface_loops)
+                        if edge_count > 512:
+                            print(
+                                "[sgb:gmsh] "
+                                f"large surface {surface.surface_id}: {edge_count} edges",
+                                flush=True,
+                            )
+                    surface_tag = gmsh.model.occ.addPlaneSurface(
+                        [
+                            loop_tags[surface.outer_loop_ref],
+                            *(loop_tags[loop_id] for loop_id in surface.hole_loop_refs),
+                        ]
+                    )
+                    source_tags.setdefault(("surface", surface.surface_id), []).append(
+                        (2, surface_tag)
+                    )
 
         live_volumes = tuple(
             volume for volume in plan.volumes if not volume.construction_only
@@ -236,16 +269,9 @@ def write_occ_geometry_from_plan(
                     exterior_tags = _surface_ref_tags(
                         volume.volume_id, exterior_refs, source_tags
                     )
-                    shell_tags = [
-                        gmsh.model.occ.addSurfaceLoop(exterior_tags, sewing=True)
-                    ]
-                    shell_tags.extend(
-                        gmsh.model.occ.addSurfaceLoop(
-                            _surface_ref_tags(
-                                void.shell_id, void.surface_refs, source_tags
-                            ),
-                            sewing=True,
-                        )
+                    shell_surfaces = [exterior_tags]
+                    shell_surfaces.extend(
+                        _surface_ref_tags(void.shell_id, void.surface_refs, source_tags)
                         for void in getattr(volume, "inner_pec_void_shells", ())
                     )
                 else:
@@ -255,7 +281,11 @@ def write_occ_geometry_from_plan(
                     shell_tags = [gmsh.model.occ.addSurfaceLoop(exterior_tags)]
                 if len(exterior_tags) > largest_volume_boundary[0]:
                     largest_volume_boundary = (len(exterior_tags), volume.volume_id)
-                volume_tag = gmsh.model.occ.addVolume(shell_tags)
+                volume_tag = (
+                    add_surface_first_volume(gmsh, shell_surfaces)
+                    if plan.route in {"A", "B"}
+                    else gmsh.model.occ.addVolume(shell_tags)
+                )
                 source_tags.setdefault(("volume", volume.volume_id), []).append(
                     (3, volume_tag)
                 )
@@ -299,6 +329,22 @@ def write_occ_geometry_from_plan(
                     group_tag,
                     first_tag.physical_name,
                 )
+        # Internal final-body names survive XAO tag renumbering. Consumers
+        # remove these transport groups before emitting solver physical tags.
+        port_host_ids = dict.fromkeys(
+            host for surface in plan.surfaces
+            for host in surface.metadata.get("embedded_volume_plan_ids", ()))
+        for surface in plan.surfaces:
+            if "embedded_volume_plan_ids" not in surface.metadata:
+                continue
+            members = [tag for dim, tag in source_tags[("surface", surface.surface_id)]
+                       if dim == 2]
+            group_tag = gmsh.model.addPhysicalGroup(2, members)
+            gmsh.model.setPhysicalName(2, group_tag, "SGB_PORT_SURFACE::" + surface.surface_id)
+        for volume_id in port_host_ids:
+            members = [tag for dim, tag in source_tags[("volume", volume_id)] if dim == 3]
+            group_tag = gmsh.model.addPhysicalGroup(3, members)
+            gmsh.model.setPhysicalName(3, group_tag, "SGB_VOLUME::" + volume_id)
         with _debug_stage(debug_logging, f"write XAO {xao_path}", timings):
             gmsh.write(str(xao_path))
         return replace(

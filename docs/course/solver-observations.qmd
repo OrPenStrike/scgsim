@@ -28,6 +28,14 @@ preview.show_surface_epr()
 preview.show_mesh()
 ```
 
+The 1.1.0 Palace candidate preserves high-order mesh connectivity and curved
+boundary representation in the preview. After `mesh()`,
+`sim.mesh_summary()` returns detached generation evidence bound to the mesh and
+manifest. It records the selected controls and native element/region counts;
+the edge-length statistics are labeled as primary-corner chords. The preview
+and summary describe prepared geometry, not a solved field or a curved-element
+quality metric.
+
 Read the legend's exact semantic IDs and counts against the prepared source.
 Unavailable modes are explicit. For interactive notebook inspection,
 `preview.explore("materials")` displays the bound scene with rotation and zoom.

@@ -57,6 +57,24 @@ notebook kernel tools:
 python -m pip install -e '.[palace,aedt-epr,visualization]' 'orpen-sc-pdk @ git+https://github.com/OrPenStrike/orpen-sc-pdk.git@51985d9507025e8241205712e866c0b804de29b9' ipykernel
 ```
 
+### Select the curved source cell
+
+Keep the `51985d9` pin above for the SimplePad beginner notebooks and use a
+separate environment for the curved-source study. The circular source used in
+[Work with your own model](working-model.qmd) is available from OrPen SC PDK revision
+[`ff4dcea`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/ff4dcea00d4961ff4f8264f69a0bb8bfe43ed10d).
+Install that source revision in the same Python environment as the SCGSim
+backend extra:
+
+```bash
+python -m pip install 'orpen-sc-pdk @ git+https://github.com/OrPenStrike/orpen-sc-pdk.git@ff4dcea00d4961ff4f8264f69a0bb8bfe43ed10d'
+```
+
+This selects OrPen's curved source component. Passing its authored curve
+records through GeometryPlan requires SCGSim source-curve support; this
+OrPen-only command does not select a SCGSim revision or a curved solver
+notebook.
+
 Open the public IPYNB linked by your selected lesson in your notebook frontend.
 Select the Python kernel for this checkout's `.venv` environment, using
 `.venv/bin/python`. The pinned PDK supplies `square_pad_capacitor` and

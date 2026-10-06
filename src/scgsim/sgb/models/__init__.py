@@ -36,6 +36,9 @@ from scgsim.sgb.models.construction import (
     SurfacePartitionRecord,
 )
 from scgsim.sgb.models.input import (
+    BoundaryCurveChainSpec,
+    GdsBoundaryReconstructionSpec,
+    SourceCurveSpec,
     GeometryBuildInput,
     LayoutPolygonSpec,
     SemanticEntitySpec,
@@ -84,6 +87,9 @@ __all__ = [
     "CutHostOperationRecord",
     "DimensionLiteral",
     "FinalPhysicalGroupRecord",
+    "BoundaryCurveChainSpec",
+    "GdsBoundaryReconstructionSpec",
+    "SourceCurveSpec",
     "GeometryBuildInput",
     "GmshDimTag",
     "InnerPecVoidShellRecord",

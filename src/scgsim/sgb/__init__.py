@@ -18,6 +18,9 @@ from scgsim.sgb.models import (
     CutHostOperationRecord,
     DimensionLiteral,
     FinalPhysicalGroupRecord,
+    BoundaryCurveChainSpec,
+    GdsBoundaryReconstructionSpec,
+    SourceCurveSpec,
     GeometryBuildInput,
     GmshDimTag,
     InnerPecVoidShellRecord,
@@ -75,6 +78,7 @@ from scgsim.sgb.stack import build_component_stack
 from scgsim.sgb.vacuum import apply_vacuum_region_to_stack
 from scgsim.sgb.geometry_plan import GeometryPlan, GeometryPlanSnapshot
 from scgsim.sgb.summary import InputSummary, summarize_geometry_input
+from scgsim.sgb.source_curves import bind_source_curves
 
 __all__ = [
     "RUN_METADATA_DIR",
@@ -90,6 +94,9 @@ __all__ = [
     "CutHostOperationRecord",
     "DimensionLiteral",
     "FinalPhysicalGroupRecord",
+    "BoundaryCurveChainSpec",
+    "GdsBoundaryReconstructionSpec",
+    "SourceCurveSpec",
     "GeometryBuildInput",
     "GeometryPlan",
     "GeometryPlanSnapshot",
@@ -120,6 +127,7 @@ __all__ = [
     "VacuumRegionSpec",
     "Vector3D",
     "VolumePlanRecord",
+    "bind_source_curves",
     "build_component_stack",
     "summarize_geometry_input",
     "apply_vacuum_region_to_stack",

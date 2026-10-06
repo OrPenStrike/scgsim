@@ -2,7 +2,7 @@
 title: "Architecture and Data Flow"
 description: "Module ownership, native transaction phases and staged persistence boundaries."
 scgsim-kind: "implementation"
-scgsim-status: "STABILIZED"
+scgsim-status: "CONVERGING"
 scgsim-id: "docs/architecture"
 ---
 
@@ -19,7 +19,7 @@ identity, or common provenance.
 ```{mermaid}
 flowchart LR
   PDK["PDK material, layer, fabrication, and host semantics"] --> PLAN["Notebook GeometryPlan"]
-  COMPONENT["Local component entities, polygons, ports, selectors"] --> PLAN
+  COMPONENT["Local component entities, polygon/curve boundaries, ports, selectors"] --> PLAN
   NOTEBOOK["Named occurrences and final Net → Entity map"] --> PLAN
   PLAN --> SNAPSHOT["Immutable source snapshot"]
   SNAPSHOT --> INPUT["Normalized GeometryBuildInput"]
@@ -37,18 +37,21 @@ flowchart LR
 The current geometry implementation starts from component-local source facts and
 named occurrences. A `GeometryPlan` holds the expanded entity inventory and
 the Notebook's final `Net -> Entity` map, then prepares one immutable source
-snapshot for the normalized `GeometryBuildInput` boundary. Palace and AEDT
-consume that same snapshot through their existing preparation paths. The
-backends may create different native geometry, but native observations do not
-replace source entity identity or establish connectivity. AEDT binding
-evidence retains source members and coverage through native aggregation.
+snapshot for the normalized `GeometryBuildInput` boundary. The 1.1.0 candidate
+adds authored curve declarations and explicit GDS reconstruction records to
+that snapshot while preserving Entity/Net ownership. Palace consumes curve
+intent through SGB; AEDT curve lowering is unsupported. The
+[GeometryPlan contract](geometry-sgb.qmd) owns exact curve identity and
+arrangement semantics. Native observations do not replace source identity or
+establish connectivity. AEDT binding evidence retains source members and
+coverage through native aggregation.
 
 ## Contract boundaries
 
 | Boundary | Authority |
 |---|---|
 | Material, layer, fabrication, Z/thickness, and 3D host facts | PDK |
-| Local entities, polygons, ports, and topology selectors | Component designer |
+| Local entities, polygon and authored curve boundaries, ports, and topology selectors | Component designer |
 | Named occurrences and the final `Net -> Entity` assignment | Notebook `GeometryPlan` |
 | Immutable normalized source geometry | `GeometryPlan` and `GeometryBuildInput` |
 | Revision-bound material, interface, owner, side, and evidence facts | `scgsim.semantics` internal stdlib core |
@@ -131,6 +134,15 @@ call that module directly while retaining their public methods, invalidation
 timing, shallow top-level stack copy, nested aliases, and problem-specific
 orchestration. The older problem-module names are private aliases, not duplicate
 implementations.
+
+The 1.1.0 Palace mesh candidate separates Gmsh geometric order from the FEM
+order and keeps the Delaunay/HXT choice, thread settings and high-order
+optimization outcome with the generated mesh. `mesh_summary()` returns detached
+meshing evidence bound to the mesh and manifest identities; Palace report and
+resolved-result views read the same recorded authority. The Eigenmode summary's
+topological degree-of-freedom estimate is not an actual solver degree-of-freedom
+count, and Electrostatic does not claim an unavailable H1 estimate. These mesh
+and summary additions remain CONVERGING.
 
 ## AEDT execution lifecycle
 

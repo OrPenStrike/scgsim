@@ -33,10 +33,25 @@ route is not an automatic repair for a difficult mesh. See the
 
 ## Read numerical changes beside the quantity
 
-Mesh size, finite-element order, adaptive passes, solver settings and search
-controls determine the numerical calculation. A native stopping flag describes
-its configured criterion. It is useful alongside the actual changes in the
+Mesh size, geometric mesh order, finite-element order, adaptive passes, solver
+settings and search controls determine different parts of the numerical
+calculation. Palace's geometric order controls the mesh representation; FEM
+order controls the field approximation. A native stopping flag describes its
+configured criterion. It is useful alongside the actual changes in the
 capacitance, frequency or participation you intend to use.
+
+The 1.1.0 Palace candidate's mesh summary records the native mesh controls and
+topology. Its Eigenmode degree-of-freedom value is a topology-based estimate,
+not a native solver count or a convergence measure. The linear-tetrahedron
+quality report also does not evaluate curved high-order element quality.
+
+Keep the three high-order controls separate: `geometry_order` creates the mesh
+geometry, FEM order controls the field approximation, and Palace
+`HighOrderOutput` controls serialization. Palace's native import default
+`RemoveCurvature=false` preserves imported high-order geometry nodes. For EPR,
+the [Palace Surface EPR contract](../specs/palace-electrostatic-sgb.qmd#curved-positive-inset-distance)
+explains the positive-inset perimeter approximation and the unchanged unmasked
+and zero-margin path.
 
 An algebraic eigenpair residual and an adaptive mesh indicator describe
 different quantities. A frequency can change little while a field-sensitive

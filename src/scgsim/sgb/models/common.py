@@ -46,7 +46,7 @@ ROUTE_ALLOWED_REPRESENTATIONS: dict[
     "B": frozenset(("cutout_boundary_shell",)),
     "C": frozenset(("material_volume",)),
 }
-CurveKindLiteral = Literal["line_segment"]
+CurveKindLiteral = Literal["line_segment", "circular_arc", "interpolation_spline", "bspline"]
 CurveOrientationLiteral = Literal[1, -1]
 SurfaceLoopRoleLiteral = Literal["outer", "hole"]
 TagSourceKindLiteral = Literal["surface", "volume"]

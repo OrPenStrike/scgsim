@@ -166,6 +166,18 @@ class ResolvedPalaceResult:
     returned_receipt: PalaceReturnedReceipt
     provenance: PalaceProvenance
 
+    def mesh_summary(self) -> dict[str, Any]:
+        """Detach sealed mesh observations; estimates are not native solver DOF."""
+        from ._mesh_summary import mesh_summary
+
+        hashes = {entry["path"]: entry["sha256"] for entry in self.provenance.handoff_metadata["hashes"]}
+        return mesh_summary(
+            self.provenance.mesh_manifest, problem=self.problem,
+            mesh_sha256=hashes["palace.msh"],
+            manifest_sha256=hashes["metadata/mesh_manifest.json"],
+            fem_order=self.provenance.config["Solver"]["Order"],
+        )
+
     def epr_result(self):
         """Detach the verified final Eigenmode EPR quantities for offline work."""
         from ._epr_results import epr_result

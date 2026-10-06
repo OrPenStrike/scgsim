@@ -25,7 +25,10 @@ def _run_request(request: Any, result_path: Path) -> int:
     """Validate and execute one decoded worker request."""
     if not isinstance(request, Mapping):
         raise TypeError("Gmsh worker request must be a mapping.")
-    groups = _mesh_xao_in_current_process(
+    from ._mesh_controls import mesh_controls
+
+    controls = mesh_controls(**_required(request, "mesh_controls", dict))
+    result = _mesh_xao_in_current_process(
         xao_path=Path(_required(request, "xao_path", str)),
         route=_required(request, "route", str),
         records=_required(request, "records", list),
@@ -33,9 +36,10 @@ def _run_request(request: Any, result_path: Path) -> int:
         mesh_path=Path(_required(request, "mesh_path", str)),
         refined_mesh_size=float(_required(request, "refined_mesh_size", int | float)),
         max_mesh_size=float(_required(request, "max_mesh_size", int | float)),
+        mesh_controls=controls,
     )
     result_path.write_text(
-        json.dumps({"groups": groups}, indent=2) + "\n", encoding="utf-8"
+        json.dumps(result, indent=2) + "\n", encoding="utf-8"
     )
     return 0
 

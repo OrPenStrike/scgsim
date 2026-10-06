@@ -3,6 +3,10 @@
   "stable_ref": "main",
   "historical": [
     {
+      "version": "1.0.2",
+      "commit": "db153da66df19ba6f1085f0b1ede92d4e5932505"
+    },
+    {
       "version": "1.0.1",
       "commit": "9c032e398f2ebabc2dc53965b2bde5c346a061bc"
     },

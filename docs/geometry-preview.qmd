@@ -2,7 +2,7 @@
 title: "Headless Geometry Preview"
 description: "Solver-metadata-bound preview APIs, artifact identity and explicit unavailable modes."
 scgsim-kind: "contract"
-scgsim-status: "STABILIZED"
+scgsim-status: "CONVERGING"
 scgsim-id: "docs/geometry-preview"
 ---
 
@@ -30,6 +30,12 @@ manifest and the config/index mapping. AEDT previews use PyAEDT 1.3.0 in
 non-graphical mode: assignments and identity come from native readback, and
 each native object is exported as OBJ before off-screen rendering. Inspecting a
 raw `.aedt` project requires the caller to select the design explicitly.
+Palace previews retain high-order connectivity and curved boundary
+representation. The preview does not compute mesh quality. The separate
+[tetrahedron diagnostic](mesh-quality.qmd) computes
+metrics only for stored native type-4 four-node tetrahedra; higher-order
+elements are counted separately and excluded, so a mesh containing only
+higher-order tetrahedra has no 3D quality metric.
 
 ## Public surface
 

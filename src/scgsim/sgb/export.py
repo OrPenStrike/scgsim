@@ -129,6 +129,20 @@ def _structured_surface_group(
         if first.surface_role == "lumped_port" and len(sources) == 1
         else _combined_provenance(sources)
     )
+    if first.surface_role == "lumped_port" and len(sources) > 1 and all(
+        source.metadata.get("curved_arrangement_surface") for source in sources
+    ):
+        provenance = {**dict(first.metadata["source_provenance"]),
+                      "native_partition_sources": tuple(dict(source.metadata["source_provenance"]) for source in sources)}
+    port_hosts = {}
+    if first.surface_role == "lumped_port" and plan.route == "B":
+        port_hosts["embedded_volume_plan_ids"] = tuple(dict.fromkeys(
+            host for source in sources
+            for host in source.metadata["embedded_volume_plan_ids"]))
+        port_hosts["embedded_volume_plan_ids_by_surface"] = {
+            source.surface_id: tuple(source.metadata["embedded_volume_plan_ids"])
+            for source in sources}
+
     return StructuredFinalPhysicalGroupRecord(
         physical_name=first_tag.physical_name,
         dimension=first_tag.dimension,
@@ -160,6 +174,7 @@ def _structured_surface_group(
             "solver_use": first.solver_use,
             "surface_role": first.surface_role,
             **_custom_physical_attribute(first),
+            **port_hosts,
         },
     )
 

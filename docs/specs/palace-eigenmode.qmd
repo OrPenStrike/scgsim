@@ -1,8 +1,8 @@
 ---
 title: "Palace Eigenmode and EPR contract"
-description: "The current staged Eigenmode facade, output selections and detached result boundary."
+description: "Eigenmode input and output selections, shared mesh controls and detached result summaries."
 scgsim-kind: "contract"
-scgsim-status: "STABILIZED"
+scgsim-status: "CONVERGING"
 scgsim-id: "docs/specs/palace-eigenmode"
 ---
 
@@ -17,13 +17,28 @@ ordinary sequence; [Xmon EPR](../tutorial-xmon-palace.qmd) adds optional physics
 | Standalone source | `set_geometry(component)` and `set_stack(stack)` on a fresh unbound simulation |
 | Output | `set_output_dir(path)` |
 | Eigenmode | `set_eigenmode(*, num_modes=10, target=None, tolerance=1e-6, save=0)` |
-| Mesh controls | `set_mesh(*, refined_mesh_size, max_mesh_size)` |
+| Mesh controls | `set_mesh(...)` retains sizes and accepts the shared Palace meshing controls |
+| Mesh summary | `mesh_summary()` returns detached meshing evidence |
 | Numerical controls | `set_numerical(...)` retains explicit order, linear solver, AMR and output choices |
 | Source/settings view | `input_summary()` returns detached source plus settings, no file/native I/O |
 | Surface model | `set_surface_epr(*, representation, specs, route_a_thin_film=None)` |
 | Authored port | `add_port(qualified_name, *, layer, layout_sheet=True, inductance)` |
 | Output selection | `set_epr_request(*, surface_interfaces=None, bulk_domain_ids=None, port_names=None)` |
 | Preparation | `mesh()`, `write_config()`, then `prepare_handoff(*, profile, executable, resources=None, setup_commands=(), petsc_options=())` |
+
+The 1.1.0 candidate adds Gmsh algorithm, thread, surface-thread, geometric
+order and high-order optimization controls to `set_mesh(...)`. Geometric order
+is distinct from the FEM order configured through `set_numerical(...)`; solver
+settings preserve the current mesh controls. The shared
+[Palace mesh contract](palace-electrostatic-sgb.qmd#palace-mesh-controls-110-candidate)
+owns defaults, invalidation, native generation and manifest behavior.
+
+`mesh_summary()` reports recorded meshing controls, native element and region
+counts, and mesh identities. Its Nédélec degree-of-freedom value is a
+topological estimate from primary-corner tetrahedra and the configured FEM
+order, not a solver-reported DOF count. Changing FEM order refreshes that
+estimate without remeshing. These mesh additions remain CONVERGING; they do
+not establish numerical adequacy.
 
 Target frequency is in hertz, mesh lengths in micrometres, inductance in henries.
 Ordinary Eigenmode does not require surface specs, ports or an EPR request.

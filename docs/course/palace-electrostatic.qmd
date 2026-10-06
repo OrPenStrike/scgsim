@@ -2,7 +2,7 @@
 title: "Palace: terminal capacitance"
 description: "Bind exact Nets as terminals and physical grounds, then prepare an Electrostatic mesh and config."
 scgsim-kind: "course"
-scgsim-status: "STABILIZED"
+scgsim-status: "CONVERGING"
 scgsim-id: "docs/course/palace-electrostatic"
 ---
 
@@ -33,6 +33,12 @@ sim.set_electrostatic(
 )
 sim.set_mesh(refined_mesh_size=5.0, max_mesh_size=300.0)
 ```
+
+Use `set_mesh(...)` to choose `algorithm_3d`, `threads`, `surface_threads`,
+`geometry_order`, and `high_order_optimize`. Geometric order describes the mesh
+representation and is independent of Palace's FEM order. Initial values and
+update behavior are in the shared
+[Palace mesh contract](../specs/palace-electrostatic-sgb.qmd#palace-mesh-controls-110-candidate).
 
 The terminal and ground selectors are exact final Net IDs. They are not
 geometric center guesses. The explicit `error` policy makes uncovered conductor
@@ -67,6 +73,10 @@ The mesh is a real preparation operation and can fail natively. Writing config
 binds terminal and Ground attributes to that mesh. Inspect the exact index map
 alongside the config: schema v2 distinguishes physical Ground from exterior
 Ground, so you can tell which conductor and boundary policy was lowered.
+After meshing, `sim.mesh_summary()` exposes detached native generation
+observations, including mesh controls, element/region counts and exact mesh
+identities. Those records describe the mesh; they do not decide whether its
+discretization is adequate for a study.
 The [source summary](source-observations.qmd) remains a separate input view;
 `ElectrostaticSim` has no `input_summary()` method.
 

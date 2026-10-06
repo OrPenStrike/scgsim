@@ -19,6 +19,7 @@ from .adapter import (
     _occurrence_include_polygon,
 )
 from .models import GeometryBuildInput, SemanticEntitySpec, VacuumRegionSpec
+from .source_curves import boundary_binding, transform_boundary
 from .vacuum import apply_vacuum_region_to_stack
 from .stack import (
     _coupon_domain_bounds,
@@ -108,7 +109,7 @@ def _local_semantics(component: Any, path: str) -> Mapping[str, Any]:
         raise ValueError(f"{path} requires component_semantics schema_version=2")
     if set(raw) - {
         "schema_version", "conductor_regions", "ports",
-        "ground_plane_contributions", "metadata",
+        "ground_plane_contributions", "boundary_curves", "boundary_reconstruction", "metadata",
     }:
         raise ValueError(f"{path} has unknown component_semantics v2 fields")
     metadata = raw.get("metadata", {})
@@ -193,6 +194,18 @@ class GeometryPlan:
         }
         self._nets: dict[str, tuple[str, ...]] = {}
         self._vacuum_region: VacuumRegionSpec | None = None
+        self._boundary_curves = ()
+        self._boundary_reconstruction = ()
+
+    def set_boundary_curves(self, boundaries) -> None:
+        """Bind explicitly authored curves in assembled source coordinates."""
+        prepared = tuple(boundary_binding(value) for value in boundaries)
+        self._boundary_curves = prepared
+
+    def set_boundary_reconstruction(self, boundaries) -> None:
+        """Select GDS boundary reconstruction explicitly; omitted inputs stay polygonal."""
+        prepared = tuple(boundary_binding(value, reconstruction=True) for value in boundaries)
+        self._boundary_reconstruction = prepared
 
     def set_vacuum_region(
         self, padding: float | Sequence[float] | Mapping[str, Any] = 0.0
@@ -552,7 +565,20 @@ class GeometryPlan:
             )
             for polygon in build_input.polygons
         )
-        build_input = replace(build_input, polygons=polygons, metadata=metadata)
+        boundary_curves = list(self._boundary_curves)
+        reconstruction = list(self._boundary_reconstruction)
+        for path, (cell, _, transform) in self._instances.items():
+            semantics = _local_semantics(cell, path)
+            for key, target, reconstruct in (
+                ("boundary_curves", boundary_curves, False),
+                ("boundary_reconstruction", reconstruction, True),
+            ):
+                target.extend(transform_boundary(value, path=path, transform=transform,
+                                                point=_point, reconstruction=reconstruct)
+                              for value in semantics.get(key, ()))
+        build_input = replace(build_input, polygons=polygons, metadata=metadata,
+                              boundary_curves=tuple(boundary_curves),
+                              boundary_reconstruction=tuple(reconstruction))
         return GeometryPlanSnapshot(
             build_input, json.dumps(stack, sort_keys=True), gds_bytes,
             gds_sha256, occurrences,
