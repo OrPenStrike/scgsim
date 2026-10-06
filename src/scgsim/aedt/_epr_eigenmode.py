@@ -781,6 +781,78 @@ def _solution_trace(data: Any, expression: str) -> dict[str, Any]:
     }
 
 
+def _frequency_solution_trace(
+    data: Any, expression: str, *, category: str, solution: str
+) -> dict[str, Any]:
+    """Retain raw frequency and optional explicit native SI evidence."""
+
+    trace = _solution_trace(data, expression)
+    if trace["unit"] != "":
+        return trace
+    evidence: dict[str, Any] = {
+        "status": "unavailable",
+        "query": {
+            "category": category,
+            "solution": solution,
+            "expression": expression,
+            "sweeps": {"Pass": "All"},
+            "si_value": True,
+            "real_method": "GetRealDataValues",
+            "imaginary_method": "GetImagDataValues",
+        },
+        "unit": "Hz",
+        "variations": [],
+    }
+    trace["si_evidence"] = evidence
+    # SI evidence is optional; failure must retain the original partial trace.
+    try:
+        import numpy as np
+
+        if len(data._original_data) != len(data.variations):
+            raise RuntimeError("native SI frequency variation count differs")
+        real_rows: list[list[Any]] = []
+        imaginary_rows: list[list[Any]] = []
+        for index, native in enumerate(data._original_data):
+            variation = data.variations[index]
+            observed: dict[str, Any] = {
+                "index": index,
+                "coordinates": dict(variation),
+                "intrinsics": {
+                    name: values.tolist()
+                    for name, values in data.intrinsics_by_variation(index).items()
+                },
+            }
+            evidence["variations"].append(observed)
+            observed["real_values"] = list(native.GetRealDataValues(expression, True))
+            observed["imaginary_values"] = list(native.GetImagDataValues(expression, True))
+            real_rows.extend(
+                data._full_keys(
+                    variation, np.asarray(observed["real_values"], dtype=float), index
+                ).tolist()
+            )
+            imaginary_rows.extend(
+                data._full_keys(
+                    variation, np.asarray(observed["imaginary_values"], dtype=float), index
+                ).tolist()
+            )
+        coordinates = [row[:-1] for row in trace["real_rows"]]
+        if not (
+            coordinates == [row[:-1] for row in real_rows]
+            == [row[:-1] for row in imaginary_rows]
+            == [row[:-1] for row in trace["imaginary_rows"]]
+        ):
+            raise RuntimeError("native SI frequency coordinates differ from raw trace")
+        evidence.update(
+            status="available",
+            columns=trace["columns"],
+            real_rows=real_rows,
+            imaginary_rows=imaginary_rows,
+        )
+    except Exception as exc:  # noqa: BLE001 -- retain optional native SI failure.
+        evidence["error"] = f"{type(exc).__name__}: {exc}"
+    return trace
+
+
 def _trace_by_pass(trace: dict[str, Any], *, final_pass: int) -> dict[int, float]:
     columns = trace["columns"]
     if "Pass" not in columns or columns[-1] != "value":
@@ -1014,8 +1086,40 @@ def _adaptive_epr_result(
             else:
                 row["frequency_native_value"] = frequency
                 row["frequency_unit_status"] = "unverified"
-                rows.append(row)
-                continue
+                si = (
+                    frequency_trace.get("si_evidence")
+                    if frequency_trace["unit"] == "" else None
+                )
+                if si is None:
+                    rows.append(row)
+                    continue
+                row["frequency_unit_evidence"] = {
+                    key: value
+                    for key, value in si.items()
+                    if key not in {"variations", "real_rows", "imaginary_rows"}
+                }
+                if si["status"] != "available":
+                    rows.append(row)
+                    continue
+                pass_index = si["columns"].index("Pass")
+                si_rows = {
+                    int(real_row[pass_index]): (real_row, imaginary_row)
+                    for real_row, imaginary_row in zip(
+                        si["real_rows"], si["imaginary_rows"]
+                    )
+                }
+                if pass_id not in si_rows:
+                    row["frequency_unit_evidence"].update(
+                        status="unavailable", error="native SI frequency Pass is unavailable"
+                    )
+                    rows.append(row)
+                    continue
+                real_row, imaginary_row = si_rows[pass_id]
+                row["frequency_unit_evidence"].update(
+                    real_row=real_row, imaginary_row=imaginary_row
+                )
+                frequency_hz = real_row[-1]
+                row["frequency_unit_status"] = "native_si"
             raw["frequency_hz"] = {"value": frequency_hz, "unit": "Hz"}
             if missing or invalid_context or unit_mismatches:
                 row["frequency_hz"] = frequency_hz
@@ -1093,7 +1197,12 @@ def _adaptive_mode_history(
     if not data:
         raise RuntimeError("native adaptive Eigenmode history is unavailable")
     data.primary_sweep = "Pass"
-    rows = {quantity: _solution_trace(data, quantity) for quantity in expected}
+    rows = {
+        quantity: _frequency_solution_trace(
+            data, quantity, category=category, solution=solution
+        )
+        for quantity in expected
+    }
     cache_titles = [item["title"] for item in cache_items]
     cache_observation: dict[str, Any] = {
         "status": "not_requested" if not cache_titles else "unavailable",

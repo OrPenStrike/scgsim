@@ -6,6 +6,11 @@ scgsim-status: "STABILIZED"
 scgsim-id: "docs/architecture"
 ---
 
+This secondary implementation reference is for contributors. For a researcher
+introduction, start with [semantic geometry](concepts/geometry.qmd) or the
+[tutorials](examples.qmd). Repository procedures live in the
+[maintainer entry](https://github.com/OrPenStrike/scgsim/blob/develop/MAINTAINING.md).
+
 SCGSim keeps PDK facts, component intent, semantic geometry, solver preparation,
 execution, result loading, and presentation distinguishable. A solver backend
 may implement its own physics, but it must not redefine geometry identity, run
@@ -80,13 +85,12 @@ owns exact side-selection and result rules. Private result presentation lives
 in backend `_presentation` modules, with public methods delegating to them;
 presentation adds no solver execution or shared physics schema.
 
-## Current truth
+## Notebook and implementation boundaries
 
-The Human accepted the PDK/Component/SCGSim semantic-authority split and public
-notebook ownership on 2026-08-16. SCGSim owns no public notebook source; OrPen
-SC PDK owns the public component examples and calls the shared runtime directly.
+OrPen SC PDK owns the public component examples and calls the shared runtime
+directly. SCGSim owns the reusable package APIs, not a duplicate notebook source.
 
-The per-family implementation status, exercised evidence, and current limits
+The per-family supported calculations and current limits
 are maintained in the [Backend Support Matrix](backend-support.qmd).
 
 Palace mesh-quality inspection is an offline reader over the emitted MSH file.

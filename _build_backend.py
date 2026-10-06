@@ -157,6 +157,15 @@ def _generate_knowledge() -> None:
             )
         )
 
+    # Public figures are auxiliary files, not Catalog text resources.
+    assets = sorted(
+        (source for source in (docs / "assets").rglob("*") if source.is_file()),
+        key=lambda path: path.relative_to(root).as_posix(),
+    )
+    for source in assets:
+        source_ref = source.relative_to(root).as_posix()
+        outputs[source_ref] = _source_bytes(source, source_ref)
+
     identifiers = [resource["id"] for resource in resources]
     if len(identifiers) != len(set(identifiers)):
         raise ValueError("Knowledge resource IDs must be unique")

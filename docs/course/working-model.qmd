@@ -1,0 +1,106 @@
+---
+title: "Work with your own model"
+description: "Change source geometry, Entity-to-Net assignments and solver requests while keeping their identities explicit."
+scgsim-kind: "course"
+scgsim-status: "CONVERGING"
+scgsim-id: "docs/course/working-model"
+---
+
+Start after one complete [capacitance](../tutorials/capacitance.qmd) or
+[resonance/EPR](../tutorials/resonance-epr.qmd) example. The next useful step is
+to change one part of the model and understand which inputs and results that
+change affects. Save the original model and result before preparing a new run.
+
+## Change the source geometry
+
+A component defines local Entity identities and authored geometry. A placed
+occurrence qualifies those identities with its registered path. The final Net
+assignment belongs to the assembled model: several source Entities can belong
+to one electrical conductor Net without losing their individual lineage.
+
+For a semantic component assembly, `GeometryPlan` makes those choices explicit:
+
+```python
+from scgsim.sgb import GeometryPlan
+
+plan = GeometryPlan(
+    component=component,
+    root_id="chip",
+    layer_stack=layer_stack,
+    material_records=material_records,
+    coupon_padding_um=coupon_padding_um,
+)
+```
+
+Here `component`, stack, material records and padding are the actual model
+inputs from your source construction. Register its actual named references
+with `plan.register_instance(path, reference)`; do not register guessed paths
+from flattened polygon names. Root-local Entities already belong to `chip`.
+Inspect the qualified identities before assigning electrical membership:
+
+```python
+print(tuple(entity.semantic_id for entity in plan.entities))
+```
+
+Supply a mapping of final Net IDs to the exact Entity IDs from that inventory
+with `plan.set_nets(net_membership)`. Choose membership from the circuit you
+intend to model, including which conductors share Ground. The
+[geometry reference](../geometry-sgb.qmd#component-to-backend-geometry-contract)
+owns the assignment contract; the [Xmon construction](../tutorial-xmon-input.qmd)
+provides a larger concrete hierarchy example.
+
+Declare the outer vacuum envelope with `plan.set_vacuum_region(...)` and call
+`plan.prepare()` to retain the source snapshot. A new geometry, material stack,
+Net assignment or envelope needs a new snapshot. Changing a detached summary
+dictionary does not edit the geometry that a solver will receive.
+
+## Change the physical model
+
+Ask which quantity you now need. Terminal capacitance requires terminal and
+reference/ground choices. A resonant field model additionally needs the
+appropriate boundaries and any explicit lumped branch. A driven response needs
+ports and wave references; a line extraction needs a defined cross section.
+Use [Concept](../concepts/problems.qmd) to separate those physical choices from
+their backend API representation.
+
+::: {.callout-note title="Q3D and Q2D have their own inputs"}
+Q3D uses GDS imports with explicit finite-thickness layers, object/material
+bindings and net/source/sink definitions. Q2D uses explicit cross-section
+rectangles and conductor groups. Neither reads your GeometryPlan through a
+`set_plan` method, and Q2D does not generate a slice of it.
+:::
+
+For another network question, continue to [Driven Modal](aedt-driven-modal.qmd)
+or [Driven Terminal](aedt-driven-terminal.qmd). For finite conductor extraction,
+use [Q3D](aedt-q3d.qmd); for per-unit-length line matrices, use [Q2D](aedt-q2d.qmd).
+Their shared [CPW source example](aedt-inputs.qmd) preserves the explicit import
+mapping rather than repeating it in every solver lesson.
+
+## Change a solver request
+
+Keep source parameters separate from native controls. Mesh size/order,
+Eigenmode search target, requested number of modes, adaptation controls and
+host resources answer different questions. Record the value and purpose of
+each change beside the quantity you plan to inspect. Example controls in a
+lesson are starting inputs, not a universal accuracy recommendation.
+
+Prepare a new run directory and handoff for a changed request. Inspect the
+[source summary](source-observations.qmd) and, when useful, the
+[prepared model](solver-observations.qmd), then execute the exact new package.
+Retain each result with its own settings so that a later comparison can name
+which geometry, boundary and request changed.
+
+## Decide whether a rerun is needed
+
+| Change | Next operation |
+|---|---|
+| Shape, stack, Net membership or outer domain | New source snapshot/import bindings, preparation and solve |
+| Boundary, terminal/port or junction circuit model | New backend model, preparation and solve |
+| Mesh or native solve controls | New prepared request and solve |
+| Requested field-side/margin evaluation on saved AEDT fields | Explicit [native saved-field analysis](aedt-saved-fields.qmd) if the sealed fields support it |
+| Loss assumptions on an existing detached EPR result | [Offline reanalysis](offline-epr.qmd), keeping the field evidence |
+
+Read the actual selected quantity and its available history after each run.
+Keep native status and missing channels visible. The
+[result-reading lesson](returned-results.qmd#interpret-for-scq-use) connects
+that evidence to the engineering or physics purpose of your model.

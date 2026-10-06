@@ -6,6 +6,10 @@ scgsim-status: "HISTORICAL"
 scgsim-id: "docs/errors"
 ---
 
+This historical archive is a secondary contributor reference, linked from the
+[maintainer entry](https://github.com/OrPenStrike/scgsim/blob/develop/MAINTAINING.md).
+For a calculation, start with the [tutorials](examples.qmd).
+
 This page records public, generic diagnostic cases without turning them into
 runtime contracts, acceptance evidence, or prescribed fixes.
 

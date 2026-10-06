@@ -1,45 +1,56 @@
 ---
-title: "Backend Support Matrix"
-description: "Accepted V1 workflows, recorded exercise limits and explicit exclusions."
+title: "Supported calculations"
+description: "Choose an implemented solver workflow by physical question, input and returned quantity."
 scgsim-kind: "contract"
-scgsim-status: "STABILIZED"
+scgsim-status: "CONVERGING"
 scgsim-id: "docs/backend-support"
 ---
 
-This matrix separates implementation state, the exercise evidence recorded for
-that scope, and claims that evidence does not establish. The implemented V1 semantics are **STABILIZED** after reviewed assigned
-checks. Release delivery and the exercise evidence below remain separate.
+SCGSim exposes the workflows below. A solver can support additional problem
+types that SCGSim has not implemented. Select the calculation by the quantity
+you need, then choose the appropriate source and boundary model.
 
-| Backend surface | Implementation | Previously recorded exercise (not rerun here) | Current limit |
+::: {.table-responsive}
+
+| Calculation | SCGSim backend | Input | Returned quantity |
 |---|---|---|---|
-| Palace Electrostatic | Stabilized V1 | Route A/B Slurm runs with strict resolution and reports exercised | Exercise scope does not establish all inputs or V1 stability. |
-| Palace Eigenmode | Stabilized V1 | Route A/B Slurm runs with strict resolution and reports exercised | This does not validate every Eigenmode EPR output or numerical result. |
-| Palace Eigenmode EPR | Accepted surface, bulk, port, reanalysis and report APIs | The guide's paired component examples are static and make no native-solve or numerical-validation claim. | Sidewall energy may remain uncomputed; reported known-loss subtotal is not total device loss. |
-| Palace Driven | Not implemented | None | Planned for later. |
-| Palace Magnetostatic | Not implemented | None | Planned for later. |
-| HFSS Eigenmode | Stabilized V1 | AEDT 2024.2 run and strict resolution exercised | Run/resolve exercise does not establish every saved-field EPR branch. |
-| HFSS Driven Modal | Stabilized V1 | AEDT 2024.2 run and strict resolution exercised | Evidence is limited to the named run/resolve scope. |
-| HFSS Driven Terminal | Stabilized V1 | AEDT 2024.2 run and strict resolution exercised | Evidence is limited to the named run/resolve scope. |
-| Q3D | Stabilized V1 | AEDT 2024.2 run and strict resolution exercised | Evidence is limited to the named run/resolve scope. |
-| Q2D | Stabilized V1 | AEDT 2024.2 run and strict resolution exercised | Evidence is limited to the named run/resolve scope. |
-| AEDT Eigenmode EPR | Accepted saved-field and history paths | A bounded unsolved probe loaded four dependent expression definitions; the full inset-sheet library is not verified. | The probe does not establish field-side selection or numerical EPR accuracy. |
-| Meep | Excluded | None | Not planned. |
+| Electrostatic | Palace | GeometryPlan, terminal and ground Nets | Ordered capacitance matrix |
+| Eigenmode | Palace | GeometryPlan, optional inductive ports | Mode frequency/native Q, energies; requested EPR |
+| Eigenmode | HFSS | GDS mapping or source-first GeometryPlan | Mode frequency/native Q; requested EPR |
+| Driven Modal | HFSS | GDS mapping and integration-line ports | Complex S-parameters, CSV and Touchstone |
+| Driven Terminal | HFSS | GDS mapping and explicit reference conductors | Complex S-parameters, CSV and Touchstone |
+| Finite 3D extraction | Q3D | Finite-thickness GDS imports and named nets | Native C/G and RL extraction matrices |
+| Cross-section extraction | Q2D | Explicit rectangles and conductor groups | Per-unit-length C/G/L/R blocks |
 
-An exercised run is evidence only for its named scope. It does not establish
-universal solver correctness, numerical convergence, cross-backend agreement,
-or independently grant V1 acceptance. A namespace name or source-lane identity is not support.
+:::
 
-Use the [Eigenmode and Offline EPR guide](eigenmode-epr.qmd) for the method and
-static workflow. The backend specifications own exact behavior:
-[AEDT Runtime Families](specs/aedt-runtime.qmd) and
-[Palace Electrostatic + SGB](specs/palace-electrostatic-sgb.qmd). The
-[Unified Report Model](report-model.qmd) describes result presentation and
-availability.
+Palace Driven and Magnetostatic are not implemented; Meep is outside SCGSim's
+scope. Palace's [native problem types](https://awslabs.github.io/palace/stable/guide/problem/)
+include calculations beyond this table. The [PyAEDT user guide](https://aedt.docs.pyansys.com/version/stable/User_guide/index.html)
+describes the underlying AEDT automation library.
 
-## Learn an implemented workflow
+## Energy participation and loss
 
-Use the [course map](examples.qmd#choose-the-physical-question) for the
-Electrostatic, ordinary Eigenmode, Eigenmode/EPR, Driven Modal/Terminal, Q3D
-and Q2D lessons. The common course distinguishes source preparation, native
-geometry observation, explicit solve and verified return. A new documentation
-render is evidence of the readable site, not another solver exercise.
+Palace and HFSS Eigenmode support surface, bulk and inductive port/junction
+analysis. A request selects quantities from the configured physical model;
+it does not make missing channels zero. Surface films use explicit thickness,
+permittivity and loss assumptions. AEDT surface estimates cover horizontal
+top/bottom interfaces, not sidewall film energy. A reported known-loss subtotal
+is therefore not automatically total device loss.
+
+AEDT can evaluate EPR from retained native saved fields without a new eigensolve;
+that operation still needs AEDT. Offline reanalysis changes attributed loss
+assumptions on a recorded EPR result without native evaluation.
+
+## Source and result differences
+
+GeometryPlan is shared by Palace and source-first HFSS Eigenmode. Q3D uses its
+own explicit imports/bindings; Q2D takes cross-section facts, not an inferred
+slice. Shared source geometry does not equalize boundary conditions or make
+lumped capacitance, resonance, S-parameters and per-length matrices interchangeable.
+Use each result's units and native conductor/port/mode order.
+
+Start with the [tutorials](examples.qmd). Exact supported requests are described
+in [Palace Electrostatic](specs/palace-electrostatic-sgb.qmd),
+[Palace Eigenmode](specs/palace-eigenmode.qmd), and
+[AEDT runtime families](specs/aedt-runtime.qmd).

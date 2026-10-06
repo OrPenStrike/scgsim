@@ -26,7 +26,7 @@ REPO_URL = f"https://github.com/{REPOSITORY}"
 SITE_URL = "https://orpenstrike.github.io/scgsim/"
 PREFIX = "/scgsim/"
 QUARTO_VERSION = "1.10.18"
-ASKR_COMMIT = "4255c04004fafb34de72a625f419b9ae4a837ac1"
+ASKR_COMMIT = "611f537ca3ec7089f7b5daf983f1554f8c98a8dd"
 
 
 def resolve_branches() -> dict[str, str]:
@@ -94,8 +94,40 @@ def presentation_blocks(config: str) -> dict[str, str]:
     return {name: blocks[name] for name in ("website", "format")}
 
 
+def historical_website(website: str, source: Path) -> str:
+    """Apply the publisher menu only to pages owned by this historical source."""
+    # Area landings follow the first available entry in that same current sidebar.
+    # The publisher configuration remains the sole maintained navigation authority.
+    sidebars = list(re.finditer(r"(?m)^    - id: ([^\n]+)\n", website))
+    landings = {}
+    for index, match in enumerate(sidebars):
+        end = sidebars[index + 1].start() if index + 1 < len(sidebars) else len(website)
+        pages = re.findall(r"(?m)^\s+- (\S+\.qmd)\s*$", website[match.end():end])
+        landings[match[1]] = next((page for page in pages if (source / page).is_file()), None)
+
+    def landing(match: re.Match[str]) -> str:
+        area, page = match[1], match[2]
+        if (source / page).is_file():
+            return match[0]
+        replacement = landings[area.lower()]
+        if replacement is None:
+            raise RuntimeError(f"historical source has no page for the {area} Area")
+        return match[0].replace(page, replacement)
+
+    website = re.sub(
+        r'(?m)^      - text: "([^"\n]+)"\n        href: (\S+\.qmd)\s*$',
+        landing, website,
+    )
+    return "".join(
+        line for line in website.splitlines(keepends=True)
+        if not (match := re.fullmatch(r"\s+- (\S+\.qmd)\s*", line))
+        or (source / match[1]).is_file()
+    )
+
+
 def overlay_presentation(source: Path, presentation: Path) -> None:
     current = presentation_blocks((presentation / "_quarto.yml").read_text())
+    current["website"] = historical_website(current["website"], source)
     original = (source / "_quarto.yml").read_text()
     blocks = presentation_blocks(original)
     for name in ("website", "format"):

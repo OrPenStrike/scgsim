@@ -2,7 +2,7 @@
 title: "AEDT: HFSS Driven Modal"
 description: "Bind explicit integration lines and prepare the current two-port modal network request."
 scgsim-kind: "course"
-scgsim-status: "STABILIZED"
+scgsim-status: "CONVERGING"
 scgsim-id: "docs/course/aedt-driven-modal"
 ---
 
@@ -40,17 +40,13 @@ handoff = prepare_handoff(
 print(handoff.spec_path, handoff.script_path)
 ```
 
-Endpoints and mesh length are micrometres; sweep bounds are GHz. The current
-public interface retains ordered ports 1 and 2. The example explicitly requests
-20,000 points, the unchanged default of `FrequencySweepSpec`; the selected
-contract lets the caller choose `points` for the study. Exact whole-number
-numeric inputs, including `20000.0`, preserve their count without truncation.
-The count is bound through native setup, export and returned readback; valid
-historical 20,000-point data retains its original custody. These values do not
-recommend adequate sampling for every response. Read the
-[caller-owned count contract](../specs/aedt-runtime.qmd#hfss-driven-sweep-count)
-when changing it. The example's bounds and line coordinates come from the pinned
-OrPen CPW specimen. Native padding is zero on the declared port sides so those
+Endpoints and mesh length are micrometres; sweep bounds are GHz. Ports 1 and 2
+retain their declared order. Choose sweep bounds and `points` for the part of
+the network response you need to resolve. The example requests 20,000 points,
+the default of `FrequencySweepSpec`; native setup and returned data use that
+same count. The [sweep reference](../specs/aedt-runtime.qmd#hfss-driven-sweep-count)
+provides its exact input rules. The line coordinates and bounds come from the
+pinned OrPen CPW specimen. Padding is zero on its declared port sides so those
 faces remain the intended ends.
 
 Before [execution](execute.qmd), inspect the copied spec's port sides, line
@@ -61,13 +57,10 @@ S-parameters, impedance and Touchstone as this network's output. Do not call
 its port ordering terminal-reference evidence or turn the export into an
 unimplemented SCGSim circuit model.
 
-Retain native convergence classification, the caller's criteria and reported
-changes/pass history with that response. The selected
-[HFSS observation contract](../specs/aedt-runtime.qmd#hfss-convergence-observations)
-removes only the additional convergence qualifications; it leaves native
-execution failure, incomplete artifacts and request/cross-export identity
-checks intact. Pass count alone does not identify a stopping cause or make
-failed work completed.
+Read the frequency-dependent response with its port convention and actual
+controls. Keep native status and the available reported changes with it; the
+[runtime reference](../specs/aedt-runtime.qmd#hfss-convergence-observations)
+owns the raw-record and failure details.
 
 For reference-conductor ports on the same public source, choose
 [Driven Terminal](aedt-driven-terminal.qmd). The exact distinction and native

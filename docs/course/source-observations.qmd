@@ -1,13 +1,14 @@
 ---
-title: "3. Inspect and retain source inputs"
+title: "Inspect and retain source inputs"
 description: "Read normalized source facts and save the paired GDS and stack without claiming native geometry."
 scgsim-kind: "course"
-scgsim-status: "STABILIZED"
+scgsim-status: "CONVERGING"
 scgsim-id: "docs/course/source-observations"
 ---
 
-Continue in the session from [shared Xmon inputs](../tutorial-xmon-input.qmd),
-with `snapshot` prepared. Before asking a backend to build geometry, inspect
+Continue from a model that supplies a prepared semantic `snapshot`, such as
+the [beginner examples](../examples.qmd#getting-started) or the deeper
+[Xmon construction](../tutorial-xmon-input.qmd). Before asking a backend to build geometry, inspect
 what you actually supplied. A missing Net, wrong material interval or unintended
 vacuum envelope is easier to understand at the source boundary.
 
@@ -44,10 +45,10 @@ import json
 from pathlib import Path
 from scgsim.sgb import build_gds_stack_geometry_input
 
-source_dir = Path(".artifacts/public-xmon-source")
+source_dir = Path(".artifacts/study-source")
 source_dir.mkdir(parents=True, exist_ok=True)
-gds_path = source_dir / "xmon.gds"
-stack_path = source_dir / "xmon.stack.json"
+gds_path = source_dir / "model.gds"
+stack_path = source_dir / "model.stack.json"
 gds_path.write_bytes(snapshot.gds_bytes)
 stack_path.write_text(json.dumps(snapshot.stack, indent=2), encoding="utf-8")
 reloaded = build_gds_stack_geometry_input(

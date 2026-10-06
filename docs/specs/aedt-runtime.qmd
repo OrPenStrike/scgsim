@@ -685,8 +685,24 @@ Plotly view. Neither is wired into the unified Visualizer. The older
 film loss tangents remain unknown rather than becoming zero. When the film loss
 tangent is known, the reported surface inverse-Q contribution is
 $p\tan\delta$; an explicit zero produces zero, while an unknown value makes
-that contribution unavailable. See [Eigenmode and Offline EPR](../eigenmode-epr.qmd)
-for the two backend APIs, reanalysis precedence, and report coverage.
+that contribution unavailable. See the [EPR Concept](../eigenmode-epr.qmd) for physical interpretation.
+Backend APIs are described in the [AEDT EPR reference](#public-epr-candidate-surface)
+and [Palace Eigenmode reference](palace-eigenmode.qmd#results-and-offline-analysis).
+The [offline EPR lesson](../course/offline-epr.qmd#interpret-an-assumption-change)
+explains reanalysis precedence; the [report reference](../report-model.qmd#eigenmode-epr-presentation)
+describes coverage.
+
+For adaptive Eigenmode frequency traces whose native reported unit is exactly
+an empty string, SCGSim also requests explicit SI real and imaginary frequency
+values from the same returned native variations using
+`GetRealDataValues(expression, True)` and `GetImagDataValues(expression, True)`.
+Their native SI basis is Hz. The original raw values and empty unit remain
+recorded; the companion retains query, variation, intrinsic and Pass identity.
+Only associated SI evidence supplies the frequency used for EPR normalization.
+Unavailable native retrieval or coordinate association retains a partial row
+and its reason. Recognized Hz/GHz traces, other unsupported or absent units,
+integral traces and historical records without this companion retain their
+existing handling; no final-mode frequency substitution or guessed unit is used.
 
 Strict `resolve_results()` also resolves the declared adaptive-mode-history and
 adaptive-EPR JSON artifacts and verifies their captured hashes. It validates

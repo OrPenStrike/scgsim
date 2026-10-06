@@ -2,144 +2,120 @@
 title: "Interpreting Eigenmode EPR"
 description: "Energy normalization, physical partitions, masks and attributed loss assumptions."
 scgsim-kind: "concept"
-scgsim-status: "STABILIZED"
+scgsim-status: "CONVERGING"
 scgsim-id: "docs/eigenmode-epr"
 ---
 
-::: {.callout-note title="Stabilized V1 interpretation contract"}
-Both backends provide one solver-specific `EigenmodeSim` with surface, bulk,
-and port/junction EPR analysis. Their preparation and result types remain
-backend-owned. Offline film reanalysis uses recorded result evidence and does
-not reopen a solver. This page documents accepted V1 semantics; assigned stabilization and
-release delivery remain separate. The [Backend Support Matrix](backend-support.qmd) separates
-accepted implementation from the currently documented exercise evidence and
-limits.
-:::
+A resonant mode stores energy in fields and circuit elements. Energy
+participation asks where that energy is concentrated. It connects a mode's
+field distribution to particular dielectrics, interfaces and junctions, helping
+you interpret which modeled channels could contribute to loss.
 
-## Workflow and state contract {#workflow-and-state-contract}
+The [energy-participation method of Minev et al.](https://arxiv.org/abs/2010.00620)
+uses modes of a linearized Josephson circuit as inputs to quantization.
+SCGSim provides the supported electromagnetic participation and loss quantities;
+a participation plot alone does not supply a nonlinear Hamiltonian, Kerr
+coefficients or a qubit lifetime.
 
-Both backends consume a shared prepared source snapshot, but their preparation,
-request and result types remain backend-owned. Ordinary modes need no film-loss
-request. Surface, bulk and port/junction EPR extend a configured physical model;
-output selection does not remove modeled domains or change normalization.
+```{mermaid}
+flowchart TB
+  F["Mode fields"] --> P["Energy partitions"]
+  P --> V["Bulk / surface / junction"]
+  V --> L["Known-loss contributions"]
+  A["Material loss assumptions"] --> L
+```
 
-Learn the operations in [Palace Eigenmode](course/palace-eigenmode.qmd),
-[Palace EPR](tutorial-xmon-palace.qmd), [AEDT EPR](tutorial-xmon-aedt.qmd) and
-[offline reanalysis](course/offline-epr.qmd). Exact signatures and selections
-belong to the [Palace Eigenmode contract](specs/palace-eigenmode.qmd) and
-[AEDT contract](specs/aedt-runtime.qmd). AEDT saved-field evaluation is a native
-workcopy operation; reanalysis of a recorded JSON result is offline arithmetic.
+## Three views of a mode {#workflow-and-state-contract}
 
-The source envelope does not equalize backend exterior conditions: unspecified
-Palace Eigenmode uses natural PMC, while current AEDT EPR records HFSS default
-Perfect E. Record boundary choice, Region size and numerical controls when
-comparing physical models; no automatic harmonization is implied.
+| View | Energy attributed to | Physical question |
+|---|---|---|
+| Bulk | A modeled dielectric volume | How much electric energy lies in this material? |
+| Surface | A thin-film interface estimate | How strongly does the field sample this interface? |
+| Junction/port | A declared linearized circuit element | How does this element participate in the mode? |
+
+A surface estimate uses the field at an interface to estimate energy in a film
+with specified thickness and permittivity. Metal-air, metal-substrate and
+substrate-air describe different interfaces and field components. Bulk and
+surface views are not automatically disjoint pieces of a complete energy budget.
+The junction model supplies its inductance and any declared capacitance; it
+represents the linearized element used in the electromagnetic calculation.
 
 ## Quantities and normalization {#quantities-and-normalization}
 
-The reported participation for a supported energy numerator is
+For an energy numerator $U_i$, participation is dimensionless:
 
 $$
-p_i = \frac{U_i}{U_{norm}}.
+p_i = \frac{U_i}{U_{\mathrm{norm}}}.
 $$
 
-AEDT's denominator combines the unique electric-domain field energy and
-declared junction capacitive energy. Palace obtains its normalization from
-final native electric-domain and capacitive-energy tables. Thin-film estimates are numerator estimates; SCGSim does not add
-them back into either backend's denominator. The detailed AEDT MA/MS/SA
-surface formulas, material-side binding, and linearized junction normalization
-are documented in [the AEDT Eigenmode reference](specs/aedt-runtime.qmd#surface-estimates-and-junction-normalization).
+Read the numerator and denominator together. AEDT uses the electric energy of
+unique physical domains plus declared junction capacitive energy. Palace uses
+its final native electric-domain and capacitive-energy tables. Thin-film energy
+estimates are numerators and are not added back into these denominators.
+The [surface and junction formulas](specs/aedt-runtime.qmd#surface-estimates-and-junction-normalization)
+define the field convention and each supported quantity.
 
-AEDT bulk-domain participation divides that domain's electric field energy by
-the same denominator; exact field-energy formulas belong to the linked runtime
-contract.
-The report presents surface, bulk, and junction/port partitions on separate
-axes; these views do not assert that every physical loss channel has been
-evaluated.
+The backends also differ physically. Palace reports signed native port
+participation, which depends on the mode's phase convention. AEDT's inductive
+$p_L$ and capacitive $p_C$ are nonnegative energy ratios. These quantities need
+their own interpretation rather than direct comparison as interchangeable
+junction numbers.
 
-For an AEDT planar junction, the source declaration includes its polygon,
-terminal nets A and B, directed in-plane unit vector, width, inductance, and
-capacitance. The formal area-average voltage and nonnegative inductive and
-capacitive participation follow the convention in the linked reference.
-Palace's `layout_sheet=True` port is a separate backend contract: it binds an
-authored component port to a layer and inductance, then reports Palace's signed
-native port participation. The signed value is phase-convention dependent and
-is not the same quantity as AEDT's nonnegative $p_L$ or $p_C$.
+State the exterior boundary and vacuum-region size alongside the geometry.
+Palace's unspecified Eigenmode exterior uses natural PMC. The documented AEDT
+EPR policy uses HFSS's default Perfect E on background-exposed surfaces of its
+native Region. A particular study's prepared native model determines its actual
+boundary; a layout preview alone does not establish it. A shared layout does
+not equalize these field models.
 
-## Surface identity, masks, and loss assumptions {#surface-identity-masks-and-loss-assumptions}
+## Interfaces and loss assumptions {#surface-identity-masks-and-loss-assumptions}
 
-For AEDT, each `SurfaceEprSpec` binds one contribution ID and source polygon ID
-to an interface (`MA`, `MS`, or `SA`), a top/bottom field side, film thickness,
-film permittivity, optional loss tangent, source, preset, and alternative mask
-margins. `MA` means metal-air, `MS` metal-substrate, and `SA` substrate-air.
-The `field_side` records the requested top/bottom side, and the adjacent source
-domains and physical owner remain explicit evidence; none is inferred from a
-display label. AEDT binds a native material side using its normal-based rule.
-Its `effective_domain_id` remains binding metadata rather than a solver-domain
-restriction or proof that the selected field belongs to that material. `MM`
-may remain semantic evidence but is not a dielectric-film energy contribution.
-Surface construction requires thickness and permittivity for MA/MS/SA. At
-initial AEDT configuration, interface defaults fill unspecified optional loss
-and provenance fields on valid contributions; explicit per-contribution
-values, including an explicit zero loss tangent, take precedence. Defaults
-cannot make an incomplete spec valid.
+For a dielectric channel with a known loss tangent, the modeled contribution is
 
-AEDT Surface EPR integrates horizontal top/bottom support only. It does not
-calculate sidewall film energy. Its unmasked baseline and every requested
-margin are separate evaluations; even a caller's explicit zero margin is a
-separate row. Margins are alternatives, not additive bands. Empty physical
-intersection is recorded as a geometric zero. Palace retains its native
-surface and mask identities; when sidewalls were not selected, their energy
-remains uncomputed rather than zero.
+$$
+Q_i^{-1} = p_i\tan\delta_i.
+$$
 
-Film loss conversion is $Q^{-1}_i=p_i\tan\delta_i$. A missing loss tangent
-means unknown and yields an unavailable inverse-Q contribution; an explicit
-`0.0` is a known zero and yields a zero contribution. Offline reanalysis applies
-partial updates in this order: recorded assumptions, interface defaults, then
-group overrides. A later value replaces only the same field; an explicit
-`None` loss update marks it unknown, while omitted fields retain their current
-values. Group overrides target exact recorded group IDs and unknown IDs fail.
-Reanalysis never selects contribution patches or changes the underlying
-geometry or field evidence.
+Both factors matter: a strongly sampled low-loss material and a weakly sampled
+high-loss film can have different effects. Film thickness, permittivity and
+loss tangent are model assumptions, not quantities determined by the layout.
+A known-loss sum covers only evaluated channels with specified losses. It is
+not total device $Q$ or $T_1$, and does not account for omitted mechanisms.
 
-Palace's native configuration writes `LossTan=0.0` when the user did not
-provide a loss tangent because that is the backend-compatible config value.
-That native value does not turn an unknown assumption into a known zero: the
-Palace v2 index and detached EPR result preserve `loss_tangent=None`, and
-SCGSim's analysis keeps the inverse-Q contribution unavailable. A native
-infinite-Q or zero-loss display is not evidence that the loss is known to be
-zero. The accepted Palace behavior retains only native Eigenmode `eig.csv`
-`Q=+inf` as explicitly reported native infinity, with its finite Q-based view
-unavailable. This preserves what the solver reported without supplying a
-physical lossless inference. The [Palace native Q contract](specs/palace-eigenmode.qmd#native-eigenmode-q)
-owns the allowance; EPR still uses actual energy/frequency evidence and its
-recorded loss assumptions, independently of that native Q value.
+An explicit zero loss tangent is a known zero contribution. An unspecified loss
+tangent is unknown, so its inverse-$Q$ contribution is unavailable even when
+participation is known. Likewise, uncomputed energy is not zero energy.
 
-Historical Palace surface-film records before
-`scgsim.palace.surface-film.v2` can contain a recorded `loss_tangent=0.0`
-whose origin is ambiguous. SCGSim retains that raw value in
-`recorded_native_assumptions`, but treats the effective loss tangent as unknown
-and marks its provenance `historical_ambiguous_zero`. Detached EPR results
-preserve both the recorded value and that interpretation; the inverse-Q
-contribution remains unavailable.
+::: {.callout-note title="Reading older Palace results" collapse="true"}
+For Palace surface-film records preceding v2, a recorded zero loss tangent has
+ambiguous origin. The reader preserves the raw value but treats its effective
+loss as unknown; the inverse-$Q$ contribution remains unavailable.
+:::
 
-The `show_epr` figure layout, owner labels, coverage counts, and baseline
-inverse-Q subtotal are specified in the [Unified Report Model](report-model.qmd#eigenmode-epr-presentation).
-The subtotal is not total device loss or a lifetime estimate; requested mask
-rows are alternatives and are not added into it. Sidewall terms remain
-uncomputed where they were not evaluated.
+Mask margins provide alternative interface estimates. Read the unmasked
+baseline and each requested margin separately, including a requested zero
+margin; do not add them as disjoint bands. AEDT evaluates horizontal top/bottom
+interfaces and does not calculate sidewall film energy. Palace sidewalls also
+remain uncomputed where they were not selected. Changing a film-loss assumption
+on stored evidence can revise the loss estimate without another field solve;
+it does not recompute the field or alter the modeled geometry.
 
-`show_epr()` keeps its three-region surface/bulk/junction view.
-`plot_epr_result()` returns one adaptive-history figure with independent
-frequency, participation, and energy subplots; a valid partial-row frequency
-does not fill its unavailable EPR quantities. Both views use stable scientific
-keys for selection rather than readable display labels.
+Native solver $Q$ and this model-derived loss budget answer different questions.
+Native $Q$ reflects the mechanisms represented in that solver calculation;
+$p\tan\delta$ attributes loss to the selected material model. Palace can report
+native infinite $Q$ without establishing a physically lossless device. Keep
+that observation separate from unknown losses and the finite-Q view described
+in the [native Q reference](specs/palace-eigenmode.qmd#native-eigenmode-q).
 
-## Read the quantities in a real result
+## Explore a result
 
-Use [offline EPR](course/offline-epr.qmd) for mode/pass selection and attributed
-assumption changes on actual recorded results. It exports figures from evidence,
-not example numbers. The [report contract](report-model.qmd) owns visible
-coverage and ordering; native saved-field requirements live in the
-[AEDT contract](specs/aedt-runtime.qmd). Missing channels and unknown loss remain
-limitations on interpretation, not zero contributions.
+Start with the [resonance/EPR tutorial](tutorials/resonance-epr.qmd), then use
+[offline EPR](course/offline-epr.qmd) to inspect recorded modes and revise loss
+assumptions. The [examples](examples.qmd) connect the physical model to its
+backend workflow.
+
+For binding and API details, use the [AEDT EPR reference](specs/aedt-runtime.qmd#public-epr-candidate-surface)
+and [Palace Eigenmode reference](specs/palace-eigenmode.qmd). The
+[report reference](report-model.qmd#eigenmode-epr-presentation) describes
+selections, ordering and the separation of baseline, margin and unavailable
+quantities.

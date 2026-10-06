@@ -6,6 +6,7 @@ project:
     - docs/*.qmd
     - docs/specs/*.qmd
     - docs/course/*.qmd
+    - docs/tutorials/*.qmd
     - docs/concepts/*.qmd
 
 execute:
@@ -20,6 +21,10 @@ website:
     type: overlay
   repo-url: https://github.com/OrPenStrike/scgsim
   repo-actions: [source, issue]
+  page-footer:
+    right:
+      - text: "Maintainer guide"
+        href: docs/ownership.qmd
   navbar:
     left:
       - text: "Overview"
@@ -27,7 +32,7 @@ website:
       - text: "Tutorial"
         href: docs/examples.qmd
       - text: "Concept"
-        href: docs/concepts/geometry.qmd
+        href: docs/concepts/problems.qmd
       - text: "Contract"
         href: docs/backend-support.qmd
   sidebar:
@@ -44,37 +49,44 @@ website:
       collapse-level: 1
       contents:
         - docs/examples.qmd
-        - section: "Mainline"
+        - section: "Getting Started"
           contents:
             - docs/course/installation.qmd
-            - docs/tutorial-xmon-input.qmd
+            - docs/tutorials/capacitance.qmd
+            - docs/tutorials/resonance-epr.qmd
+        - section: "Working with Your Model"
+          contents:
+            - docs/course/working-model.qmd
             - docs/course/source-observations.qmd
             - docs/course/solver-observations.qmd
-            - docs/course/execute.qmd
             - docs/course/returned-results.qmd
-            - docs/course/offline-epr.qmd
-        - section: "Palace models"
-          contents:
+            - docs/course/aedt-inputs.qmd
             - docs/course/palace-electrostatic.qmd
             - docs/course/palace-eigenmode.qmd
-            - docs/tutorial-xmon-palace.qmd
-        - section: "AEDT models"
-          contents:
-            - docs/course/aedt-inputs.qmd
             - docs/course/aedt-eigenmode.qmd
-            - docs/tutorial-xmon-aedt.qmd
-            - docs/course/aedt-saved-fields.qmd
             - docs/course/aedt-driven-modal.qmd
             - docs/course/aedt-driven-terminal.qmd
             - docs/course/aedt-q3d.qmd
             - docs/course/aedt-q2d.qmd
+        - section: "Advanced"
+          contents:
+            - docs/course/execute.qmd
+            - docs/course/aedt-saved-fields.qmd
+            - docs/course/offline-epr.qmd
+            - section: "Flip-chip Xmon example"
+              contents:
+                - docs/tutorial-xmon-input.qmd
+                - docs/tutorial-xmon-palace.qmd
+                - docs/tutorial-xmon-aedt.qmd
     - id: concept
       title: "Pages"
       style: floating
       collapse-level: 1
       contents:
+        - docs/concepts/problems.qmd
         - docs/concepts/geometry.qmd
         - docs/eigenmode-epr.qmd
+        - docs/concepts/model-and-numerics.qmd
     - id: contract
       title: "Pages"
       style: floating
@@ -92,16 +104,6 @@ website:
             - docs/mesh-quality.qmd
             - docs/report-model.qmd
             - docs/notebook-ux.qmd
-        - section: "Implementation"
-          contents:
-            - docs/architecture.qmd
-            - docs/ownership.qmd
-            - docs/provenance.qmd
-        - section: "Project"
-          contents:
-            - docs/goals-and-upstream.qmd
-            - docs/roadmap.qmd
-            - docs/errors.qmd
 
 format:
   askr-html:

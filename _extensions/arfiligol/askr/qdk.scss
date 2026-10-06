@@ -164,6 +164,50 @@ mark { background: var(--qdk-mark); border-radius: 6px; padding-inline: .1rem; }
 }
 .askr-version-menu a[aria-selected="true"] { background: var(--qdk-highlight); }
 .askr-version-latest { color: var(--qdk-muted); font-family: $font-family-sans-serif; font-size: 1em; font-weight: 400; }
+
+#quarto-document-content .panel-tabset > [role="tablist"] {
+  border-bottom: 1px solid var(--qdk-divider-layout);
+  margin: 0 0 1rem;
+}
+.panel-tabset [role="tab"] {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--qdk-text);
+  font-family: $headings-font-family;
+  font-size: .9rem;
+  font-weight: 400;
+  line-height: 1.25;
+  margin-bottom: -1px;
+  padding: .35rem .8rem;
+}
+#quarto-document-content .panel-tabset > .tab-content > .tab-pane > :first-child { margin-top: 0; }
+#quarto-document-content .panel-tabset > .tab-content > .tab-pane > :last-child { margin-bottom: 0; }
+.panel-tabset [role="tab"][aria-selected="true"] {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid var(--qdk-link);
+  color: var(--qdk-heading);
+  font-weight: 600;
+}
+.panel-tabset [role="tab"]:hover:not([aria-selected="true"]) {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid var(--qdk-divider-layout);
+  color: var(--qdk-heading);
+}
+@media (min-width: 30em) {
+  .panel-tabset [role="tab"],
+  .panel-tabset [role="tab"][aria-selected="true"],
+  .panel-tabset [role="tab"]:hover:not([aria-selected="true"]) {
+    background-color: transparent;
+    border-top-color: transparent;
+    border-right-color: transparent;
+    border-left-color: transparent;
+  }
+  .panel-tabset [role="tab"][aria-selected="true"] { border-bottom: 2px solid var(--qdk-link); }
+  .panel-tabset [role="tab"]:hover:not([aria-selected="true"]) { border-bottom: 2px solid var(--qdk-divider-layout); }
+}
 .navbar .nav-link { font-size: calc(16px * var(--qdk-ui)); font-weight: 400; }
 #quarto-header .navbar-container, #quarto-header .quarto-navbar-tools { align-items: center; display: flex; }
 #quarto-header .navbar-nav, #quarto-header .quarto-navbar-tools { align-self: center; }

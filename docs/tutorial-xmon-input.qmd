@@ -1,8 +1,8 @@
 ---
-title: "2. Author shared Xmon inputs"
+title: "Flip-chip Xmon: shared source inputs"
 description: "Author named public Xmon occurrences and final Nets into one immutable source snapshot."
 scgsim-kind: "course"
-scgsim-status: "STABILIZED"
+scgsim-status: "CONVERGING"
 scgsim-id: "docs/tutorial-xmon-input"
 execute:
   enabled: false
@@ -133,7 +133,7 @@ does not make those physical models identical.
 The plan retains no live component references in that snapshot. Preparing it
 establishes source identity, not native geometry validation or a solve.
 
-Continue to [3. Inspect and retain source inputs](course/source-observations.qmd).
+Continue to [inspect and retain source inputs](course/source-observations.qmd).
 That lesson reads the summary and portable GDS/stack pair, then links the
 Electrostatic and Eigenmode branches. The [GeometryPlan contract](geometry-sgb.qmd#component-to-backend-geometry-contract)
 defines occurrence, assignment and grouping behavior.

@@ -1,78 +1,40 @@
 ---
-title: "Goals, Non-goals, and Upstream Relationship"
-description: "Project goals, exclusions and upstream derivation provenance."
+title: "Project scope and derivation"
+description: "Understand SCGSim’s relationship to gsim and its supported research workflows."
 scgsim-kind: "project"
-scgsim-status: "STABILIZED"
+scgsim-status: "CONVERGING"
 scgsim-id: "docs/goals-and-upstream"
 ---
 
-## Goals
+SCGSim is an independent downstream toolkit derived from
+[gsim](https://github.com/gdsfactory/gsim). The current package maintains its own
+in-tree semantic geometry builder, supported solver adapters and result readers.
+External gsim and historical SGB sources are derivation provenance, not runtime
+fallbacks or an automatic promise of API compatibility.
 
-SCGSim is an independent downstream toolkit for research-stable,
-superconducting-circuit simulation workflows. Its direction is:
+The package connects geometry and material facts to explicit computations,
+then preserves the returned quantity's units, source and model context.
+See [supported calculations](backend-support.qmd) and the [tutorials](examples.qmd).
 
-- one explicit geometry-to-results contract across supported solvers;
-- public, reviewable provenance and failure behavior;
-- notebook-first workflows that stay readable to researchers;
-- results-first feedback to the [gsim community](https://github.com/gdsfactory/gsim)
-  through public fixtures and evidence;
-- Agent-driven development with exact revision and validation records.
+## Scope
 
-## V1 acceptance and delivery {#v1-acceptance-and-delivery}
+Palace Electrostatic/Eigenmode and AEDT HFSS Eigenmode/Driven, Q3D and Q2D are
+implemented. Public component notebooks remain with OrPen. Palace Driven and
+Magnetostatic are not implemented; Meep is outside the package scope.
 
-On 2026-10-05 the Human explicitly accepted the complete implemented V1
-semantics and assigned bounded stabilization. Acceptance covers the current
-geometry, supported solver workflows, result ownership, failure contracts,
-retained numerical/geometry policies and documented limitations, including
-caller-owned whole sweep counts, native convergence observations and narrow
-Palace native infinite-Q handling. The linked technical contracts remain the
-authority for exact behavior; acceptance adds no scientific adequacy threshold
-or support for excluded backends.
+SCGSim does not install a native solver, submit a prepared handoff implicitly,
+or treat a result as universally accurate because a calculation completed.
+The study author chooses physical assumptions and interprets the quantities.
 
-The semantic state is **STABILIZED**: the Human-assigned minimal checks have
-passed independent review and preserve the accepted function and failure
-behavior. They do not establish universal physics accuracy or new native
-solver evidence. Stable `main` carries the latest stable release, while `develop` carries the
-next prerelease line. Integration, Pages deployment and workspace synchronization
-keep their own recorded identities; semantic stabilization alone does not
-publish a newer version.
-Historical receipts retain their original source, outcome and evidence scope.
+## Derivation history {#starting-source-identities}
 
-Native Askr presentation is confirmed for the 1.0.1 maintenance release:
-four Areas, Pages and Sections navigation, and versioned sites that distinguish
-original content from presentation. Release delivery is authorized;
-instructional content revisions remain separate and are not accepted by this
-presentation decision. Runtime, result and scientific semantics remain
-unchanged. A historical version keeps its original authored content and source
-revision; updated presentation is recorded separately.
+Historical starting-source identities are listed in the
+[repository maintainer record](https://github.com/OrPenStrike/scgsim/blob/develop/MAINTAINING.md#implementation-and-project-references).
+They describe origin, not additional supported APIs. The runtime uses
+`scgsim.sgb`, not a direct external SGB consumer.
 
-## Non-goals
+## Contributor references {#v1-acceptance-and-delivery}
 
-SCGSim does not:
-
-- claim to be official gsim or replace upstream gsim;
-- promise that every code change receives Human review;
-- automatically accept upstream gsim APIs as SCGSim APIs;
-- maintain compatibility shims for older experimental interfaces;
-- support Meep;
-- use an external gsim runner or cloud execution as a fallback;
-- publish private designs, controls, paths, or run artifacts.
-
-## Starting-source identities
-
-The integrated starting lane is:
-
-| Authority | Exact identity | Meaning |
-|---|---|---|
-| gsim downstream source | `0.2.0+scq.1`, `main@8f5dc6c05255d003a9c6d8959537bcf8068379d3`, tree `505a53741953666da17d81b7036eba3ac296cd1a` | Source input for selective downstream integration; not automatic SCGSim API acceptance. |
-| Semantic Geometry Builder | `e74a343154c6b19b6ba32d6fb297e700cfe08ff2` | Derivation provenance only; the in-tree `scgsim.sgb` Core is the current geometry and topology authority consumed by SCGSim. |
-
-These identities establish provenance only. They imply neither a numerical
-Surface-EPR result nor a live Palace solve, a new direct external consumer, or
-a fallback path.
-
-## Upstream feedback
-
-The default feedback route is public fixtures, evidence, and concrete findings.
-Upstream source contribution is optional and case-specific rather than the
-definition of downstream success.
+Current implementation references and documentation-build procedures are
+available through that secondary maintainer entry. It is separate from the
+current tutorials and capability reference.

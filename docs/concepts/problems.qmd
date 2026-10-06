@@ -1,0 +1,55 @@
+---
+title: "Choose the physical problem"
+description: "Connect capacitance, resonances, port response and matrix extraction to the circuit quantity you need."
+scgsim-kind: "concept"
+scgsim-status: "CONVERGING"
+scgsim-id: "docs/concepts/problems"
+---
+
+A drawing can support several calculations. The physical problem determines
+what is excited, which boundaries are imposed and what the answer means.
+
+## Capacitance: charge response to conductor voltage
+
+Electrostatic extraction solves for conductor charge under specified terminal
+voltages. A capacitance matrix relates charge and voltage, with conductor order
+and ground choices carried by the model. It can supply a circuit's pad-to-ground
+or mutual capacitance. Palace Electrostatic and Q3D are the implemented paths.
+A finite enclosure grounded at its exterior is a different model from one with
+only selected physical conductors grounded.
+
+## Resonance: modes of a field and circuit model
+
+An Eigenmode calculation finds the resonant frequencies and fields of the
+specified model. A linearized junction can be represented by an inductive
+branch. That branch participates in the mode; it is not supplied by the drawn
+pad alone. For an ideal lumped LC model, $f_0=1/(2\pi\sqrt{LC})$ gives a useful
+interpretive reference, while the electromagnetic model includes distributed
+fields and its chosen boundaries.
+
+Palace and HFSS provide the implemented Eigenmode paths. Optional EPR analysis
+asks where the mode stores energy and what selected loss assumptions imply.
+Read [energy participation](../eigenmode-epr.qmd) before interpreting those fractions.
+
+## Driven response: excite a port at a frequency
+
+A driven problem asks how the model responds to an applied excitation.
+HFSS Modal and Terminal workflows expose complex S-parameters. The port model,
+reference conductor or integration direction is part of the problem. A peak in
+a driven response is not the same data structure as an Eigenmode result.
+
+## Finite extraction versus a cross section
+
+Q3D extracts conductor matrices for a finite three-dimensional model. Q2D
+extracts per-unit-length properties of an explicitly authored cross section.
+Neither automatically replaces the other. A finite length, end geometry and
+port treatment cannot be recovered from a per-length matrix alone.
+
+::: {.callout-tip title="Choose a quantity before a solver"}
+Write down the conductor pair, mode or port response you need, its units and
+the intended circuit-model use. Then choose a supported workflow from the
+[capability table](../backend-support.qmd).
+:::
+
+For native formulations, see [Palace problem types](https://awslabs.github.io/palace/stable/guide/problem/)
+and the [PyAEDT user guide](https://aedt.docs.pyansys.com/version/stable/User_guide/index.html).
