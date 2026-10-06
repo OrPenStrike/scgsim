@@ -1,72 +1,59 @@
 ---
-title: "From source geometry to a solver model"
-description: "Understand occurrences, Entities, Nets, regions and the distinction between declared and observed geometry."
+title: "Geometry with electrical meaning"
+description: "Understand component Entities, placed occurrences, Nets and the source snapshot consumed by a solver."
 scgsim-kind: "concept"
-scgsim-status: "STABILIZED"
+scgsim-status: "CONVERGING"
 scgsim-id: "docs/concepts/geometry"
 ---
 
-A component describes local geometry. Placing it twice creates two occurrences
-of those facts; it does not rename the component's own local Entities. A named
-occurrence path qualifies identity before flattening, so two touching polygons
-can still retain separate source lineage. The final study then assigns those
-qualified Entities to Nets. Neither touching appearance nor similar labels
-performs that assignment.
+A layout says where shapes are. A simulation also needs to know which shapes
+are conductors, which conductors share an electrical Net, where a port connects,
+and which materials occupy the surrounding space.
 
-For example, `chip/device/D1_XMON_PAD` names one source Entity in one named
-placement. `xmon_pad` is its final Net in the Xmon study. Eight sibling bump
-Entities can belong to `Ground` while remaining eight source members. A backend
-may aggregate them into a computational physical group; the group serves mesh
-or integral work and is not a ninth Entity or a promise of eight raw results.
+## Entity, occurrence and Net
 
-The PDK owns material, fabrication level and Z/thickness facts. The component
-owns local polygons, ports and topology selectors. The study's GeometryPlan
-owns occurrence names and the final Net map. Preparing the plan produces one
-immutable snapshot for backend consumption. The exact API, assignment errors,
-array handling and snapshot schema live in the
-[GeometryPlan contract](../geometry-sgb.qmd).
+An **Entity** is a named source part, such as a pad or a ground conductor.
+Placing a component creates an **occurrence** of its local Entities. A named
+path distinguishes repeated parts before flattening. The study assigns those
+qualified Entities to electrical **Nets**; similar labels or a visual impression
+of contact do not perform that assignment.
 
-## A region is part of the model
+```{mermaid}
+flowchart TB
+  C["Local Entities + ports"] --> O["Named occurrence"]
+  O --> N["Final Nets"]
+  P["PDK materials + stack"] --> S["GeometryPlan snapshot"]
+  N --> S
+  S --> B["Backend model"]
+```
 
-The outer vacuum envelope is an explicit source input on the plan. It encloses
-the study and is partitioned around modeled bodies. An authored inter-die gap
-remains distinct from that outer region. Changing padding changes the physical
-model rather than merely the camera view, so prepare a new snapshot when the
-source envelope changes.
+The PDK supplies material identity, fabrication level, thickness and host-volume
+facts. The component supplies local polygons and selectors. GeometryPlan
+combines the actual placed source with a final Net map and an outer vacuum
+region. Preparing it produces detached GDS, stack and normalized geometry.
+Changing shared geometry requires a new snapshot.
 
-Shared input does not imply identical exterior conditions. Palace's unspecified
-Eigenmode exterior has its natural PMC condition; the current AEDT EPR Region
-uses HFSS's default Perfect E policy. Record the envelope and boundary choices
-when comparing models. No implicit conversion makes those experiments equal.
+A backend may combine several source members into one mesh group or field
+integral. Those computational groups do not erase source identity or promise
+one reported value for every Entity. In the existing Xmon example,
+`chip/device/D1_XMON_PAD` is an Entity and `xmon_pad` is its assigned Net;
+several Ground members can share a native group.
 
-## Route A and Route B answer different approximation questions
+## Regions and boundaries
 
-Route A represents face metal by zero-thickness PEC sheets, with the explicit
-supported face/profile assumptions. Route B constructs finite metal and uses
-its closed exterior PEC shell; Palace excludes the conductor interior from its
-solution tetrahedra. Finite source dimensions, PEC approximation and native CAD
-implementation are separate facts. A Route-A profile may preserve physical
-substrate-face coordinates or explicitly normalize a two-face gap; it is not an
-automatic fallback when Route B is hard to mesh.
+The vacuum envelope is part of the field model, not the camera view. Substrate,
+vacuum gaps and conductor bodies retain their own identities. Boundary conditions
+belong to the physical calculation: the same snapshot can be used with different
+exterior conditions and produce different experiments.
 
-A surface interface needs material-side and contact evidence, not just a name
-such as MA or MS. Local support can vary over one sheet; substrate holes and
-exposed portions retain their own meaning. The contract records that detail so
-loss analysis can state which patches were evaluated and which were not.
+## A shared source has a specific reach
 
-## Read evidence at the stage that produced it
+Palace Electrostatic/Eigenmode and source-first HFSS Eigenmode consume a
+GeometryPlan snapshot. Ordinary GDS-based AEDT workflows use explicit layer and
+object bindings. Q3D needs finite 3D imports and net membership; Q2D needs
+cross-section rectangles and conductor groups. There is no implicit GeometryPlan
+to Q2D slice.
 
-| Stage | What it establishes |
-|---|---|
-| Source summary | Normalized declared inputs, source identity and unknowns |
-| Prepared catalogue/config | Planned backend selections and approximation choices |
-| Bound mesh/native readback | Geometry and assignments observed in that backend |
-| Returned solve receipt and outputs | Recorded execution and actual returned result evidence |
-| Report/plot | A presentation of the selected evidence and assumptions |
-
-A preview cannot create a missing Net or prove field accuracy. A completed
-receipt cannot create an uncomputed sidewall contribution. Retaining stage and
-source identity keeps these observations useful without promoting them into a
-stronger claim. Return to the [course map](../examples.qmd), or read
-[implementation responsibilities](../architecture.qmd) after completing the
-workflow.
+Read [model approximations](model-and-numerics.qmd) next, or use the
+[GeometryPlan contract](../geometry-sgb.qmd#component-to-backend-geometry-contract)
+for exact authoring rules. The [tutorials](../examples.qmd) show the sequence.

@@ -1,36 +1,31 @@
 ---
-title: "1. Choose an environment"
+title: "Install SCGSim"
 description: "Install the Python tools for your workflow and distinguish preparation from native execution."
 scgsim-kind: "course"
-scgsim-status: "STABILIZED"
+scgsim-status: "CONVERGING"
 scgsim-id: "docs/course/installation"
 ---
 
-The first choice is where each operation happens. A preparation computer builds
-source inputs and a portable handoff. A solver host has the native executable,
-license where required, and resources to run it. An analysis computer reads the
-complete returned package. These may be the same machine, but installing a
-Python extra does not install either solver.
+Start on one computer with Python **3.12 or 3.13**, a fresh environment and the
+Python tools for your chosen backend. Install the native Palace or AEDT solver
+separately before running a calculation. If you later use a remote solver host,
+the [portable handoff lesson](execute.qmd) explains that workflow.
 
-Start with Python 3.12 or 3.13 and a fresh virtual environment. These lessons
-describe the stabilized V1 source. The `develop` lane uses prerelease
-metadata, including `1.0.0rc1`; first stable `main` uses `1.0.0`. The version number
-alone does not promise the same API. Use the source revision recorded by the
-selected documentation build and the [matched public inputs](../examples.qmd#public-inputs).
-For a prerelease checkout, install that checkout rather than an older package.
-Select stable `main` only after its publication is confirmed, and use
-documentation matched to that release:
+## Create a fresh environment
+
+Clone the stable `main` checkout to follow the released documentation. To
+reproduce a particular documentation version, select its recorded source
+revision before installing.
 
 ```bash
-git clone --branch develop https://github.com/OrPenStrike/scgsim.git
+git clone --branch main https://github.com/OrPenStrike/scgsim.git
 cd scgsim
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[palace]'
 ```
 
-If reproducing a particular documentation build, select its recorded source
-revision in this clone before installing. Choose the extra for the actual work:
+Choose extras for the work you want to do:
 
 ::: {.table-responsive}
 
@@ -44,52 +39,61 @@ revision in this clone before installing. Choose the extra for the actual work:
 
 :::
 
-A visualization installation can be combined with a backend, for example
-`pip install -e '.[palace,visualization]'`. Rendering needs a usable native
-OpenGL/EGL context; an unavailable context is a rendering error, not a reason to
-show invented geometry. The [preview contract](../geometry-preview.qmd) describes
-which modes can be unavailable.
+Combine visualization with a backend using, for example,
+`pip install -e '.[palace,visualization]'`. For native geometry rendering, use
+a computer with a working OpenGL/EGL context; the
+[preview reference](../geometry-preview.qmd) describes the available modes.
 
-## Match the public PDK and kernel
+## Use the public model inputs
 
-The public component facts and executable notebooks belong to OrPen SC PDK.
-Use its pinned source listed on the course map, and resolve OrPen and SCGSim
-in the same environment. Their shared GDSFactory, kfactory and KLayout versions
-must come from one dependency resolution rather than two independent installs.
-For the public Palace source example, pass both sources to one pip resolution:
+The beginner lessons use the public SimplePad component and executable
+notebooks from [OrPen SC PDK revision `51985d9`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/51985d9507025e8241205712e866c0b804de29b9).
+Install that PDK with SCGSim in the same environment and dependency resolution,
+so their shared GDSFactory, kfactory and KLayout versions agree. From the
+SCGSim checkout, this command supplies both beginner backend paths and the
+notebook kernel tools:
 
 ```bash
-python -m pip install -e '.[palace]' 'orpen-sc-pdk @ git+https://github.com/OrPenStrike/orpen-sc-pdk.git@35b4dc1cdd3f921badcac2fe57a98366315ae8d9'
+python -m pip install -e '.[palace,aedt-epr,visualization]' 'orpen-sc-pdk @ git+https://github.com/OrPenStrike/orpen-sc-pdk.git@51985d9507025e8241205712e866c0b804de29b9' ipykernel
 ```
 
-Change the SCGSim extra to the branch you need; keep the PDK revision matched to
-this course. Select that environment's Python kernel in your notebook frontend. Notebook
-frontend tooling is a user environment choice, not a SCGSim runtime API.
+Open the public IPYNB linked by your selected lesson in your notebook frontend.
+Select the Python kernel for this checkout's `.venv` environment, using
+`.venv/bin/python`. The pinned PDK supplies `square_pad_capacitor` and
+`get_single_die_layer_stack`. You can also run the lesson's Python API steps
+in a script with this environment's Python.
+
+Check which SCGSim version you installed:
 
 ```python
 from importlib.metadata import version
 print(version("scgsim"))
 ```
 
-This observes the installed distribution version. Keep the checkout revision
-with your study notes too: two source checkpoints can expose different APIs
-under a development version. A successful import establishes Python package
-availability, not native solver availability or geometry correctness.
+Keep that version and the model's source revision with your study notes.
+
+::: {.callout-note title="Installing the deeper Xmon example" collapse="true"}
+The deeper Xmon lesson uses a separate PDK revision. When following it, install
+its pinned inputs and the appropriate SCGSim extra together:
+
+```bash
+python -m pip install -e '.[palace]' 'orpen-sc-pdk @ git+https://github.com/OrPenStrike/orpen-sc-pdk.git@35b4dc1cdd3f921badcac2fe57a98366315ae8d9'
+```
+
+Keep the PDK revision matched to the example you run.
+:::
 
 ## Prepare the solver host separately
 
-Palace handoffs require your real Palace executable or wrapper, its supported
-native configuration and the site's launch environment. You supply executable,
-resources and setup commands. SCGSim generates the selected local or Slurm
-script; it does not install Palace or submit jobs during preparation.
+For Palace, make your executable or wrapper available and configure the
+launch resources and setup commands for your computer. SCGSim generates the
+local or selected Slurm launch script; Palace itself is installed separately.
 
-AEDT execution targets AEDT **2024.2** with **PyAEDT 1.3.0** and an appropriate
-license. The package's Python 3.13 support is separate from evidence for a
-particular native AEDT run. The generated script owns one new Desktop session,
-saves and releases it, then records the observed result. Reading results later
-does not require opening Desktop.
+For AEDT, use **AEDT 2024.2**, **PyAEDT 1.3.0** and an appropriate license.
+The generated script starts its Desktop session, saves the project and
+releases the session. Reading returned results later does not require opening
+Desktop.
 
-You are ready to [author the shared Xmon snapshot](../tutorial-xmon-input.qmd).
-For the ordinary CPW AEDT families, use the [CPW input branch](aedt-inputs.qmd).
-If you already have a complete returned run, start at
-[restart and resolve](returned-results.qmd).
+Next [extract a pad capacitance](../tutorials/capacitance.qmd) or
+[find a resonance and read EPR](../tutorials/resonance-epr.qmd). If you already
+have a returned package, start with [reading results](returned-results.qmd).

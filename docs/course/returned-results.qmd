@@ -1,8 +1,8 @@
 ---
-title: "6. Restart and resolve the complete return"
+title: "Read a complete returned result"
 description: "Bind returned evidence, then interpret quantities and history for the stated SCQ research use."
 scgsim-kind: "course"
-scgsim-status: "STABILIZED"
+scgsim-status: "CONVERGING"
 scgsim-id: "docs/course/returned-results"
 ---
 
@@ -76,15 +76,10 @@ family's rows: ordered S-parameters for Driven, mode frequency/native Q for
 ordinary Eigenmode, Q3D matrices, or Q2D per-unit-length matrix blocks. Preserve
 native units and conductor/port order when using those rows downstream.
 
-For HFSS Driven/Eigenmode, the selected
-[convergence-observation contract](../specs/aedt-runtime.qmd#hfss-convergence-observations)
-retains native classification and its criteria/delta/pass/count history without
-the additional convergence qualifications. Request-setting identity and
-cross-export self-consistency remain checked. This does not reclassify a
-failed/incomplete return as completed: native analyze/save failure, interrupted
-work and missing/corrupt required artifacts keep their failure meaning. An
-unknown cause stays unknown; a pass count alone does not establish OOM,
-walltime or successful early stopping. Q2D/Q3D policies are unchanged.
+Keep the native status, actual requested controls and available history beside
+these quantities. The report does not supply missing history or turn an
+incomplete return into a completed solve. The [runtime reference](../specs/aedt-runtime.qmd)
+describes which raw records and normalized fields each family retains.
 
 Benchmark records distinguish SCGSim wall time from native task/stage times;
 missing profile data stays unavailable. A missing adaptive profile does not
@@ -95,7 +90,7 @@ availability.
 
 ## Interpret the quantity for your SCQ use {#interpret-for-scq-use}
 
-State the research use in the Notebook before interpreting the result: for
+State the research use in your study notes before interpreting the result: for
 example, a terminal capacitance for a circuit model, a resonant mode frequency,
 or the participation of a specified interface and mode. Identify the actual
 quantity, units, conductor or mode identity, boundary/model assumptions and
@@ -109,24 +104,12 @@ in a surface participation. For extraction, preserve matrix order, excitation
 and units when examining an entry. Keep missing or partial history visible;
 one snapshot cannot supply a trend that was never recorded.
 
-Retain the caller's actual stopping criteria and any changes to them in the
-Notebook alongside the returned native status and history. A criterion can be
-set arbitrarily tightly: a requested change of `0.0001%` may leave a run marked
-not converged without deciding whether its recorded quantity is adequate for
-your intended use. Conversely, a native converged flag records the solver's convergence
-classification under the configured controls; it does not establish that every
-quantity or modeling
-assumption is sufficient for the SCQ question. Do not hide either status or
-replace the caller's criterion with an undocumented default.
-
-Explain what the observed quantity and changes support for the stated use,
-what assumptions that judgement depends on, and what remains unknown. If the
-recorded evidence cannot answer the question, state that limitation and the
-specific missing evidence. This is the researcher's interpretation, not a new
-SCGSim pass/fail threshold. The report supplies traceable observations; it does
-not choose a universal sufficient change, certify FEM solver stability, or
-turn a failed return into a completed package. The strict-resolution and
-partial-inspection contracts above still apply.
+Retain the actual stopping controls and any changes beside the returned native
+status. That classification describes the native run under those controls;
+your intended use determines which quantity, assumptions and observed changes
+matter. Explain what the evidence supports and what remains unknown. If it
+cannot answer the question, name the missing evidence rather than supplying an
+unrecorded trend or a new universal accuracy cutoff.
 
 ## Continue with the evidence you actually have
 

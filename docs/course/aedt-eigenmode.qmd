@@ -2,7 +2,7 @@
 title: "AEDT: ordinary HFSS Eigenmode"
 description: "Prepare a port-free mode request and retain native frequency and Q on return."
 scgsim-kind: "course"
-scgsim-status: "STABILIZED"
+scgsim-status: "CONVERGING"
 scgsim-id: "docs/course/aedt-eigenmode"
 ---
 
@@ -53,18 +53,14 @@ including a complex component where present. SCGSim does not calculate damping
 or replace native Q from that component. Numerical history and benchmark
 availability remain separate evidence.
 
-The selected [HFSS convergence contract](../specs/aedt-runtime.qmd#hfss-convergence-observations)
-retains native classification and exported convergence observations without
-the additional convergence qualifications. The hash-bound native
-`adaptive-convergence.prop` retains the consecutive-pass count and native
-history; the existing normalized result/report does not expose that count or
-reproduce the full raw history. Keep the caller's criteria and these native
-records together when judging the requested mode's adequacy. A
-native converged flag reports the solver's classification rather than
-independently certifying the values or research use. Genuine native failure
-and incomplete data remain failures; pass counts alone do not determine an
-unknown stopping cause. Request-setting and cross-export identity still bind
-these records to the same run.
+Keep the returned mode and actual controls together when interpreting its
+frequency and Q. The report retains native classification; hash-bound
+`adaptive-convergence.prop` also preserves the native history and consecutive
+pass count, which the existing normalized result/report does not reproduce.
+The [runtime reference](../specs/aedt-runtime.qmd#hfss-convergence-observations)
+describes those records and failure behavior. Use the available changes in the
+quantity your study needs, rather than treating the native classification as
+an accuracy recommendation.
 
 An `.aedt` file and a completed ordinary receipt do not establish reusable
 saved-field EPR. If that is your task, start with the

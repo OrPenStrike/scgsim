@@ -2,7 +2,7 @@
 title: "AEDT: Q2D cross-section extraction"
 description: "Author explicit rectangles and conductor groups, then read one native per-unit-length matrix export."
 scgsim-kind: "course"
-scgsim-status: "STABILIZED"
+scgsim-status: "CONVERGING"
 scgsim-id: "docs/course/aedt-q2d"
 ---
 
@@ -61,7 +61,7 @@ group. The four-value Region padding uses **(-X, +X, -Y, +Y)**, unlike the
 six-value native order in the 3D input lesson.
 
 After [execution](execute.qmd), [resolve the full return](returned-results.qmd).
-The accepted Q2D export behavior has one native `results/q2d/rlgc_matrix.csv`,
+Q2D writes one native `results/q2d/rlgc_matrix.csv`,
 containing primary C, G, L and R blocks. `resolved.physics_results()` reads those
 blocks without creating another normalized file. Native coupling or Spice
 blocks can coexist without becoming extra primary matrices. The resolver binds
@@ -77,5 +77,4 @@ Q2D cross-section is not the finite 3D Q3D experiment. Preserve those units and
 scope when interpreting the result. Historical separate CG/RL and normalized
 Q2D files are not emitted for new requests. The
 [AEDT contract](../specs/aedt-runtime.qmd#q2d-native-combined-matrix-export)
-owns the exact export, historical readers and failure behavior; broader AEDT
-semantics are STABILIZED, with stabilization and release delivery separate.
+owns the exact export, historical readers and failure behavior.

@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="520" height="422" viewBox="0 0 520 422" role="img" aria-labelledby="title description">
+  <title id="title">From circuit layout to results</title>
+  <desc id="description">Layout and material facts feed physical model choices, then solver preparation. Prepared inputs can run locally or transfer as a handoff to a solver host. Both paths lead to returned results and report reading.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#40556b"/></marker>
+  </defs>
+  <rect width="520" height="422" rx="12" fill="#ffffff"/>
+  <g fill="none" stroke="#40556b" stroke-width="2.5" marker-end="url(#arrow)">
+    <path d="M260 66 V80"/>
+    <path d="M260 136 V150"/>
+    <path d="M260 206 V222 H130 V236"/>
+    <path d="M260 206 V222 H390 V236"/>
+    <path d="M130 306 V324 H260 V344"/>
+    <path d="M390 306 V324 H260" marker-end="none"/>
+  </g>
+  <g stroke="#96acc0" stroke-width="1.5">
+    <rect x="80" y="10" width="360" height="56" rx="10" fill="#eef5fa"/>
+    <rect x="80" y="80" width="360" height="56" rx="10" fill="#eef5fa"/>
+    <rect x="80" y="150" width="360" height="56" rx="10" fill="#eef5fa"/>
+    <rect x="20" y="236" width="220" height="70" rx="10" fill="#f2f5f7"/>
+    <rect x="280" y="236" width="220" height="70" rx="10" fill="#f2f5f7"/>
+    <rect x="80" y="344" width="360" height="68" rx="10" fill="#eaf5ef" stroke="#92b3a1"/>
+  </g>
+  <g fill="#182d40" font-family="Arial, Helvetica, sans-serif" font-size="22" text-anchor="middle">
+    <text x="260" y="33" font-weight="700">Source layout</text>
+    <text x="260" y="57">Materials and electrical Nets</text>
+    <text x="260" y="103" font-weight="700">Physical question</text>
+    <text x="260" y="127">Model and solver settings</text>
+    <text x="260" y="173" font-weight="700">Prepare solver inputs</text>
+    <text x="260" y="197">Geometry, mesh or native spec</text>
+    <text x="130" y="264" font-weight="700">Run locally</text>
+    <text x="130" y="291">Native solver</text>
+    <text x="390" y="264" font-weight="700">Transfer handoff</text>
+    <text x="390" y="291">Run on solver host</text>
+    <text x="260" y="372" font-weight="700">Read results and reports</text>
+    <text x="260" y="399">Returned outputs and interpretation</text>
+  </g>
+</svg>

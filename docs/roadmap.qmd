@@ -1,39 +1,17 @@
 ---
-title: "Roadmap and Priorities"
-description: "Release-delivery priorities and deliberately deferred solver families."
+title: "Project direction"
+description: "Current learning paths and deferred solver families."
 scgsim-kind: "project"
-scgsim-status: "STABILIZED"
+scgsim-status: "CONVERGING"
 scgsim-id: "docs/roadmap"
 ---
 
-## Current status
+The current documentation work connects complete **capacitance** and
+**resonance/EPR** examples to the public component notebooks, then introduces
+model changes and advanced execution/analysis. These teaching improvements do
+not add solver families or redefine the physical outputs.
 
-The [Backend Support Matrix](backend-support.qmd) is the detailed source for
-implementation state, exercised evidence, and current limits. The
-PDK/Component/SCGSim authority split and public notebook ownership were accepted
-on 2026-08-16; this page records priorities rather than repeating capability
-status.
-
-## Near term
-
-The reviewed Human-assigned minimal runtime stabilization and first stable
-`main` delivery are complete. The documentation-only 1.0.1 maintenance
-release uses confirmed native Askr presentation and focuses on:
-
-1. Four reader-facing Areas with floating Pages navigation and a Sections TOC.
-2. Current stable, development and retained historical sites with exact content
-   and presentation identities, preserving existing page URLs.
-3. Develop-to-main promotion, required checks and actual Pages deployment of the
-   reviewed maintenance release.
-
-Native presentation is accepted and maintenance release delivery is
-authorized. Instructional content redesign remains separate future work;
-this release does not accept the complete curriculum. It adds no solver
-family, scientific criterion, runtime API or public notebook authority.
-
-## Later
-
-- Palace Driven
-- Palace Magnetostatic
-
-Meep remains excluded.
+Palace Driven and Magnetostatic remain future work. Meep remains outside
+SCGSim's scope. Use the [support table](backend-support.qmd) for implemented
+calculations; use the [maintainer entry](https://github.com/OrPenStrike/scgsim/blob/develop/MAINTAINING.md)
+for repository and release work.

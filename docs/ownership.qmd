@@ -1,118 +1,35 @@
 ---
-title: "Folder Tree and Ownership Boundaries"
-description: "Repository paths, public notebook authority and documentation publication responsibility."
+title: "Maintainer guide"
+description: "Secondary implementation, project and documentation-build references for contributors."
 scgsim-kind: "project"
-scgsim-status: "STABILIZED"
+scgsim-status: "CONVERGING"
 scgsim-id: "docs/ownership"
 ---
 
-## Intended repository tree
+SCGSim owns the reusable geometry, solver preparation, handoff, result and
+report APIs. [OrPen SC PDK](https://github.com/OrPenStrike/orpen-sc-pdk) owns public
+component geometry, material/stack facts and executable component notebooks.
+A Python script or notebook can call SCGSim; no parent workspace is required.
 
-```text
-scgsim/
-├── README.md                 # SCGSim Development-owned package entry
-├── _quarto.yml               # SCGSim Development-owned site configuration
-├── _extensions/              # SCGSim Development-owned vendored Quarto extensions
-├── docs/                     # SCGSim Development-owned authored Quarto sources/assets
-├── src/scgsim/               # SCGSim Development-owned product source
-├── scripts/                  # SCGSim Development-owned producers/tooling
-└── tests/                    # SCGSim Development-owned stabilization tests
-```
+The site uses native Askr presentation. Overview introduces the package,
+Tutorial walks through calculations, Concept explains the models, and Contract
+provides exact interface references. Existing document URLs remain available.
 
-Generated site output is never source authority.
+Repository layout, implementation responsibilities, documentation builds and
+release procedures belong to the secondary
+[maintainer entry](https://github.com/OrPenStrike/scgsim/blob/develop/MAINTAINING.md).
 
-## Responsibility map
+## Implementation and project references
 
-| Owner | Responsibility |
+| Reference | Purpose |
 |---|---|
-| SCGSim Development | Package/build/runtime/report source, schemas, tests, scripts, CI/release, README, Quarto site configuration and extensions, authored documentation and assets, information architecture and prose, generated-reference placement/presentation |
-| OrPen SC PDK | Public PDK facts, public Component source, and public component-simulation notebooks |
-| Chip Design EPR | Surface-EPR requirements and private consumer validation only |
-| `scq-ansys-aedt` | Version-locked AEDT/PyAEDT procedure only; no repository path ownership |
-| Integration & Sync | Repository settings, merges, future pins, synchronization, and cleanup |
+| [Architecture](architecture.qmd) | Module and state boundaries, preparation and runtime flow |
+| [Provenance](provenance.qmd) | Source/result identities and public data boundaries |
+| [Goals and derivation](goals-and-upstream.qmd) | Current scope and upstream relationship |
+| [Roadmap](roadmap.qmd) | Deferred families and documentation direction |
+| [Historical errors](errors.qmd) | Revision-bound diagnostic observations |
+| [Repository maintenance](https://github.com/OrPenStrike/scgsim/blob/develop/MAINTAINING.md) | Build, version catalogue and publication procedure |
 
-Generated API reference may be produced from product-owned source, while its
-placement and presentation remain package-owned. No owner listed here may
-infer Human acceptance, publication authority, or merge authority from a green
-build.
-
-## Public documentation site
-
-The canonical site is `https://orpenstrike.github.io/scgsim/`. Stable `main`
-carries the latest stable release; `develop` carries the next prerelease line.
-Native Askr presentation is confirmed and the 1.0.1 maintenance release is
-authorized. Instructional content revisions remain a separate scope; runtime
-V1 and existing ownership boundaries remain stabilized.
-
-The site has four Areas: Overview, Tutorial, Concept and Contract. Every
-Area has a floating **Pages** menu; the right **Sections** TOC stays within the
-current document. Contract groups public
-contracts, implementation/ownership/provenance, and project history. Each page
-keeps one editable Markdown or Quarto authority and its existing URL.
-
-### Source and presentation ownership
-
-SCGSim vendors the complete unmodified upstream `_extensions/askr` from
-[Askr v0.4.1](https://github.com/arfiligol/askr/tree/4255c04004fafb34de72a625f419b9ae4a837ac1)
-at commit `4255c04004fafb34de72a625f419b9ae4a837ac1` under
-`_extensions/arfiligol/askr`. SCGSim uses native Askr presentation without a consumer stylesheet or explicit
-reader-mode activation. `_quarto.yml` supplies site identity, authored navigation
-and execution settings; the upstream extension remains unmodified. Quarto
-1.10.18 is the rendering toolchain.
-
-`scripts/pages_versions.json` is the editable version catalogue. The builder
-resolves and freezes actual source commits and package metadata. It renders
-development, current stable and pinned historical versions separately, with
-branch-local search and one atomic publication. When the current stable
-version also appears in pinned history, those entries coalesce into one site.
-Version roots include `/scgsim/v1.0.0/`, `/scgsim/v1.0.1/`, and the
-development root `/scgsim/v1.0.1-dev/`.
-
-The root selects the latest stable version. Legacy `/main/` and `/develop/`
-aliases preserve the requested page, query and fragment when routing to their
-selected version. When switching versions, a page absent from the destination falls back to
-that version's home. An unknown requested path still reports absence through
-the static host, rather than a fabricated successful page. The inline Askr version catalogue is the same across all
-sites, and a version change keeps the current page where that version has it.
-
-Current main and develop use their own content and configuration. Historical
-1.0.0 preserves its exact original README and Quarto bodies while using the
-reviewed presentation overlay: website/format configuration and the exact
-Askr pin. View source points to the original content revision.
-The footer and `build.json` distinguish package version, content SHA,
-presentation SHA, Askr commit and source branch. Generated HTML, search indexes
-and version manifests are derived artifacts, never a second editable source.
-
-### Publication and diagnostics
-
-The **Documentation Pages** workflow owns publication. Pushes to `develop` or
-`main`, and manual `workflow_dispatch`, start the combined build. At build
-start it captures source identities for the available branches and pinned
-history, renders clean tracked snapshots with code execution disabled, then
-publishes one artifact. Pull requests do not publish. Source changes reach
-stable main through the reviewed develop-to-main promotion process; stable
-metadata belongs to main, not the published develop branch.
-
-If any required version render fails, publication must not run and the last
-successful deployment remains. Inspect the failing Actions run and build logs,
-correct the tracked source/configuration and use the same workflow. For a
-one-off rebuild without source changes, open **Actions → Documentation Pages →
-Run workflow** and select the published branch. Deployment failures belong to
-the deploy job and `github-pages` environment; repository Pages settings and
-synchronization remain Integration & Sync responsibilities.
-
-For a local diagnostic build, use Python 3.12 and Quarto 1.10.18. The existing
-`--output` interface names a new directory:
-
-```bash
-preview_dir="$(mktemp -d)"
-rmdir "$preview_dir"
-python scripts/build_docs_site.py --output "$preview_dir"
-```
-
-A normal build uses captured published refs. A prepublication preview may use
-explicit clean exported candidate sources supported by the builder; it records
-that supplied content identity and does not claim the remote already contains
-it. Keep the candidate export, original content identity and presentation
-overlay distinct. Local output is not uploaded by hand, and publication does
-not use a Pages branch or personal access token.
+These secondary references retain implementation detail outside the researcher
+learning sequence. Contract pages specify public APIs and physical result
+meaning; they are not a release checklist.

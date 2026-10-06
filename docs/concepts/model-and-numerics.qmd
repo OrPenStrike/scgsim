@@ -1,0 +1,56 @@
+---
+title: "Boundaries, approximations and numerical results"
+description: "Separate the physical model, its geometric approximation and the numerical calculation."
+scgsim-kind: "concept"
+scgsim-status: "CONVERGING"
+scgsim-id: "docs/concepts/model-and-numerics"
+---
+
+Three choices shape a result: the physical model, the representation of that
+model, and the numerical calculation. Changing one is not the same as refining
+another.
+
+## Define the physical model
+
+Record the conductor grounds, exterior boundary, substrate and vacuum extent,
+port or junction elements, and material assumptions. Changing a grounded
+conductor or junction inductance changes the experiment. Shared layout does
+not imply matching exterior conditions: unspecified Palace Eigenmode uses its
+natural PMC condition; the current source-first HFSS EPR model uses the recorded
+HFSS default Perfect E exterior.
+
+## Choose the geometric approximation
+
+Route A uses zero-thickness face-metal PEC sheets with an explicit profile.
+Route B uses finite metal and its exterior PEC surfaces. In Palace Route B,
+conductor interiors are excluded from solution tetrahedra. Neither approach
+turns the ideal PEC approximation into a measured conductor-loss model.
+
+Route A's `substrate_face` and `metal_gap_equivalent` profiles have different
+coordinate/normalization meanings. Select them for the intended model; changing
+route is not an automatic repair for a difficult mesh. See the
+[geometry reference](../geometry-sgb.qmd) for exact supported forms.
+
+## Read numerical changes beside the quantity
+
+Mesh size, finite-element order, adaptive passes, solver settings and search
+controls determine the numerical calculation. A native stopping flag describes
+its configured criterion. It is useful alongside the actual changes in the
+capacitance, frequency or participation you intend to use.
+
+An algebraic eigenpair residual and an adaptive mesh indicator describe
+different quantities. A frequency can change little while a field-sensitive
+surface contribution still changes. Inspect that contribution's available
+history rather than borrowing confidence from a different observable.
+
+::: {.callout-note title="Keep model and numerical comparisons separate"}
+Refining a mesh investigates one model's discretization. Changing enclosure,
+material or port assumptions investigates a different model. Label those studies
+separately and retain units and mode/conductor identity when comparing results.
+:::
+
+A source preview displays declared geometry; a mesh/native readback displays
+backend construction; a solved field supports physical postprocessing. Missing
+sidewall energy or an unknown loss tangent remains missing or unknown, even if
+other parts of the result are readable. Continue with
+[EPR interpretation](../eigenmode-epr.qmd) or [result reading](../course/returned-results.qmd).

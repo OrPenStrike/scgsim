@@ -17,8 +17,9 @@ A run or report binds, as applicable:
 - config, mesh, handoff, result, and report artifact identities;
 - validation and failure state.
 
-The current source-lane identities are recorded in
-[Goals and upstream relationship](goals-and-upstream.qmd#starting-source-identities).
+Use the returned package together with its preparation-side source and model
+notes. A package version alone does not identify the layout, settings or native
+result of a particular study.
 
 ## Publication boundary
 

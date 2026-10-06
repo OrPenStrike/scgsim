@@ -1,69 +1,80 @@
 # SCGSim
 
-SCGSim turns superconducting-circuit source geometry into backend inputs,
-explicit solver handoffs and verified returned results. It is an independent
-downstream research toolkit. The in-tree `scgsim.sgb` owns geometry lowering;
-`scgsim.palace` and `scgsim.aedt` own their solver workflows and physical result
-meaning.
+SCGSim is a Python toolkit for electromagnetic modeling of superconducting
+circuits. It connects named layout geometry and material facts to Palace or
+Ansys Electronics Desktop, then helps you read the returned capacitance,
+resonance, network and energy-participation results.
 
-## Learn the workflow
+SCGSim is an independent downstream project derived from
+[gsim](https://github.com/gdsfactory/gsim). It maintains its own in-tree geometry
+builder and solver APIs; it is not an official gsim distribution.
 
-Start with the [simulation course](docs/examples.qmd). It takes you from
-[installation](docs/course/installation.qmd) through source observations,
-backend configuration, actual host execution, complete result retrieval and
-offline interpretation. Palace Electrostatic/Eigenmode and AEDT
-Eigenmode/EPR, Driven Modal/Terminal, Q3D and Q2D each have a dedicated branch.
+## What you can do
 
-Public component-simulation notebooks belong to OrPen SC PDK; the course links
-their canonical sources rather than maintaining another notebook copy. The
-site displays code without running kernels or solvers. Prepared files,
-native geometry observations and returned field results are distinct evidence.
+- **Describe a model by meaning.** Assign named component Entities to electrical
+  Nets and prepare a GeometryPlan snapshot with its material stack and vacuum region.
+- **Choose the physical question.** Extract capacitance, find resonant modes,
+  calculate a port response, or extract conductor matrices.
+- **Study energy and loss.** Inspect surface, bulk and junction/port
+  participation, and change loss assumptions without repeating an available field solve.
+- **Move computation to its host.** Prepare portable solver inputs locally,
+  run explicitly on an AEDT workstation or Palace local/HPC host, and load the return.
+- **Read results in context.** Keep units, port/conductor order, mode identity,
+  numerical history and available cost information beside the physics.
 
-Use the returned quantity and its recorded history to answer your stated SCQ
-research question. A native convergence flag records the outcome of your
-configured stopping criterion; it does not decide whether the result is adequate
-for that use. The [result-reading lesson](docs/course/returned-results.qmd#interpret-for-scq-use)
-shows how to retain criteria, changes, units and native status while making
-that research judgement.
+## Choose a calculation
 
-## Capabilities and interpretation
+<div class="table-responsive">
 
-The [backend support matrix](docs/backend-support.qmd) records accepted V1
-workflows and their current evidence limits. The Human accepted
-the implemented V1 semantics, and the reviewed assigned stabilization is
-complete. Stable `main` 1.0.0 is published; delivery identities and native evidence
-remain separate. Palace Driven and Magnetostatic are not implemented;
-Meep is excluded.
+| Question | SCGSim workflow | Main quantity | Typical use |
+|---|---|---|---|
+| How strongly do conductors couple electrically? | Palace Electrostatic or AEDT Q3D | Capacitance matrix, F | Circuit capacitance and electrostatic coupling |
+| Where are the resonances and their energy? | Palace Eigenmode or HFSS Eigenmode | Frequency, Hz; participation, dimensionless | Resonators and linearized junction circuits |
+| What is the response between ports? | HFSS Driven Modal or Terminal | Complex S-parameters versus frequency | Transmission, reflection and coupling |
+| What are the conductor matrices of a finite model? | AEDT Q3D | Native C/G and RL extraction matrices, with reported units | Finite interconnect extraction |
+| What are the properties per unit length? | AEDT Q2D | C/G/L/R per length | Transmission-line cross sections |
 
-Read [geometry concepts](docs/concepts/geometry.qmd) to understand source
-Entities, occurrences and final Nets, and [EPR concepts](docs/eigenmode-epr.qmd)
-to interpret participation, loss assumptions and uncomputed channels. Exact
-behavior belongs to the linked contracts; [architecture](docs/architecture.qmd)
-explains implementation responsibilities.
+</div>
 
-## Documentation and ownership
+Palace Driven and Magnetostatic are not implemented in SCGSim. Native solver
+features beyond the [supported workflows](docs/backend-support.qmd) are not
+made available merely by installing that solver.
 
-The four documentation Areas are **Overview**, **Tutorial**, **Concept**, and
-**Contract**. Each Area's **Pages** menu selects a document; **Sections** on the
-right navigates within it. Implementation and project pages live under Contract rather
-than a separate top-level Area.
+## From model to results
 
-Stable `main` carries the latest stable release; `develop` contains the next
-prerelease line. Native Askr presentation is confirmed for the 1.0.1
-maintenance release. Instructional content revisions remain separate work;
-this release does not reopen the stabilized runtime V1 contract.
+![Layout and materials define a physical question and settings. Prepare solver inputs, then explicitly run locally or transfer the handoff to a solver host. Read the returned results and reports.](docs/assets/scgsim-workflow.svg)
 
-The [documentation home](https://orpenstrike.github.io/scgsim/) selects the
-latest published stable version. Versioned sites keep a matching package
-version and content revision; the version menu distinguishes development,
-current stable, and retained history. The `/main/` and `/develop/` links remain
-aliases for the corresponding selected versions. A historical page keeps its
-original content even when its presentation is updated. Use its recorded
-content identity with the matched public input revision; a version string
-alone does not identify every API change.
+## Start with a complete example
 
-SCGSim owns runtime/package/documentation source. OrPen owns public PDK facts,
-components and component notebooks. [Ownership](docs/ownership.qmd) describes
-delivery responsibility; [provenance](docs/provenance.qmd) defines public/private
-data boundaries; [goals and derivation history](docs/goals-and-upstream.qmd)
-distinguish current authority from upstream provenance.
+The public SimplePad model is a 200 µm square pad surrounded by Ground, with a
+20 µm gap, on a single silicon die. Its east-edge sheet locates the modeled
+junction/port; it is not a galvanic metal bridge.
+
+![OrPen SimplePad layout: square pad within Ground and a magnified east-edge sheet across the 20 µm gap.](docs/assets/simple-pad-layout.png)
+
+*OrPen SC PDK SimplePad: 0.2 µm aluminum on 500 µm silicon. Diagnostic layout
+preview, not a computed field or solver result.*
+
+[Install the tools](docs/course/installation.qmd), then choose the
+[capacitance](docs/tutorials/capacitance.qmd) or
+[resonance/EPR](docs/tutorials/resonance-epr.qmd) example in the
+[Getting Started course](docs/examples.qmd).
+The course explains preparation, explicit execution and result reading in one
+sequence. Python scripts and notebooks use the same public APIs; notebooks are
+a convenient interface rather than a required runtime.
+
+Explore the [OrPen SimplePad model and notebooks](https://github.com/OrPenStrike/orpen-sc-pdk/tree/51985d9507025e8241205712e866c0b804de29b9/notebooks/ComponentSimulation/SimplePad).
+
+Palace needs its native executable on the solver host. AEDT workflows need
+AEDT 2024.2, PyAEDT 1.3.0 and a suitable license. Installing a Python extra does
+not install a solver. The preparation, solver and analysis computers may be
+one machine or separate hosts.
+
+## Understand the model
+
+Read [problem choices](docs/concepts/problems.qmd),
+[semantic geometry](docs/concepts/geometry.qmd),
+[energy participation and loss](docs/eigenmode-epr.qmd), and
+[boundaries and numerical interpretation](docs/concepts/model-and-numerics.qmd).
+Exact interfaces belong to the Contract reference. Repository contributors can
+use the separate [maintainer guide](docs/ownership.qmd).
