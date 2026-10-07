@@ -143,7 +143,8 @@ def _make_summary(mesh: MeshData, metrics: Measurements) -> Mapping[str, Any]:
     uncovered = int(mesh.element_counts["other_known_3d"])
     if uncovered:
         warnings.append(
-            f"{uncovered} known 3D elements are not four-node tetrahedra and are outside this metric."
+            f"{uncovered} known 3D elements are not four-node tetrahedra and are outside this metric. "
+            "Linear-tetrahedron quality does not assess curved/high-order element quality."
         )
     unknown = int(mesh.element_counts["unknown"])
     if unknown:

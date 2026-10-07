@@ -605,6 +605,11 @@ def configure_numerical_controls(
     device: str = "CPU",
     refined_mesh_size: float = 5.0,
     max_mesh_size: float = 300.0,
+    algorithm_3d: str = "Delaunay",
+    threads: int = 1,
+    surface_threads: int = 1,
+    geometry_order: int = 1,
+    high_order_optimize: bool = True,
     amr_max_passes: int = 0,
     amr_nonconformal: bool = False,
     amr_tolerance: float = 1e-2,
@@ -682,7 +687,12 @@ def configure_numerical_controls(
     if output_grid_function is not None and not isinstance(output_grid_function, bool):
         raise TypeError("output_grid_function must be bool or None.")
 
+    from ._mesh_controls import mesh_controls
+
     controls = {
+        **mesh_controls(algorithm_3d=algorithm_3d, threads=threads,
+                        surface_threads=surface_threads, geometry_order=geometry_order,
+                        high_order_optimize=high_order_optimize),
         "order": int(order),
         "tolerance": float(tolerance),
         "max_iterations": int(max_iterations),

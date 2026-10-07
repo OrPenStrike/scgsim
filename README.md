@@ -13,14 +13,24 @@ builder and solver APIs; it is not an official gsim distribution.
 
 - **Describe a model by meaning.** Assign named component Entities to electrical
   Nets and prepare a GeometryPlan snapshot with its material stack and vacuum region.
+- **Preserve authored curved boundaries.** Component source may declare lines,
+  arcs, interpolation splines, or B-splines, or explicitly request a GDS
+  boundary reconstruction. Polygon-only source remains polygonal.
 - **Choose the physical question.** Extract capacitance, find resonant modes,
   calculate a port response, or extract conductor matrices.
+- **Control Palace mesh representation.** Select the 3D mesher, thread settings,
+  and geometric order independently of the finite-element order, then inspect
+  the detached mesh summary.
 - **Study energy and loss.** Inspect surface, bulk and junction/port
   participation, and change loss assumptions without repeating an available field solve.
 - **Move computation to its host.** Prepare portable solver inputs locally,
   run explicitly on an AEDT workstation or Palace local/HPC host, and load the return.
 - **Read results in context.** Keep units, port/conductor order, mode identity,
   numerical history and available cost information beside the physics.
+
+Palace Routes A and B lower explicit curve intent. Curved Route C and AEDT
+curve lowering are unsupported; polygon-only inputs retain their existing
+behavior.
 
 ## Choose a calculation
 

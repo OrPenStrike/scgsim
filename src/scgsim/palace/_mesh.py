@@ -10,7 +10,7 @@ import subprocess
 import sys
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from pathlib import Path
@@ -18,6 +18,7 @@ from tempfile import TemporaryDirectory
 from typing import Any, Literal
 
 GSIM_SHA = "8f5dc6c05255d003a9c6d8959537bcf8068379d3"
+GSIM_HIGH_ORDER_DERIVATION_SHA = "00444a5fa343e2024ccf4f1fb6a3f50170166be4"
 SGB_RUNTIME_AUTHORITY = "scgsim.sgb"
 SGB_DERIVATION_BASE_SHA = "e74a343154c6b19b6ba32d6fb297e700cfe08ff2"
 SGB_DERIVATION_IMPORTED_SHA = "f3fd898d6e4eaf31595c9aaca6a0658f0cb7f3b1"
@@ -77,9 +78,15 @@ def build_route_mesh(
     output_dir: str | Path,
     refined_mesh_size: float = 5.0,
     max_mesh_size: float = 300.0,
+    algorithm_3d: str = "Delaunay",
+    threads: int = 1,
+    surface_threads: int = 1,
+    geometry_order: int = 1,
+    high_order_optimize: bool = True,
     port_sheet_source_layers: Sequence[Mapping[str, Any]] = (),
     indium_ground_bump_fill: Mapping[str, Any] | None = None,
     source_gds_bytes: bytes | None = None,
+    source_geometry_input: Any | None = None,
 ) -> MeshBuildResult:
     """Lower Route-A/Route-B SGB geometry, mesh it, and emit artifacts."""
 
@@ -87,6 +94,11 @@ def build_route_mesh(
         raise TypeError("stack must be a mapping after set_stack processing.")
     if route not in {"A", "B"}:
         raise ValueError("route must be either 'A' or 'B'.")
+    from ._mesh_controls import mesh_controls
+
+    controls = mesh_controls(algorithm_3d=algorithm_3d, threads=threads,
+                             surface_threads=surface_threads, geometry_order=geometry_order,
+                             high_order_optimize=high_order_optimize)
     thin_film = _route_a_thin_film_provenance(stack, route)
     if (
         refined_mesh_size <= 0
@@ -148,6 +160,14 @@ def build_route_mesh(
             "source": "scgsim.palace._mesh.build_route_mesh",
         },
     )
+    if source_geometry_input is not None:
+        from scgsim.sgb import bind_source_curves
+
+        build_input = bind_source_curves(build_input, source_geometry_input)
+    source_curve_provenance = {
+        "boundary_curves": [asdict(r) for r in build_input.boundary_curves],
+        "boundary_reconstruction": [asdict(r) for r in build_input.boundary_reconstruction],
+    }
     if indium_ground_bump_fill is not None:
         from scgsim.sgb.models import GeometryBuildInput
 
@@ -159,6 +179,8 @@ def build_route_mesh(
             solution_regions=build_input.solution_regions,
             metadata=build_input.metadata,
             port_sheet_regions=build_input.port_sheet_regions,
+            boundary_curves=build_input.boundary_curves,
+            boundary_reconstruction=build_input.boundary_reconstruction,
         )
         receipt = indium_ground_bump_fill.get("receipt")
         if not isinstance(receipt, Mapping):
@@ -183,7 +205,7 @@ def build_route_mesh(
     if not isinstance(records, list):
         raise TypeError("04_export_physical_groups.json must contain a list")
 
-    mesh_path, groups = _mesh_from_route_xao(
+    mesh_path, groups, meshing = _mesh_from_route_xao(
         xao_path=xao_path,
         route=route,
         records=records,
@@ -191,6 +213,7 @@ def build_route_mesh(
         mesh_path=mesh_path,
         refined_mesh_size=refined_mesh_size,
         max_mesh_size=max_mesh_size,
+        mesh_controls=controls,
     )
 
     manifest = _build_mesh_manifest(
@@ -199,6 +222,17 @@ def build_route_mesh(
         route=route,
         route_a_thin_film=thin_film,
     )
+    manifest["meshing"] = meshing
+    manifest["curve_source"] = source_curve_provenance
+    construction_plan = json.loads(
+        (semantic_dir / "02_build_route_construction_plan.json").read_text(encoding="utf-8")
+    )
+    native_curves = construction_plan.get("metadata", {}).get("curved_arrangement")
+    if native_curves is not None:
+        manifest["curved_arrangement"] = copy.deepcopy(native_curves)
+    elif build_input.boundary_curves or build_input.boundary_reconstruction:
+        raise ValueError("curved SGB construction lacks native curved-arrangement provenance")
+    manifest["source"]["gsim_high_order_meshing"] = GSIM_HIGH_ORDER_DERIVATION_SHA
     _write_json(manifest_path, manifest)
     _write_json(
         provenance_path,
@@ -255,7 +289,8 @@ def _mesh_from_route_xao(
     mesh_path: Path,
     refined_mesh_size: float,
     max_mesh_size: float,
-) -> tuple[Path, dict[str, dict[str, Any]]]:
+    mesh_controls: Mapping[str, Any],
+) -> tuple[Path, dict[str, dict[str, Any]], dict[str, Any]]:
     """Mesh an SGB XAO in one fresh Gmsh process.
 
     SGB has already written the exact XAO and structured sidecar in the caller.
@@ -272,6 +307,7 @@ def _mesh_from_route_xao(
         "mesh_path": mesh_path.relative_to(mesh_path.parent).as_posix(),
         "refined_mesh_size": refined_mesh_size,
         "max_mesh_size": max_mesh_size,
+        "mesh_controls": dict(mesh_controls),
     }
     result = _run_gmsh_worker(request=request, run_dir=mesh_path.parent)
     groups = result.get("groups")
@@ -279,7 +315,10 @@ def _mesh_from_route_xao(
         raise TypeError("fresh Gmsh mesh worker result lacks structured groups.")
     if not mesh_path.is_file():
         raise FileNotFoundError("fresh Gmsh mesh worker did not write the MSH file.")
-    return mesh_path, groups
+    meshing = result["meshing"]
+    if not isinstance(meshing, dict):
+        raise TypeError("fresh Gmsh mesh worker result lacks meshing observations.")
+    return mesh_path, groups, meshing
 
 
 def _run_gmsh_worker(*, request: Mapping[str, Any], run_dir: Path) -> Mapping[str, Any]:
@@ -367,7 +406,8 @@ def _mesh_xao_in_current_process(
     mesh_path: Path,
     refined_mesh_size: float,
     max_mesh_size: float,
-) -> dict[str, dict[str, Any]]:
+    mesh_controls: Mapping[str, Any],
+) -> dict[str, Any]:
     """Current-process implementation used only by the private fresh worker."""
 
     route = route.upper()
@@ -401,9 +441,25 @@ def _mesh_xao_in_current_process(
             )
 
         _embed_route_b_port_surfaces(groups)
+        live = _live_physical_groups()
         _setup_xao_refinement(groups, refined_mesh_size, max_mesh_size)
-        gmsh.option.setNumber("Mesh.Algorithm3D", 1)
+        native_algorithm = {"Delaunay": 1, "HXT": 10}[mesh_controls["algorithm_3d"]]
+        gmsh.option.setNumber("Mesh.Algorithm3D", native_algorithm)
+        gmsh.option.setNumber("General.NumThreads", mesh_controls["threads"])
+        gmsh.option.setNumber("Mesh.MaxNumThreads3D", mesh_controls["threads"])
+        gmsh.option.setNumber("Mesh.MaxNumThreads1D", mesh_controls["surface_threads"])
+        gmsh.option.setNumber("Mesh.MaxNumThreads2D", mesh_controls["surface_threads"])
+        gmsh.option.setNumber("Mesh.ElementOrder", 1)
+        gmsh.option.setNumber("Mesh.HighOrderOptimize", 0)
         gmsh.model.mesh.generate(3)
+        geometry_order = mesh_controls["geometry_order"]
+        optimization = {"status": "not_applicable", "invocation_count": 0}
+        if geometry_order > 1:
+            gmsh.model.mesh.setOrder(geometry_order)
+            optimization["status"] = "skipped"
+            if mesh_controls["high_order_optimize"]:
+                gmsh.model.mesh.optimize("HighOrder")
+                optimization = {"status": "completed", "invocation_count": 1}
         _validate_tetrahedral_solution_groups(groups=groups, live=live)
         _validate_port_tetrahedron_face_conformality(groups)
         _validate_port_pec_node_intersections(groups)
@@ -411,7 +467,31 @@ def _mesh_xao_in_current_process(
         gmsh.option.setNumber("Mesh.SaveAll", 0)
         gmsh.option.setNumber("Mesh.MshFileVersion", 2.2)
         gmsh.write(str(mesh_path))
-        return groups
+        from ._mesh_summary import observe_native_mesh
+
+        requested = dict(mesh_controls)
+        requested.update(refined_mesh_size=refined_mesh_size, max_mesh_size=max_mesh_size)
+        effective = dict(requested)
+        effective.update({name: gmsh.option.getNumber(option) for name, option in {
+            "algorithm_3d_code": "Mesh.Algorithm3D", "threads": "General.NumThreads",
+            "volume_threads": "Mesh.MaxNumThreads3D",
+            "surface_threads_1d": "Mesh.MaxNumThreads1D",
+            "surface_threads_2d": "Mesh.MaxNumThreads2D",
+            "automatic_high_order_optimize": "Mesh.HighOrderOptimize",
+            "refined_mesh_size": "Mesh.MeshSizeMin", "max_mesh_size": "Mesh.MeshSizeMax",
+        }.items()})
+        # Read the written artifact, including only entities retained by SaveAll=0.
+        gmsh.clear()
+        gmsh.open(str(mesh_path))
+        statistics = observe_native_mesh(groups)
+        orders = sorted({r["order"] for r in statistics["element_types"] if r["dimension"] == 3})
+        effective["geometry_order"] = orders[0] if len(orders) == 1 else None
+        effective["geometry_orders_3d"] = orders
+        return {"groups": groups, "meshing": {
+            "gmsh_version": gmsh.__version__, "requested": requested,
+            "effective": effective, "high_order_optimization": optimization,
+            "statistics": statistics,
+        }}
     finally:
         gmsh.clear()
         gmsh.finalize()
@@ -885,40 +965,61 @@ def _setup_xao_refinement(
 def _embed_route_b_port_surfaces(
     groups: Mapping[str, Mapping[str, Mapping[str, Any]]],
 ) -> None:
-    """Embed Route-B sheets in the exact SGB-authored solution volume."""
+    """Consume compiler geometric-host transport independently of material groups."""
     import gmsh
+
+    hosts: dict[str, int] = {}
+    faces: dict[str, int] = {}
+    transport_groups: list[tuple[int, int]] = []
+    families = (("SGB_VOLUME::", 3, hosts), ("SGB_PORT_SURFACE::", 2, faces))
+    for dim, physical_tag in gmsh.model.getPhysicalGroups():
+        name = gmsh.model.getPhysicalName(dim, physical_tag)
+        for prefix, expected_dim, identities in families:
+            if not name.startswith(prefix):
+                continue
+            plan_id = _required_string(name[len(prefix):], "SGB transport identity")
+            entity_tags = gmsh.model.getEntitiesForPhysicalGroup(dim, physical_tag)
+            if dim != expected_dim or len(entity_tags) != 1 or plan_id in identities:
+                raise ValueError(
+                    f"SGB transport {name!r} must uniquely bind one dimension-{expected_dim} entity."
+                )
+            identities[plan_id] = int(entity_tags[0])
+            transport_groups.append((int(dim), int(physical_tag)))
+            break
 
     for key, port in groups.get("port_surfaces", {}).items():
         if port.get("route") != "B":
             continue
-        volume_id = _required_string(
-            port.get("embedded_volume_id"), f"{key} embedded_volume_id"
-        )
-        volume = _solution_volume_by_stable_id(groups.get("volumes", {}), volume_id)
-        surface_tags = [int(tag) for tag in port.get("tags", ())]
-        volume_tags = [int(tag) for tag in volume.get("tags", ())]
-        if not surface_tags or not volume_tags:
-            raise ValueError(f"SGB Route-B lumped-port sheet {key!r} has no live tags.")
-        for volume_tag in volume_tags:
-            gmsh.model.mesh.embed(2, surface_tags, 3, volume_tag)
+        attribute = port.get("physical_attribute", {})
+        bindings = attribute.get("embedded_volume_plan_ids_by_surface")
+        if not isinstance(bindings, Mapping) or not bindings:
+            raise ValueError(f"{key} requires compiler embedded_volume_plan_ids_by_surface.")
+        surface_tags = {int(tag) for tag in port.get("tags", ())}
+        bound_faces: set[int] = set()
+        for surface_id, plan_ids in bindings.items():
+            surface_id = _required_string(surface_id, f"{key} compiler surface identity")
+            if surface_id not in faces:
+                raise ValueError(
+                    f"SGB Route-B port {key!r} is missing surface transport {surface_id!r}."
+                )
+            face_tag = faces[surface_id]
+            if face_tag not in surface_tags:
+                raise ValueError(f"SGB port surface {surface_id!r} is outside {key!r}.")
+            if not _is_nonempty_string_sequence(plan_ids):
+                raise ValueError(f"{key} surface {surface_id!r} requires compiler host identities.")
+            bound_faces.add(face_tag)
+            for plan_id in plan_ids:
+                if plan_id not in hosts:
+                    raise ValueError(
+                        f"SGB Route-B port {key!r} is missing volume transport {plan_id!r}."
+                    )
+                gmsh.model.mesh.embed(2, [face_tag], 3, hosts[plan_id])
+        if bound_faces != surface_tags:
+            raise ValueError(f"SGB Route-B port {key!r} has unbound live surface pieces.")
 
-
-def _solution_volume_by_stable_id(
-    volumes: Mapping[str, Mapping[str, Any]], stable_id: str
-) -> Mapping[str, Any]:
-    matches: list[Mapping[str, Any]] = []
-    for volume in volumes.values():
-        provenance = volume.get("source_provenance")
-        explicit_ids = set(volume.get("owner_semantic_ids", ()))
-        if isinstance(provenance, Mapping):
-            explicit_ids.update(provenance.get("volume_ids", ()))
-        if stable_id in explicit_ids:
-            matches.append(volume)
-    if len(matches) != 1:
-        raise ValueError(
-            f"SGB embedded solution id {stable_id!r} must resolve exactly one structured volume."
-        )
-    return matches[0]
+    # Transport groups are XAO-only identities, never solver material attributes.
+    if transport_groups:
+        gmsh.model.removePhysicalGroups(transport_groups)
 
 
 def _setup_mesh_refinement(
@@ -1253,8 +1354,8 @@ def _validate_port_pec_node_intersections(
 ) -> None:
     """Require each SGB port terminal edge to share actual nodes with its PEC owner."""
     for key, port in groups.get("port_surfaces", {}).items():
-        port_nodes = _surface_nodes(port.get("tags", ()))
-        if not port_nodes:
+        port_edges = _surface_mesh_edges(port.get("tags", ()))
+        if not port_edges:
             raise ValueError(f"SGB lumped-port sheet {key!r} has no mesh nodes.")
         for owner_id in port.get("owner_semantic_ids", ()):
             owner_tags = {
@@ -1267,7 +1368,7 @@ def _validate_port_pec_node_intersections(
                 raise ValueError(
                     f"SGB lumped-port sheet {key!r} owner {owner_id!r} has no PEC surface."
                 )
-            if len(port_nodes.intersection(_surface_nodes(owner_tags))) < 2:
+            if not port_edges.intersection(_surface_mesh_edges(owner_tags)):
                 raise ValueError(
                     f"SGB lumped-port sheet {key!r} owner {owner_id!r} does not share a mesh edge."
                 )
@@ -1276,12 +1377,12 @@ def _validate_port_pec_node_intersections(
 def _validate_port_tetrahedron_face_conformality(
     groups: Mapping[str, Mapping[str, Mapping[str, Any]]],
 ) -> None:
-    """Require every internal port triangle to be a two-sided tetrahedron face."""
+    """Require every full-node port triangle to be a two-sided tetrahedron face."""
     import gmsh
 
-    port_triangles: dict[str, list[tuple[int, int, int]]] = {}
+    port_triangles: dict[str, list[tuple[int, ...]]] = {}
     for key, port in groups.get("port_surfaces", {}).items():
-        triangles: list[tuple[int, int, int]] = []
+        triangles: list[tuple[int, ...]] = []
         for surface_tag in port.get("tags", ()):
             element_types, _, element_nodes = gmsh.model.mesh.getElements(
                 2, int(surface_tag)
@@ -1301,14 +1402,14 @@ def _validate_port_tetrahedron_face_conformality(
                 triangles.extend(
                     tuple(
                         sorted(
-                            int(node) for node in nodes[index : index + primary_count]
+                            int(node) for node in nodes[index : index + node_count]
                         )
                     )
                     for index in range(0, len(nodes), node_count)
                 )
         port_triangles[key] = triangles
 
-    tetrahedron_faces: Counter[tuple[int, int, int]] = Counter(
+    tetrahedron_faces: Counter[tuple[int, ...]] = Counter(
         {triangle: 0 for triangles in port_triangles.values() for triangle in triangles}
     )
     volume_tags = {
@@ -1319,17 +1420,18 @@ def _validate_port_tetrahedron_face_conformality(
     for volume_tag in volume_tags:
         element_types, _, _ = gmsh.model.mesh.getElements(3, volume_tag)
         for element_type in element_types:
-            name, dimension, *_ = gmsh.model.mesh.getElementProperties(element_type)
+            name, dimension, order, *_ = gmsh.model.mesh.getElementProperties(element_type)
             if dimension != 3 or "tetrahedron" not in name.lower():
                 continue
             face_nodes = gmsh.model.mesh.getElementFaceNodes(
-                int(element_type), 3, volume_tag, primary=True
+                int(element_type), 3, volume_tag, primary=False
             )
-            if len(face_nodes) % 3:
+            face_size = (order + 1) * (order + 2) // 2
+            if len(face_nodes) % face_size:
                 raise ValueError("Gmsh returned an incomplete tetrahedron face list.")
-            for index in range(0, len(face_nodes), 3):
+            for index in range(0, len(face_nodes), face_size):
                 face = tuple(
-                    sorted(int(node) for node in face_nodes[index : index + 3])
+                    sorted(int(node) for node in face_nodes[index : index + face_size])
                 )
                 if face in tetrahedron_faces:
                     tetrahedron_faces[face] += 1
@@ -1347,16 +1449,20 @@ def _validate_port_tetrahedron_face_conformality(
             )
 
 
-def _surface_nodes(tags: Sequence[Any]) -> set[int]:
+def _surface_mesh_edges(tags: Sequence[Any]) -> set[tuple[int, ...]]:
+    """Use complete native edge nodes, including elevated interpolation nodes."""
     import gmsh
 
-    nodes: set[int] = set()
+    edges: set[tuple[int, ...]] = set()
     for tag in tags:
-        node_tags, _, _ = gmsh.model.mesh.getNodes(
-            2, int(tag), includeBoundary=True, returnParametricCoord=False
-        )
-        nodes.update(int(node) for node in node_tags)
-    return nodes
+        element_types, _, _ = gmsh.model.mesh.getElements(2, int(tag))
+        for code in element_types:
+            _, _, order, *_ = gmsh.model.mesh.getElementProperties(code)
+            nodes = gmsh.model.mesh.getElementEdgeNodes(int(code), int(tag), primary=False)
+            size = order + 1
+            edges.update(tuple(sorted(int(n) for n in nodes[i:i+size]))
+                         for i in range(0, len(nodes), size))
+    return edges
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:

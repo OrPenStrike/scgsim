@@ -46,6 +46,21 @@ vacuum gaps and conductor bodies retain their own identities. Boundary condition
 belong to the physical calculation: the same snapshot can be used with different
 exterior conditions and produce different experiments.
 
+## Explicit curved boundaries
+
+Component source can attach authored line, circular-arc, interpolation-spline,
+or B-spline chains to selected Entity boundaries. A caller can also explicitly
+select a curve reconstruction for a GDS boundary. The source snapshot retains
+the polygon source and curve declarations; placing an occurrence transforms
+the ordered curve chain with its Entity. Curve intent does not assign a Net,
+and SCGSim does not smooth polygon edges implicitly. Polygon-only inputs remain
+polygonal.
+
+Palace Routes A and B lower active curve intent. Route C and AEDT planar
+preparation do not support curves. The [GeometryPlan contract](../geometry-sgb.qmd)
+describes how to author a chain or select GDS boundary segments, and how those
+boundaries retain their Entity and occurrence identities.
+
 ## A shared source has a specific reach
 
 Palace Electrostatic/Eigenmode and source-first HFSS Eigenmode consume a

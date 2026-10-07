@@ -79,25 +79,6 @@ _OTHER_COLORS = (
     "#17BECF",
     "#9EDAE5",
 )
-_DIMENSIONS = {
-    "vertex": 0,
-    "line": 1,
-    "line3": 1,
-    "triangle": 2,
-    "triangle6": 2,
-    "quad": 2,
-    "quad8": 2,
-    "quad9": 2,
-    "tetra": 3,
-    "tetra10": 3,
-    "hexahedron": 3,
-    "hexahedron20": 3,
-    "hexahedron27": 3,
-    "wedge": 3,
-    "pyramid": 3,
-}
-
-
 @dataclass(frozen=True)
 class _Part:
     dataset: Any
@@ -418,7 +399,7 @@ def inspect_palace_geometry(run_dir: str | Path) -> GeometryPreview:
     index_map = _json(paths["metadata/palace_index_map.json"])
     config = _json(paths["config.json"])
     mesh = meshio.read(paths["palace.msh"])
-    grid = pv.from_meshio(mesh)
+    grid = _high_order_grid(mesh, mesh_manifest, pv)
     physical_blocks = mesh.cell_data.get("gmsh:physical")
     if physical_blocks is None or len(physical_blocks) != len(mesh.cells):
         raise ValueError("Palace mesh has no complete gmsh:physical cell tags")
@@ -426,9 +407,7 @@ def inspect_palace_geometry(run_dir: str | Path) -> GeometryPreview:
     cell_types: list[str] = []
     physical: list[int] = []
     for block, tags in zip(mesh.cells, physical_blocks, strict=True):
-        if block.type not in _DIMENSIONS:
-            raise ValueError(f"unsupported Palace mesh cell type: {block.type}")
-        dimensions.extend([_DIMENSIONS[block.type]] * len(block.data))
+        dimensions.extend([block.dim] * len(block.data))
         cell_types.extend([block.type] * len(block.data))
         physical.extend(int(value) for value in tags)
     if len(physical) != grid.n_cells:
@@ -1047,3 +1026,60 @@ def _artifact_matches(root: Path, artifact: Any) -> bool:
         return False
     path = _confined(root, relative)
     return path.is_file() and _sha256(path) == expected
+
+
+def _high_order_grid(mesh: Any, manifest: Mapping[str, Any], pv: Any) -> Any:
+    """Retain complete Gmsh p3+ nodes in native VTK Lagrange cell order.
+
+    meshio already maps quadratic cells to VTK order. Complete higher-order
+    simplices retain Gmsh order, so native reference lattices supply the exact
+    permutation instead of dropping their non-corner nodes.
+    """
+    import numpy as np
+    from meshio._vtk_common import meshio_to_vtk_type
+    from vtkmodules.vtkCommonDataModel import (
+        vtkLagrangeCurve, vtkLagrangeTriangle, vtkLagrangeTetra,
+    )
+
+    records = manifest.get("meshing", {}).get("statistics", {}).get("element_types", ())
+    families = {
+        "line": (vtkLagrangeCurve, "VTK_LAGRANGE_CURVE"),
+        "triangle": (vtkLagrangeTriangle, "VTK_LAGRANGE_TRIANGLE"),
+        "tetra": (vtkLagrangeTetra, "VTK_LAGRANGE_TETRAHEDRON"),
+    }
+    cells = []
+    for block in mesh.cells:
+        record = next((r for r in records if r["dimension"] == block.dim
+                       and r["nodes_per_element"] == block.data.shape[1]), None)
+        family = next((name for name in families if block.type.startswith(name)), None)
+        if record is None or record["order"] <= 2 or family is None:
+            cells.append((block.type, block.data))
+            continue
+        cls, vtk_type = families[family]
+        order, count, dimension = record["order"], record["nodes_per_element"], block.dim
+        native = np.asarray(record["reference_coordinates"]).reshape(count, dimension)
+        if dimension == 1:
+            native = (native + 1.0) / 2.0
+        source_lattice = {tuple(round(float(x)*order) for x in point): i
+                          for i, point in enumerate(native)}
+        cell = cls()
+        cell.GetPointIds().SetNumberOfIds(count)
+        cell.GetPoints().SetNumberOfPoints(count)
+        cell.Initialize()
+        target = np.asarray(cell.GetParametricCoords()).reshape(count, 3)[:, :dimension]
+        permutation = [source_lattice[tuple(round(float(x)*order) for x in point)]
+                       for point in target]
+        cells.append((vtk_type, block.data[:, permutation]))
+    # Supply each cell's complete connectivity length directly: the fixed-node
+    # lookup in PyVista's meshio reader does not cover native Lagrange types.
+    connectivity = [np.column_stack((np.full(len(data), data.shape[1]), data)).ravel()
+                    for _, data in cells]
+    cell_types = np.concatenate([np.full(len(data), meshio_to_vtk_type[kind])
+                                 for kind, data in cells])
+    grid = pv.UnstructuredGrid(np.concatenate(connectivity).astype(np.int64, copy=False),
+                              cell_types, np.asarray(mesh.points, dtype=np.float64))
+    grid.point_data.update({key: np.asarray(value, dtype=np.float64)
+                            for key, value in mesh.point_data.items()})
+    grid.cell_data.update({key: np.concatenate(values)
+                           for key, values in mesh.cell_data.items()})
+    return grid

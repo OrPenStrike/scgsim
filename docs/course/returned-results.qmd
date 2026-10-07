@@ -34,6 +34,12 @@ strict resolver requires completed receipt-bound output, matching geometry,
 config, handoff and hashes. It does not accept a failed run because a frequency
 CSV happens to exist.
 
+For Palace, `resolved.mesh_summary()` reads meshing evidence
+from the resolved run and binds it to the sealed mesh and manifest identities.
+The Eigenmode degree-of-freedom value is a primary-corner topology estimate for
+the configured FEM order, not a native solver count. Historical runs without
+these added meshing fields keep them unavailable as not recorded.
+
 Read the report in its displayed order: identity/trustworthiness, numerical
 evidence and cost, then the available physics. Identity and completion tell
 you what evidence you can attribute to this run; the physical question tells

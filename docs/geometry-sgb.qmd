@@ -2,7 +2,7 @@
 title: "GeometryPlan and SGB Route A/B"
 description: "GeometryPlan source identity, occurrence and Net ownership, route lowering and input summary."
 scgsim-kind: "contract"
-scgsim-status: "STABILIZED"
+scgsim-status: "ACCEPTED"
 scgsim-id: "docs/geometry-sgb"
 ---
 
@@ -31,6 +31,97 @@ full ground-plane Entities into each child occurrence or create planes
 automatically. The Notebook owns the final `Net -> Entity` map across the
 common planes, local device Entities, and named ground connections. Geometry
 does not infer electrical connectivity or merge child net maps.
+
+## Source curves and native shared topology {#source-curves}
+
+The curve scope is **ACCEPTED**. Polygon-only inputs retain their polygon
+boundaries. Curves are explicit source declarations, not smoothing inferred
+from a rendered layout or a mesh.
+
+`SourceCurveSpec` describes XY coordinates in micrometres. Supported kinds are
+`line_segment` (two endpoints), `circular_arc` (start, on-arc, end),
+`interpolation_spline` (native interpolation through the supplied points), and
+`bspline` (control points with explicit degree, rational weights, distinct knots
+and their multiplicities when supplied). An optional `parameter_interval`
+trims the native source curve; it does not rescale or refit its geometry.
+Control points are not topological vertices. A `circular_arc` lowers to one
+exact composite rational B-spline on native domain `[0, 1]`; its internal knots
+separate the exact spans, and a trim may cross those knots. For a caller-authored
+`bspline`, the supplied degree, weights, knots, multiplicities, and native
+parameter domain remain authoritative.
+
+A `BoundaryCurveChainSpec` binds an ordered closed boundary to `entity_id`,
+`boundary_id`, and `selector_point_um`. The selector lies in the selected
+Entity-owned **positive conductor region**. Compound source polygons are
+unioned into logical polygons before selection, including bridge-encoded GDS
+holes. `role="outer"` selects its exterior; `role="hole", hole_index=0`
+selects the first recorded hole of that same polygon. A hole selector still
+lies in the conductor, rather than in the empty hole. Hole order and source
+orientation travel with the occurrence; native tags do not identify Entities,
+Nets or source boundaries.
+
+Component-semantics `boundary_curves` and `boundary_reconstruction` records
+use local Entity and boundary IDs. GeometryPlan qualifies them with the
+registered occurrence and applies its rigid XY transform once. For assembled
+inputs, use `plan.set_boundary_curves(records)` or
+`plan.set_boundary_reconstruction(records)` with qualified IDs. The detached
+snapshot retains source polygons, declarations and occurrence provenance;
+there is no live Gmsh model in the source snapshot.
+
+`GdsBoundaryReconstructionSpec` requires explicit ordered `segment_indices`:
+index `i` denotes the original edge from vertex `i` to `(i + 1) % N`.
+The selected consecutive chain can cross index zero. `closed=True` selects
+an entire ring; a partial chain keeps its original endpoints and leaves every
+unselected straight segment unchanged. `anchor_indices` identify original
+vertices used by the reconstruction, and `degree` and `parameter_interval`
+retain the requested spline operation. A closed circular reconstruction uses
+three explicit anchors; an open arc uses start, on-arc and end anchors.
+Overlapping replacement chains or competing whole-boundary declarations
+cannot own the same source segments.
+
+For active declarations, the in-tree compiler builds one native OCC planar
+arrangement before assigning material interfaces. Native Boolean history
+retains source membership and trimmed parameter intervals. The same arranged
+curves bound metal, dielectric and vacuum complements and port partitions.
+The authored stack supplies Z; a collective native 1D-to-2D sweep of the shared arranged edges
+creates exact ruled walls and preserves trimmed curve geometry. It retains
+shared upper edges and one vertical edge per source vertex. Surface-first shells then form solution
+volumes, including inner PEC void shells. Native construction errors propagate;
+there is no straight-edge fallback, per-surface refit or global volume repair.
+
+Stock Gmsh shell AutoFix can replace native face tags while correcting shell
+orientation. SGB binds each repaired face back to its source `SurfaceID` by
+complete native wire/edge correspondence, then carries that source mapping
+through export and backend construction. Source identity remains fixed while
+numeric Gmsh tags may change; tags, coordinates, area, and ordering are not
+used to guess replacements. In the observed Circle Route B construction, shared
+faces and metal-cutout boundaries remained source-bound, while port sheets
+stayed separately represented. If correspondence or required topology cannot be
+preserved, native construction fails instead of emitting a fallback geometry.
+
+Hidden same-Net contacts retain typed `MMContactRecord` ownership and never
+become MM physical groups. Its additive `geometry_ref` contains detached
+canonical point, curve and surface-loop definitions, with resolvable
+`outer_loop_ref` and `hole_loop_refs`. Shared live boundary curves use the same
+canonical IDs. Genuine polygon contacts retain `outer_loop`; genuinely curved
+contacts record it as `None`. A planar contact can record its plane normal;
+a curved wall records `normal=None` and its actual surface geometry instead
+of a fictitious constant direction. Actual contact geometry does not assign
+Nets, and different-Net contact remains a physical short error.
+
+The construction plan's `metadata.curved_arrangement` distinguishes requested
+source bindings/reconstruction from actual native intervals, memberships and
+Z sweep. Its detached boundary transport retains the shared native faces and
+edges; solver/mesh tags remain lowering evidence. Geometry order and finite
+element order are separate choices. Curved model geometry does not make a
+positive surface inset an exact curved-perimeter distance; see the
+[EPR interpretation](eigenmode-epr.qmd#surface-identity-masks-and-loss-assumptions).
+
+Palace Route A/B consumes active curve intent through its existing geometry entry paths.
+The existing route dispatch rejects active curve intent on retained-conductor
+Route C; polygon-only Route C behavior is unchanged.
+AEDT's current planar lowering explicitly rejects active declarations; it does
+not silently substitute the diagnostic polygon witness.
 
 ## Component-to-backend geometry contract
 

@@ -76,7 +76,7 @@ import hashlib
 import json
 from bisect import bisect_left, bisect_right
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from itertools import pairwise
 from math import hypot, isfinite, sqrt
@@ -269,6 +269,8 @@ def verified_route_a_substrate_support(
 def _prepare_auto_vacuum_solution_regions(
     build_input: GeometryBuildInput,
     route: RouteLiteral,
+    *,
+    native_complement: bool = False,
 ) -> GeometryBuildInput:
     """Replace auto VACUUM_REGION with planner-side complement components."""
     auto_region = _auto_vacuum_solution_region(build_input)
@@ -313,6 +315,13 @@ def _prepare_auto_vacuum_solution_regions(
         },
     )
     envelope_loop = _domain_bounds_loop(auto_bounds)
+    if native_complement:
+        # The curved compiler retains the same authored envelope and padding,
+        # but computes its complement in the shared native planar arrangement.
+        return replace(build_input, entities=tuple(
+            auto_region if entity.semantic_id == auto_region.semantic_id else entity
+            for entity in build_input.entities
+        ))
     auto_z_min_um = float(auto_bounds["z_min_um"])
     auto_z_max_um = float(auto_bounds["z_max_um"])
 
@@ -817,6 +826,12 @@ def build_route_construction_plan(
     `SurfacePlanRecord` or `VolumePlanRecord` must either get a `TagPlanRecord`
     or be explicitly marked `construction_only`.
     """
+    if build_input.boundary_curves or build_input.boundary_reconstruction:
+        if route == "C":
+            raise NotImplementedError("active source curves support Palace Route A/B, not Route C")
+        from .curved_arrangement import build_curved_construction_plan
+        return build_curved_construction_plan(build_input, route=route)
+
     timings: list[dict[str, Any]] = []
     build_input = _prepare_auto_vacuum_solution_regions(build_input, route=route)
     _timed(
@@ -973,6 +988,8 @@ def build_route_construction_plan(
             mm_contacts=mm_contacts,
         ),
     )
+    if route == "B":
+        surfaces = _bind_route_b_port_volume_plans(build_input, surfaces, volumes)
     _timed(
         timings,
         "validate_route_volume_surface_refs",
@@ -2373,21 +2390,7 @@ def _validate_volumetric_conductor_contacts(
             )
             if not overlap:
                 continue
-            if not lower.net_id or not upper.net_id:
-                raise ValueError(
-                    f"{lower.semantic_id}/{upper.semantic_id} volumetric overlap "
-                    "requires resolved nets"
-                )
-            if lower.net_id != upper.net_id:
-                raise ValueError(
-                    f"{lower.semantic_id}/{upper.semantic_id} volumetric overlap "
-                    "shorts different nets"
-                )
-            if not _has_explicit_volumetric_normalization(lower, upper, ordered):
-                raise ValueError(
-                    f"{lower.semantic_id}/{upper.semantic_id} volumetric overlap "
-                    "requires explicit same-net UBM/M1/In normalization provenance"
-                )
+            _validate_volumetric_overlap_ownership(lower, upper, ordered)
             normalized.append(
                 (
                     lower,
@@ -2398,10 +2401,39 @@ def _validate_volumetric_conductor_contacts(
     return tuple(normalized)
 
 
+def _validate_volumetric_overlap_ownership(
+    lower: SemanticEntitySpec,
+    upper: SemanticEntitySpec,
+    entities: Sequence[SemanticEntitySpec],
+    *,
+    finite_overlap: Callable[[SemanticEntitySpec, SemanticEntitySpec], bool] | None = None,
+) -> None:
+    """Apply contact ownership after the caller establishes actual body overlap."""
+    if not lower.net_id or not upper.net_id:
+        raise ValueError(
+            f"{lower.semantic_id}/{upper.semantic_id} volumetric overlap "
+            "requires resolved nets"
+        )
+    if lower.net_id != upper.net_id:
+        raise ValueError(
+            f"{lower.semantic_id}/{upper.semantic_id} volumetric overlap "
+            "shorts different nets"
+        )
+    if not _has_explicit_volumetric_normalization(
+        lower, upper, entities, finite_overlap=finite_overlap
+    ):
+        raise ValueError(
+            f"{lower.semantic_id}/{upper.semantic_id} volumetric overlap "
+            "requires explicit same-net UBM/M1/In normalization provenance"
+        )
+
+
 def _has_explicit_volumetric_normalization(
     lower: SemanticEntitySpec,
     upper: SemanticEntitySpec,
     entities: Sequence[SemanticEntitySpec],
+    *,
+    finite_overlap: Callable[[SemanticEntitySpec, SemanticEntitySpec], bool] | None = None,
 ) -> bool:
     lower_z_min, lower_z_max = _entity_z_range_um(lower)
     upper_z_min, upper_z_max = _entity_z_range_um(upper)
@@ -2410,7 +2442,7 @@ def _has_explicit_volumetric_normalization(
     return any(
         pad.part_role == "contact_pad"
         and face.part_role == "face_metal"
-        and _resolve_contact_pad_attachment(pad, entities) is face
+        and _resolve_contact_pad_attachment(pad, entities, finite_overlap=finite_overlap) is face
         for pad, face in ((lower, upper), (upper, lower))
     )
 
@@ -3891,6 +3923,44 @@ def _lower_port_sheet_regions(
             )
         records.append(port_surface)
     return tuple(records)
+
+
+def _bind_route_b_port_volume_plans(
+    build_input: GeometryBuildInput,
+    surfaces: tuple[SurfacePlanRecord, ...],
+    volumes: tuple[VolumePlanRecord, ...],
+) -> tuple[SurfacePlanRecord, ...]:
+    """Bind active port remainders to final geometric vacuum pieces.
+
+    Material physical groups may aggregate these pieces; their names cannot
+    identify a native mesh embedding host.
+    """
+    import gdstk
+
+    entities = {entity.semantic_id: entity for entity in build_input.entities}
+    result = []
+    for surface in surfaces:
+        if surface.surface_role != "lumped_port":
+            result.append(surface)
+            continue
+        z = _geometry_ref_surface_z_um(surface.geometry_ref)
+        remainder = _gdstk_surface_region(surface.geometry_ref)
+        hosts = []
+        for volume in volumes:
+            entity = entities[volume.owner_semantic_id]
+            if entity.material_kind != "vacuum":
+                continue
+            z_min, z_max = _entity_z_range_um(entity)
+            if not z_min < z < z_max:
+                continue
+            if _boolean_gdstk_region(gdstk, remainder,
+                                    _solution_entity_xy_region(gdstk, entity), "and"):
+                hosts.append(volume.volume_id)
+        if not hosts:
+            raise ValueError(f"{surface.surface_id} active port has no final vacuum volume host")
+        result.append(replace(surface, metadata={**surface.metadata,
+            "embedded_volume_plan_ids": tuple(hosts)}))
+    return tuple(result)
 
 
 def _partition_route_b_port_sheet_sidewalls(

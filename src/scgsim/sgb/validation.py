@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from bisect import bisect_left, bisect_right
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from math import isfinite
 from typing import Any
 
@@ -54,8 +54,11 @@ def _has_auto_vacuum_solution_entity(
 def _resolve_contact_pad_attachment(
     pad: SemanticEntitySpec,
     entities: Sequence[SemanticEntitySpec],
-) -> SemanticEntitySpec:
-    """Resolve one authored pad attachment by exact identity, overlap, and net."""
+    *,
+    finite_overlap: Callable[[SemanticEntitySpec, SemanticEntitySpec], bool] | None = None,
+    defer_overlap: bool = False,
+) -> SemanticEntitySpec | None:
+    """Resolve attachment, or check declarations before native curved overlap exists."""
     attached_id = pad.attached_face_metal_semantic_id
     candidates = tuple(
         candidate
@@ -78,13 +81,21 @@ def _resolve_contact_pad_attachment(
         candidate
         for candidate in candidates
         if _same_entity_z_range(pad, candidate)
-        and _entities_have_finite_overlap(pad, candidate)
+        and (defer_overlap or (finite_overlap or _entities_have_finite_overlap)(pad, candidate))
     )
     if not matches:
         raise ValueError(
             f"{pad.semantic_id} contact_pad requires finite same-z overlap "
             "with attached face_metal"
         )
+    if defer_overlap:
+        # Actual curved overlap selects the attachment and proves uniqueness
+        # later. Here only authored identity, role, Z and Net can be checked.
+        if not pad.net_id or not any(candidate.net_id == pad.net_id for candidate in matches):
+            raise ValueError(
+                f"{pad.semantic_id} contact_pad and attached M1 require one equal net"
+            )
+        return None
     if len(matches) != 1:
         raise ValueError(f"{pad.semantic_id} contact_pad attachment is ambiguous")
     attached = matches[0]
@@ -203,7 +214,10 @@ def validate_geometry_input(build_input: GeometryBuildInput) -> GeometryBuildInp
         if entity.part_role != "contact_pad":
             continue
         try:
-            _resolve_contact_pad_attachment(entity, build_input.entities)
+            _resolve_contact_pad_attachment(
+                entity, build_input.entities,
+                defer_overlap=bool(build_input.boundary_curves or build_input.boundary_reconstruction),
+            )
         except ValueError as exc:
             errors.append(str(exc))
 
@@ -523,10 +537,15 @@ def validate_curve_plan_coverage(
             errors.append(
                 f"{curve.curve_id} references unknown point {curve.end_point_id}"
             )
-        if curve.start_point_id == curve.end_point_id:
+        if curve.start_point_id == curve.end_point_id and curve.curve_kind == "line_segment":
             errors.append(f"{curve.curve_id} has identical start/end points")
             continue
-        signature = tuple(sorted((curve.start_point_id, curve.end_point_id)))
+        signature = (tuple(sorted((curve.start_point_id, curve.end_point_id)))
+                     if curve.curve_kind == "line_segment" else (
+                         curve.curve_kind,
+                         json.dumps(curve.geometry, sort_keys=True),
+                         curve.parameter_interval,
+                     ))
         existing = curve_signatures.get(signature)
         if existing is not None:
             errors.append(f"duplicate curve geometry: {existing} and {curve.curve_id}")
@@ -535,6 +554,8 @@ def validate_curve_plan_coverage(
     point_axis_index = _point_axis_index(points_by_id)
     point_line_index = _axis_aligned_point_index(points_by_id)
     for curve in curves:
+        if curve.curve_kind != "line_segment":
+            continue
         start = points_by_id.get(curve.start_point_id)
         end = points_by_id.get(curve.end_point_id)
         if start is None or end is None:
@@ -563,8 +584,12 @@ def validate_curve_plan_coverage(
     loop_ids = {loop.loop_id for loop in surface_loops}
     curves_by_id = {curve.curve_id: curve for curve in curves}
     for loop in surface_loops:
-        if len(loop.curve_refs) < 3:
-            errors.append(f"{loop.loop_id} requires at least three curves")
+        if len(loop.curve_refs) < 3 and not any(
+            curves_by_id.get(ref.curve_id) is not None
+            and curves_by_id[ref.curve_id].curve_kind != "line_segment"
+            for ref in loop.curve_refs
+        ):
+            errors.append(f"{loop.loop_id} requires at least three straight curves")
             continue
         repeated_curve_refs = sorted(
             curve_id

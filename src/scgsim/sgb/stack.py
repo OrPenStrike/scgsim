@@ -35,7 +35,7 @@ def build_component_stack(
         ) from exc
     if spec.get("schema_version") != 1:
         raise ValueError("component_semantics schema_version must be 1.")
-    unknown = set(spec) - {"schema_version", "conductor_regions", "metadata"}
+    unknown = set(spec) - {"schema_version", "conductor_regions", "boundary_curves", "boundary_reconstruction", "metadata"}
     if unknown:
         raise ValueError(
             f"component_semantics has unsupported fields {sorted(unknown)!r}."
@@ -71,6 +71,8 @@ def build_component_stack(
         "metadata": {
             **dict(metadata or {}),
             "adapter": "scgsim.sgb.stack.build_component_stack",
+            "boundary_curves": copy.deepcopy(spec.get("boundary_curves", ())),
+            "boundary_reconstruction": copy.deepcopy(spec.get("boundary_reconstruction", ())),
             "coupon_domain_bounds_um": dict(bounds),
             "coupon_padding_um": padding,
         },

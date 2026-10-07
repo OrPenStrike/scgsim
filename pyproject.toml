@@ -5,7 +5,7 @@ backend-path = ["."]
 
 [project]
 name = "scgsim"
-version = "1.0.2"
+version = "1.1.0"
 description = "Research-first electromagnetic simulation workflows for superconducting circuits."
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
