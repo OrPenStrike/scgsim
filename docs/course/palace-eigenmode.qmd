@@ -94,17 +94,18 @@ nonnegative junction participation.
 
 ## Circular Pad LC study
 
-For a source-authored curved LC model, see OrPen SC PDK revision
-[`c79b91e`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/c79b91ef882079d937fce20129f3cbd477e8438d): the
-[canonical source lesson](https://github.com/OrPenStrike/orpen-sc-pdk/blob/c79b91ef882079d937fce20129f3cbd477e8438d/notebooks/src/ComponentSimulation/CircularPad/palace_eigenmode.qmd),
-its [derived notebook](https://github.com/OrPenStrike/orpen-sc-pdk/blob/c79b91ef882079d937fce20129f3cbd477e8438d/notebooks/ComponentSimulation/CircularPad/palace_eigenmode.ipynb),
-and [returned-result evidence](https://github.com/OrPenStrike/orpen-sc-pdk/blob/c79b91ef882079d937fce20129f3cbd477e8438d/notebooks/ComponentSimulation/CircularPad/evidence/README.md).
+The current public OrPen lesson is revision
+[`ecc9062`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/ecc90623b62e55f95afaa5a1f1048a71f81cae52): the
+[canonical source lesson](https://github.com/OrPenStrike/orpen-sc-pdk/blob/ecc90623b62e55f95afaa5a1f1048a71f81cae52/notebooks/src/ComponentSimulation/CircularPad/palace_eigenmode.qmd),
+its [derived notebook](https://github.com/OrPenStrike/orpen-sc-pdk/blob/ecc90623b62e55f95afaa5a1f1048a71f81cae52/notebooks/ComponentSimulation/CircularPad/palace_eigenmode.ipynb),
+and [Fresh08 result evidence](https://github.com/OrPenStrike/orpen-sc-pdk/blob/ecc90623b62e55f95afaa5a1f1048a71f81cae52/notebooks/ComponentSimulation/CircularPad/evidence/README.md).
 The source defines a 100 µm pad radius and 20 µm radial gap on a single-die
 stack with 500 µm Si and 0.2 µm Al. It authors a 2 µm-wide east-facing
 junction port and declares a linear 10 nH inductive branch with C=0 (no added
 capacitive branch). The
 [installation lesson](installation.qmd#select-the-curved-source-cell) shows
-the matching source revisions for SCGSim and OrPen.
+the current source selection. The published result is a later teaching
+revision; its actual execution inputs are identified below.
 
 ::: {.callout-note title="Native Palace for this curved Uniform port"}
 Configure the native Palace executable for this study from [revision
@@ -112,7 +113,9 @@ Configure the native Palace executable for this study from [revision
 or a descendant containing the [curved-port extent correction](https://github.com/arfiligol/palace/blob/4e9e1b7232b4c8ca8b964be7e70f1848f578de37/palace/utils/geodata_impl.cpp).
 The SCGSim Python extra does not replace the native executable; see the
 [installation instructions](installation.qmd#native-palace-for-this-curved-uniform-port).
-This native prerequisite applies to this curved Uniform-port example.
+This study launches 8 MPI processes × 1 OpenMP thread through a native MPI
+wrapper; a direct ELF is not an interchangeable wrapper command. This native
+prerequisite applies to this curved Uniform-port example.
 :::
 
 The preparation path carries the authored curves through Palace Route B. Its
@@ -123,23 +126,34 @@ allowed adaptation work and does not mean four passes completed.
 
 ### Read and continue the returned study
 
-The public returned run reports mode 1 at **5.571696800247 GHz** after four
-refinements and five solve/estimate snapshots. The figure shows the frequency
-history beside Palace's native adaptive indicator. Public
-[frequency/AMR CSV](https://github.com/OrPenStrike/orpen-sc-pdk/blob/c79b91ef882079d937fce20129f3cbd477e8438d/notebooks/ComponentSimulation/CircularPad/evidence/frequency_amr.csv)
-and [typed EPR CSV](https://github.com/OrPenStrike/orpen-sc-pdk/blob/c79b91ef882079d937fce20129f3cbd477e8438d/notebooks/ComponentSimulation/CircularPad/evidence/typed_epr.csv)
-provide the corresponding tables.
+Fresh08 completed one native execution, four refinements and five
+solve/estimate snapshots. Receipt-bound Resolve selected the complete final
+snapshot and the existing Report completed. The final mode-1 frequency is
+**5.573354161115 GHz**. The frequency history and native indicator are shown
+in the figure and [frequency/AMR CSV](https://github.com/OrPenStrike/orpen-sc-pdk/blob/ecc90623b62e55f95afaa5a1f1048a71f81cae52/notebooks/ComponentSimulation/CircularPad/evidence/frequency_amr.csv).
 
-![Mode-1 frequency and native adaptive indicator across the four completed refinements; the final indicator remains above the configured 0.02.](../assets/circular-pad-frequency-amr.png){#fig-circular-pad-frequency-amr}
+![Fresh08 mode-1 frequency and native error indicator across five snapshots.](../assets/circular-pad-frequency-amr.png){#fig-circular-pad-frequency-amr}
+
+The final indicator is **0.1186681863426** against the configured **0.02**.
+Palace stopped after the configured four refinements, not after demonstrating
+the tolerance; this comparison is an observation, not an adequacy criterion.
+All five postprocessing phases emitted two PCG nonconvergences at 10000
+iterations, and the initial external attributes 11 and 3 retained a natural
+PMC/ZeroCharge warning. Exit zero and strict Resolve do not remove these
+warnings or establish mesh convergence.
 
 The notebook opens with `WORKFLOW_ACTION = "analyze_handoff"`, which reads
-retained run artifacts that are not included in the public bundle. To prepare
-your own model, set it to `prepare_handoff`; set it to `run` to prepare and
-launch Palace. In either case choose a fresh `RUN_ID`. The native Palace
-executable is installed separately, as described above. The resolved report
-has nine surface, two bulk and one signed port contribution; interpret the
-port with Palace's signed convention, as explained in the
-[EPR concept](../eigenmode-epr.qmd).
+retained run artifacts that are not included with the public bundle. To
+prepare your own model, select `prepare_handoff`; select `run` to prepare and
+launch Palace with a fresh `RUN_ID`. The native Palace executable is installed
+separately, as described above. The result has nine surface, two bulk and one
+junction contribution. Its [typed EPR CSV](https://github.com/OrPenStrike/orpen-sc-pdk/blob/ecc90623b62e55f95afaa5a1f1048a71f81cae52/notebooks/ComponentSimulation/CircularPad/evidence/typed_epr.csv)
+preserves Palace's signed convention: the junction value is
+**−0.9948401783541** (`signed_palace=true`), not absolute-valued or interpreted
+as negative physical stored energy. The surface values are unmasked,
+zero-inset baselines; LiteratureCentral loss inputs are synthetic assumptions,
+not measured process properties. Known-loss outputs are not device Q/T1; see
+the [EPR concept](../eigenmode-epr.qmd) for interpretation.
 
 ::: {.callout-note title="Uniform port model"}
 The lumped port uses one constant +x direction and equivalent width
@@ -150,7 +164,24 @@ circuit-model input, not a measured inductance.
 :::
 
 ::: {.callout-note title="Native run details" collapse="true"}
-The four-pass maximum was reached. The final native indicator was
-**0.1200141096788**, above the configured **0.02**; PCG warnings at 10000
-iterations remain in the report.
+Final metadata records 846008 ND unknowns and 114197 tetrahedra, using
+8 MPI processes × 1 OpenMP thread. One source-bound Pad MA sidewall cell in a
+separately hashed surviving final-boundary VTU showed local non-affine
+coordinates after refinement. The VTU piece is not listed in the strict
+returned receipt, and one cell does not establish exact R100 fidelity, global
+geometry accuracy or shared-node motion; details are in the
+[public evidence page](https://github.com/OrPenStrike/orpen-sc-pdk/blob/ecc90623b62e55f95afaa5a1f1048a71f81cae52/notebooks/ComponentSimulation/CircularPad/evidence/README.md).
 :::
+
+## Execution provenance
+
+Fresh08 used the frozen OrPen `c79b91ef882079d937fce20129f3cbd477e8438d`
+producer export and SCGSim wheel SHA-256
+`925a096b4ae247fddc2ac357cdf8025979f50463721312a808ff4cefafc35b40`; its
+runtime bytes match public SCGSim develop commit
+`2eed1eb4a9bcc7b1b020feb4953d5ed27e7d7b71` (`1.1.0rc1`, installable develop
+revision, not a stable release). The native Palace source was
+`4e9e1b7232b4c8ca8b964be7e70f1848f578de37`; its CLI version was not identified.
+The later OrPen checkpoint `1590199` and this published lesson revision
+`ecc9062` were not Fresh08 execution inputs. The [public run manifest](https://github.com/OrPenStrike/orpen-sc-pdk/blob/ecc90623b62e55f95afaa5a1f1048a71f81cae52/notebooks/ComponentSimulation/CircularPad/evidence/run_set.json)
+binds the detailed source and artifact identities.

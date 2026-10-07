@@ -84,8 +84,8 @@ component = gf.get_component(
 
 ![The Circular Pad source layout on a 1000 µm die; the detail marks the east-side non-metal junction locator.](../assets/circular-pad-layout.png){#fig-circular-pad-source-layout}
 
-Source layout from the [canonical OrPen Circular Pad study at
-`c79b91e`](https://github.com/OrPenStrike/orpen-sc-pdk/blob/c79b91ef882079d937fce20129f3cbd477e8438d/notebooks/ComponentSimulation/CircularPad/evidence/source_layout.png).
+Source layout from the [current public OrPen Circular Pad study at
+`ecc9062`](https://github.com/OrPenStrike/orpen-sc-pdk/blob/ecc90623b62e55f95afaa5a1f1048a71f81cae52/notebooks/ComponentSimulation/CircularPad/evidence/source_layout.png).
 It shows the authored source geometry and locator, not the solved field.
 
 This is the Circle Pad source used by the linked LC workflow, not the optional
@@ -93,9 +93,10 @@ ring illustration. The component supplies its authored circular boundary
 records; the prepared `GeometryPlan` snapshot carries them into Palace Route B
 with the component's Entity and Net identities. The separate GDS-boundary
 reconstruction API is for a caller-selected reconstruction and does not
-override these authored curves. The public source now includes a returned
+override these authored curves. The current OrPen lesson presents the Fresh08
 Palace result; see the [resonant-mode lesson](palace-eigenmode.qmd#circular-pad-lc-study)
-for the observed frequency and adaptation history and their interpretation.
+for its execution provenance, observed frequency, adaptation history and
+limitations.
 
 Choose the curve description from the source you have. For authored geometry,
 the component can carry `BoundaryCurveChainSpec` records in
