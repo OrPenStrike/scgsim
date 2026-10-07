@@ -2,7 +2,7 @@
 title: "Palace Eigenmode and EPR contract"
 description: "Eigenmode input and output selections, shared mesh controls and detached result summaries."
 scgsim-kind: "contract"
-scgsim-status: "CONVERGING"
+scgsim-status: "ACCEPTED"
 scgsim-id: "docs/specs/palace-eigenmode"
 ---
 
@@ -26,7 +26,7 @@ ordinary sequence; [Xmon EPR](../tutorial-xmon-palace.qmd) adds optional physics
 | Output selection | `set_epr_request(*, surface_interfaces=None, bulk_domain_ids=None, port_names=None)` |
 | Preparation | `mesh()`, `write_config()`, then `prepare_handoff(*, profile, executable, resources=None, setup_commands=(), petsc_options=())` |
 
-The 1.1.0 candidate adds Gmsh algorithm, thread, surface-thread, geometric
+SCGSim 1.1.0 adds Gmsh algorithm, thread, surface-thread, geometric
 order and high-order optimization controls to `set_mesh(...)`. Geometric order
 is distinct from the FEM order configured through `set_numerical(...)`; solver
 settings preserve the current mesh controls. The shared
@@ -37,7 +37,7 @@ owns defaults, invalidation, native generation and manifest behavior.
 counts, and mesh identities. Its Nédélec degree-of-freedom value is a
 topological estimate from primary-corner tetrahedra and the configured FEM
 order, not a solver-reported DOF count. Changing FEM order refreshes that
-estimate without remeshing. These mesh additions remain CONVERGING; they do
+estimate without remeshing. These mesh additions are ACCEPTED; they do
 not establish numerical adequacy.
 
 Target frequency is in hertz, mesh lengths in micrometres, inductance in henries.

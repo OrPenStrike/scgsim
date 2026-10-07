@@ -43,7 +43,7 @@ junction history, and energy balance. They preserve existing projections and
 eligibility; a valid partial-row frequency remains visible while unavailable
 EPR values stay as gaps, with no fallback to an earlier pass.
 
-## Palace mesh context (1.1.0 candidate)
+## Palace mesh context (1.1.0) {#palace-mesh-context-110-candidate}
 
 The Palace report reads the same detached `mesh_summary()` authority exposed by
 the facade and resolved run. It binds recorded meshing controls, Gmsh version,

@@ -28,7 +28,7 @@ preview.show_surface_epr()
 preview.show_mesh()
 ```
 
-The 1.1.0 Palace candidate preserves high-order mesh connectivity and curved
+The 1.1.0 Palace workflow preserves high-order mesh connectivity and curved
 boundary representation in the preview. After `mesh()`,
 `sim.mesh_summary()` returns detached generation evidence bound to the mesh and
 manifest. It records the selected controls and native element/region counts;

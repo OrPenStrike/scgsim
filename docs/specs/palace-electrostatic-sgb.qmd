@@ -2,17 +2,16 @@
 title: "Palace Electrostatic + SGB"
 description: "Electrostatic Net binding, shared Palace mesh controls, native margins and detached mesh summaries."
 scgsim-kind: "contract"
-scgsim-status: "CONVERGING"
+scgsim-status: "ACCEPTED"
 scgsim-id: "docs/specs/palace-electrostatic-sgb"
 ---
 
-::: {.callout-note title="Accepted behavior and current candidate"}
+::: {.callout-note title="Accepted behavior and delivery status"}
 The backend, Route A/B lowering, handoff, Slurm execution, strict result
 resolution and existing report summaries are part of the accepted V1 scope.
-The Palace mesh controls and detached mesh summary documented below are part of
-the 1.1.0 development candidate and remain CONVERGING. Recorded exercise
-evidence retains its limits; stabilization and release delivery remain
-separate.
+The Palace mesh controls and detached mesh summary documented below are also
+ACCEPTED for SCGSim 1.1.0. Recorded exercise evidence retains its limits;
+stabilization and release delivery remain separate.
 :::
 
 ## Public surface {#candidate-surface}
@@ -78,7 +77,7 @@ state. A successful change retains the existing mesh/config invalidation
 boundary; this does not change operational failures inside `mesh()` or
 `write_config()`.
 
-## Palace mesh controls (1.1.0 candidate)
+## Palace mesh controls (1.1.0) {#palace-mesh-controls-110-candidate}
 
 Both Palace facades accept the following optional controls through
 `set_mesh(...)`. Omitted fields retain their current effective settings;
@@ -104,7 +103,7 @@ performs the chosen optimization once, and then saves the final mesh. Native
 construction or fitting errors propagate as errors; the preparation path does
 not replace a curved mesh with a straight or lower-order fallback.
 
-## Mesh manifest and detached summary (1.1.0 candidate)
+## Mesh manifest and detached summary (1.1.0) {#mesh-manifest-and-detached-summary-110-candidate}
 
 The mesh manifest retains its existing groups and adds `meshing` evidence for
 the actual Gmsh version, requested and effective controls, high-order

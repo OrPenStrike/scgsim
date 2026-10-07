@@ -2,7 +2,7 @@
 title: "GeometryPlan and SGB Route A/B"
 description: "GeometryPlan source identity, occurrence and Net ownership, route lowering and input summary."
 scgsim-kind: "contract"
-scgsim-status: "STABILIZED"
+scgsim-status: "ACCEPTED"
 scgsim-id: "docs/geometry-sgb"
 ---
 
@@ -34,7 +34,7 @@ does not infer electrical connectivity or merge child net maps.
 
 ## Source curves and native shared topology {#source-curves}
 
-The curve scope is **CONVERGING**. Polygon-only inputs retain their polygon
+The curve scope is **ACCEPTED**. Polygon-only inputs retain their polygon
 boundaries. Curves are explicit source declarations, not smoothing inferred
 from a rendered layout or a mesh.
 

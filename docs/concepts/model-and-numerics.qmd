@@ -40,7 +40,7 @@ order controls the field approximation. A native stopping flag describes its
 configured criterion. It is useful alongside the actual changes in the
 capacitance, frequency or participation you intend to use.
 
-The 1.1.0 Palace candidate's mesh summary records the native mesh controls and
+The 1.1.0 Palace mesh summary records the native mesh controls and
 topology. Its Eigenmode degree-of-freedom value is a topology-based estimate,
 not a native solver count or a convergence measure. The linear-tetrahedron
 quality report also does not evaluate curved high-order element quality.

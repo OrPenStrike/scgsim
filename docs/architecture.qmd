@@ -37,10 +37,10 @@ flowchart LR
 The current geometry implementation starts from component-local source facts and
 named occurrences. A `GeometryPlan` holds the expanded entity inventory and
 the Notebook's final `Net -> Entity` map, then prepares one immutable source
-snapshot for the normalized `GeometryBuildInput` boundary. The 1.1.0 candidate
-adds authored curve declarations and explicit GDS reconstruction records to
-that snapshot while preserving Entity/Net ownership. Palace consumes curve
-intent through SGB; AEDT curve lowering is unsupported. The
+snapshot for the normalized `GeometryBuildInput` boundary. The accepted 1.1.0
+source model includes authored curve declarations and explicit GDS
+reconstruction records in that snapshot while preserving Entity/Net ownership.
+Palace consumes curve intent through SGB; AEDT curve lowering is unsupported. The
 [GeometryPlan contract](geometry-sgb.qmd) owns exact curve identity and
 arrangement semantics. Native observations do not replace source identity or
 establish connectivity. AEDT binding evidence retains source members and
@@ -145,14 +145,14 @@ timing, shallow top-level stack copy, nested aliases, and problem-specific
 orchestration. The older problem-module names are private aliases, not duplicate
 implementations.
 
-The 1.1.0 Palace mesh candidate separates Gmsh geometric order from the FEM
+The accepted 1.1.0 Palace mesh behavior separates Gmsh geometric order from FEM
 order and keeps the Delaunay/HXT choice, thread settings and high-order
 optimization outcome with the generated mesh. `mesh_summary()` returns detached
 meshing evidence bound to the mesh and manifest identities; Palace report and
 resolved-result views read the same recorded authority. The Eigenmode summary's
 topological degree-of-freedom estimate is not an actual solver degree-of-freedom
 count, and Electrostatic does not claim an unavailable H1 estimate. These mesh
-and summary additions remain CONVERGING.
+and summary additions are ACCEPTED.
 
 ## AEDT execution lifecycle
 
