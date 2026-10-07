@@ -82,7 +82,7 @@ New handoffs retain `scgsim.aedt.handoff.v1` and
 `scgsim.aedt.handoff-manifest.v1`. Both records add
 `expected_receipt_schema: scgsim.aedt.receipt.v3`, and the initial receipt is
 V3. It contains `prepared_runtime_source`: a deterministic, sorted
-`runtime-source.v8` manifest of the SCGSim transaction, family, common, spec,
+`runtime-source.v10` manifest of the SCGSim transaction, family, common, spec,
 persistence, native-readback, and AEDT presentation modules, a content digest
 over that manifest, and a truthful preparation Git observation when one is
 available. Git observation may be explicitly unavailable; module hashes and
@@ -108,7 +108,7 @@ V2 handoff retains its prepared V2 provenance cohort when execution emits V3;
 it is not relabeled as new V3 preparation.
 
 Every new completed V3 receipt has a separate `runtime_source` manifest using
-`runtime-source.v8` and a content digest for the code that actually executed
+`runtime-source.v10` and a content digest for the code that actually executed
 it, while retaining the historical `revision`, `run_py_sha256`,
 `spec_py_sha256`, convergence, and matrix-helper keys. Execution provenance
 failure therefore produces a failed receipt, never a strict-resolvable
@@ -127,15 +127,20 @@ These unsigned consistency checks do not authenticate an artifact set against
 an actor able to rewrite every member.
 
 `runtime-source.v1` is a frozen thirteen-module reader contract, not a live
-enumeration rule. The V2–V6 inventories are also frozen. V4 added
+enumeration rule. The V2–V9 inventories are also frozen. V4 added
 `scgsim/aedt/_presentation.py`; V5 added `scgsim/sgb/geometry_plan.py` and
 `scgsim/sgb/__init__.py`. V7 added
-`scgsim/_notebook_presentation.py` to V6. Current producer receipts use V8,
-which adds `scgsim/aedt/_junction_partition.py` to V7. The V1–V7 module membership and hashes
-retain their historical meaning. These manifests bind their exact declared file inventory, not an exhaustive
-transitive dependency attestation; for example, the current frozen inventory
-does not separately hash `scgsim/sgb/engine_gates.py`. They do not change the V3
-receipt schema. A pure initial-receipt codec owns exact V1/V2/V3 member order,
+`scgsim/_notebook_presentation.py` to V6. Current preparation and execution
+receipts use V10. V8 added
+`scgsim/aedt/_junction_partition.py` to V7. V9 added
+`scgsim/aedt/__init__.py`, `scgsim/aedt/_q3d_geometry.py`,
+`scgsim/sgb/adapter.py`, and `scgsim/sgb/stack.py` to V8. V10 added the shared
+`scgsim/aedt/_handoff_cohort.py` to V9. The V1–V9 module membership and hashes
+retain their historical meaning. These manifests bind their exact declared
+file inventory, not an exhaustive transitive dependency attestation; for
+example, the current frozen inventory does not separately hash
+`scgsim/sgb/engine_gates.py`. They do not change the V3 receipt schema. A pure
+initial-receipt codec owns exact V1/V2/V3 member order,
 two-space JSON indentation, and the trailing newline. V1 omits prepared
 provenance; V2 and V3 insert it between `source` and `outputs`. Reading
 historical evidence uses the declared frozen schema and does not compare
@@ -459,6 +464,15 @@ returned matrices.
 New Q3D input-v2 serialization has its own reader contract. Historical
 input-v1 decoding retains its existing constraints and serialization identity;
 the new frontend does not permissively reinterpret historical handoffs.
+When Q3D input-v2 carries `geometry_source`, its declared cohort keeps the
+existing six ordinary allowed paths in their established order, followed by
+`geometry/source.gds`, `metadata/geometry_stack.json`, and
+`metadata/geometry_trace.json`. The manifest's `members` sequence omits the
+manifest's own path wherever it occurs in `allowed_paths`; it preserves the
+order of all other declared members and their hash and declaration checks.
+The source-backed cohort therefore has nine allowed paths and eight member
+records; source-free Q3D retains six allowed paths and five member records.
+Historical input-v1 reader semantics remain unchanged.
 
 ## Eigenmode saved fields and Surface-EPR direction
 

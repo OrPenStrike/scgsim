@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import csv
 import math
-from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 from ._epr_models import EprResult
 from ._benchmark import BENCHMARK_RELATIVE, read_simulation_benchmark
+from ._handoff_cohort import (
+    canonical_handoff_paths,
+    canonical_member_paths,
+    validate_geometry_source,
+)
 from ._hfss_convergence import read_hfss_convergence
 from ._matrix_export import parse_matrix_export, read_q2d_rlgc_matrix
 from ._q2d_convergence import read_q2d_convergence, read_q3d_convergence
@@ -282,7 +286,7 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
             raise RuntimeError("receipt GDS path is not canonical")
         _verified(root, "geometry/design.gds", source, "gds_sha256")
         if isinstance(spec, Q3dSpec) and spec.geometry_source is not None:
-            _validate_q3d_geometry_source(root, source, spec)
+            validate_geometry_source(root, source, spec)
     if (
         mode not in {"terminal", "modal", "eigenmode", "q3d", "q2d"}
         or spec.mode != mode
@@ -628,14 +632,7 @@ def _validate_completion_cohort(
     ):
         raise RuntimeError(f"completed {version} preparation hash bindings are invalid")
 
-    expected_paths = ["run_aedt.sh", "aedt_spec.json"]
-    if mode != "q2d" and not epr:
-        expected_paths.append("geometry/design.gds")
-    expected_paths += [
-        "metadata/aedt_handoff_metadata.json",
-        "metadata/aedt_run_receipt.json",
-        "metadata/aedt_handoff_manifest.json",
-    ]
+    expected_paths = canonical_handoff_paths(spec)
     if manifest.get("allowed_paths") != expected_paths:
         raise RuntimeError(
             f"completed {version} manifest allowed paths are not canonical"
@@ -645,7 +642,7 @@ def _validate_completion_cohort(
         not isinstance(members, list)
         or len(members) != len(expected_paths) - 1
         or [item.get("path") if isinstance(item, dict) else None for item in members]
-        != expected_paths[:-1]
+        != canonical_member_paths(spec)
     ):
         raise RuntimeError(f"completed {version} manifest members are not canonical")
     for member in members:
@@ -1211,48 +1208,6 @@ def _read_q3d_original_cg(
         {"Capacitance Matrix": "C", "Conductance Matrix": "G"},
         **options,
     )
-
-
-def _validate_q3d_geometry_source(
-    root: Path, receipt_source: dict[str, Any], spec: Q3dSpec
-) -> None:
-    """Bind sealed geometry attachments and the trace mapping to the spec."""
-    geometry_source = spec.geometry_source
-    if geometry_source is None:
-        return
-    if receipt_source.get("gds_sha256") != geometry_source["export_gds_sha256"]:
-        raise RuntimeError("Q3D imported GDS digest differs from geometry_source")
-    expected_paths = {
-        "canonical_gds": "geometry/source.gds",
-        "stack": "metadata/geometry_stack.json",
-        "trace": "metadata/geometry_trace.json",
-    }
-    verified: dict[str, Path] = {}
-    for key, expected_path in expected_paths.items():
-        reference = geometry_source["files"][key]
-        if reference["path"] != expected_path:
-            raise RuntimeError("Q3D geometry_source attachment path is not canonical")
-        verified[key] = _verified(
-            root,
-            reference["path"],
-            {"geometry_source": reference["sha256"]},
-            "geometry_source",
-        )
-    if (
-        geometry_source["files"]["canonical_gds"]["sha256"]
-        != geometry_source["source_gds_sha256"]
-        or geometry_source["files"]["stack"]["sha256"]
-        != geometry_source["source_stack_sha256"]
-    ):
-        raise RuntimeError("Q3D geometry_source attachment digests are inconsistent")
-    trace = read_json(verified["trace"])
-    if not isinstance(trace, Mapping):
-        raise RuntimeError("Q3D geometry trace mapping is invalid")
-    trace_source = trace.get("geometry_source")
-    expected_trace_source = dict(geometry_source)
-    expected_trace_source.pop("files")
-    if trace_source != expected_trace_source:
-        raise RuntimeError("Q3D geometry trace mapping differs from the sealed spec")
 
 
 def _validate_q3d_source_bindings(

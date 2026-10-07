@@ -19,6 +19,11 @@ from ._epr_eigenmode import (
     solve_and_export_epr,
 )
 from ._epr_geometry import precompute_inset_surfaces, validate_geometry_workers
+from ._handoff_cohort import (
+    canonical_handoff_paths,
+    canonical_member_paths,
+    validate_geometry_source,
+)
 from ._hfss_runtime import run_hfss
 from ._epr_results import seal_saved_solution
 from ._native_common import owned_application_constructor, pyaedt_version
@@ -596,18 +601,7 @@ def _verify_prepared_cohort(
     if set(receipt) != initial_keys or receipt.get("outputs") != {}:
         raise RuntimeError("prepared receipt members are not canonical")
 
-    expected_paths = ["run_aedt.sh", "aedt_spec.json"]
-    if isinstance(spec, HfssEprAnalysisSpec):
-        expected_paths.extend(
-            f"saved/{item['path']}" for item in spec.saved_solution.members
-        )
-    elif not isinstance(spec, (HfssEprSpec, Q2dSpec)):
-        expected_paths.append("geometry/design.gds")
-    expected_paths += [
-        "metadata/aedt_handoff_metadata.json",
-        "metadata/aedt_run_receipt.json",
-        "metadata/aedt_handoff_manifest.json",
-    ]
+    expected_paths = canonical_handoff_paths(spec)
     if manifest.get("allowed_paths") != expected_paths:
         raise RuntimeError("handoff manifest allowed paths are not canonical")
     members = manifest.get("members")
@@ -615,7 +609,7 @@ def _verify_prepared_cohort(
         raise RuntimeError("handoff manifest members are not canonical")
     if [
         item.get("path") if isinstance(item, dict) else None for item in members
-    ] != expected_paths[:-1]:
+    ] != canonical_member_paths(spec):
         raise RuntimeError("handoff manifest members are not canonical")
     hashes: dict[str, str] = {}
     for item in members:
@@ -635,6 +629,8 @@ def _verify_prepared_cohort(
         ):
             raise RuntimeError(f"handoff manifest member mismatch: {relative}")
         hashes[relative] = item["sha256"]
+    if isinstance(spec, Q3dSpec):
+        validate_geometry_source(run_dir, receipt["source"], spec)
     return {
         "preparation_cohort": preparation_cohort,
         "prepared_runtime_source": prepared_source,

@@ -25,7 +25,8 @@ SOURCE_SCHEMA_V6 = "scgsim.aedt.runtime-source.v6"
 SOURCE_SCHEMA_V7 = "scgsim.aedt.runtime-source.v7"
 SOURCE_SCHEMA_V8 = "scgsim.aedt.runtime-source.v8"
 SOURCE_SCHEMA_V9 = "scgsim.aedt.runtime-source.v9"
-SOURCE_SCHEMA = SOURCE_SCHEMA_V9
+SOURCE_SCHEMA_V10 = "scgsim.aedt.runtime-source.v10"
+SOURCE_SCHEMA = SOURCE_SCHEMA_V10
 
 # Frozen membership of the public runtime-source.v1 evidence format. Changing
 # producer structure must not silently change what historical readers mean.
@@ -118,6 +119,12 @@ _RUNTIME_SOURCE_V9_PATHS = tuple(
 )
 
 
+# Shared cohort inventory is executable preparation/completion source.
+_RUNTIME_SOURCE_V10_PATHS = tuple(
+    sorted((*_RUNTIME_SOURCE_V9_PATHS, "scgsim/aedt/_handoff_cohort.py"))
+)
+
+
 def _module_manifest() -> list[dict[str, str]]:
     package_root = Path(__file__).resolve().parents[1]
     return [
@@ -126,7 +133,7 @@ def _module_manifest() -> list[dict[str, str]]:
             "path": path,
             "sha256": file_sha256(package_root.parent / path),
         }
-        for path in _RUNTIME_SOURCE_V9_PATHS
+        for path in _RUNTIME_SOURCE_V10_PATHS
     ]
 
 
@@ -231,6 +238,7 @@ def validate_runtime_source(
         SOURCE_SCHEMA_V7: _RUNTIME_SOURCE_V7_PATHS,
         SOURCE_SCHEMA_V8: _RUNTIME_SOURCE_V8_PATHS,
         SOURCE_SCHEMA_V9: _RUNTIME_SOURCE_V9_PATHS,
+        SOURCE_SCHEMA_V10: _RUNTIME_SOURCE_V10_PATHS,
     }.get(schema)
     if (
         expected_paths is None

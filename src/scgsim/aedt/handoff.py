@@ -13,6 +13,7 @@ from typing import Any, Literal
 
 from scgsim.sgb import GeometryPlanSnapshot
 
+from ._handoff_cohort import GEOMETRY_SOURCE_PATHS, canonical_handoff_paths
 from ._epr_geometry import validate_geometry_workers
 from ._epr_models import (
     EprAnalysisRequest,
@@ -105,15 +106,9 @@ def prepare_handoff(
     payload = spec.to_payload()
     if not isinstance(spec, Q2dSpec):
         payload["gds"]["path"] = "geometry/design.gds"
-    source_attachments = []
     if isinstance(spec, Q3dSpec) and spec.geometry_source is not None:
         geometry_source = detached(spec.geometry_source)
-        destinations = {
-            "canonical_gds": "geometry/source.gds",
-            "stack": "metadata/geometry_stack.json",
-            "trace": "metadata/geometry_trace.json",
-        }
-        for key, destination in destinations.items():
+        for key, destination in GEOMETRY_SOURCE_PATHS.items():
             reference = geometry_source["files"][key]
             source_path = Path(reference["path"])
             if file_sha256(source_path) != reference["sha256"]:
@@ -121,7 +116,6 @@ def prepare_handoff(
             target = run_dir / destination
             shutil.copy2(source_path, target)
             reference["path"] = destination
-            source_attachments.append(target)
         payload["geometry_source"] = geometry_source
     write_json(spec_path, payload)
     files = {
@@ -181,19 +175,7 @@ def prepare_handoff(
             )
         )
     )
-    allowed = tuple(
-        path
-        for path in (
-            script_path,
-            spec_path,
-            copied_gds,
-            metadata_path,
-            receipt_path,
-            manifest_path,
-            *source_attachments,
-        )
-        if path is not None
-    )
+    allowed = tuple(run_dir / relative for relative in canonical_handoff_paths(spec))
     write_json(
         manifest_path,
         {
