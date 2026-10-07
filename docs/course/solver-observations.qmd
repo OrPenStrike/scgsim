@@ -36,6 +36,31 @@ the edge-length statistics are labeled as primary-corner chords. The preview
 and summary describe prepared geometry, not a solved field or a curved-element
 quality metric.
 
+A resolved Palace report keeps its visible mesh summary to six cards:
+geometry/FEM order, native node/element counts, 3D algorithm, volume/surface
+thread options, `HighOrder` optimization status, and an ND topological DOF
+estimate. Gmsh details and the per-region table are under the collapsed
+**Physical regions and mesh discretization** section. Its edge count and
+minimum/mean/maximum lengths in micrometres are unique straight chords between
+primary corners, not curved arc lengths. A point region has zero edges and no
+length extrema; missing historical observations remain `not_recorded`.
+
+For the full detached control record, select the requested and effective
+values directly:
+
+```python
+summary = sim.mesh_summary()
+requested = summary["meshing"]["requested"]
+effective = summary["meshing"]["effective"]
+```
+
+The summary also carries mesh/manifest identities and source-curve provenance;
+a resolved result and report expose the same data through their own
+`mesh_summary()` methods. The ND card estimates topology from primary-corner
+tetrahedra before boundary constraints; it is not the native solver DOF count.
+Electrostatic H1 estimation is unavailable, and thread options are not measured
+thread utilization.
+
 Read the legend's exact semantic IDs and counts against the prepared source.
 Unavailable modes are explicit. For interactive notebook inspection,
 `preview.explore("materials")` displays the bound scene with rotation and zoom.

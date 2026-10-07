@@ -22,6 +22,14 @@ Use the Palace
 [mesh summary](specs/palace-electrostatic-sgb.qmd#mesh-manifest-and-detached-summary-110-candidate)
 for recorded geometric order, native element types, and generation statistics.
 
+Generation edge statistics are separate from `MeshQualityReport`. The Palace
+summary records each physical region's unique primary-corner edge count and
+minimum, mean, and maximum straight chord lengths in micrometres. These remain
+chords on curved high-order elements; they are not curved arc lengths or a
+higher-order quality metric. Point regions have zero edges and no length
+extrema. Missing historical statistics remain `not_recorded` rather than
+being inferred by this tetrahedron reader.
+
 ## Input and ownership
 
 The reader accepts only MSH 2.2 ASCII files and preserves node and element IDs,

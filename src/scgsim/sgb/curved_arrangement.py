@@ -22,7 +22,10 @@ from .models import (
     SourceCurveSpec, SurfaceLoopRecord, SurfacePlanRecord, SurfaceRefRecord,
     VolumePlanRecord, RouteABVolumePlanRecord, InnerPecVoidShellRecord, MMContactRecord,
 )
-from .native_construction import add_surface_first_volume
+from .native_construction import (
+    add_surface_first_volume, _surface_outer_wire_edges,
+    _rebind_surface_loops, _rebind_volume_surface_refs,
+)
 from .source_curves import boundary_binding
 
 
@@ -216,6 +219,7 @@ class _Kernel:
 
     def curve(self,spec,source):
         points=[(*xy,0.0) for xy in spec.points_um]
+        native_curve_data={}
         if spec.kind=='line_segment':
             tags=[self.line(*points)]
         elif spec.kind=='circular_arc':
@@ -226,7 +230,7 @@ class _Kernel:
             mid=(angles[1]-angles[0])%(2*math.pi)
             sweep=ccw if mid<ccw else ccw-2*math.pi
             pieces=math.ceil(abs(sweep)/(math.pi/2))
-            tags=[]
+            controls=[]
             for i in range(pieces):
                 lo=angles[0]+sweep*i/pieces
                 hi=angles[0]+sweep*(i+1)/pieces
@@ -244,8 +248,17 @@ class _Kernel:
                 h=[(*[v*weight for v in xyz],weight) for xyz,weight in zip(q,[1,w,1])]
                 elevated=[h[0],tuple((h[0][j]+2*h[1][j])/3 for j in range(4)),
                           tuple((2*h[1][j]+h[2][j])/3 for j in range(4)),h[2]]
-                tags.append(self.occ.addBSpline([self.point(tuple(v[j]/v[3] for j in range(3))) for v in elevated],
-                    degree=3,weights=[v[3] for v in elevated],knots=[0,1],multiplicities=[4,4]))
+                controls.extend(elevated if i == 0 else elevated[1:])
+            # Join exact rational Bezier spans in one native parameter domain.
+            # Internal controls are not arrangement vertices or contact points.
+            knots=[i/pieces for i in range(pieces+1)]
+            multiplicities=[4]+[3]*(pieces-1)+[4]
+            tags=[self.occ.addBSpline(
+                [self.point(tuple(v[j]/v[3] for j in range(3))) for v in controls],
+                degree=3,weights=[v[3] for v in controls],
+                knots=knots,multiplicities=multiplicities)]
+            native_curve_data={'native_arc_span_knots':knots,
+                               'native_curve_parameter_bounds':(0.0,1.0)}
         elif spec.kind=='interpolation_spline':
             tags=[self.occ.addSpline([self.point(p) for p in points])]
         elif spec.kind=='bspline':
@@ -262,10 +275,9 @@ class _Kernel:
         else:
             raise ValueError(f"unsupported reconstruction kind {spec.kind!r}")
         for index,tag in enumerate(tags):
-            self.source_edges[tag]={'source':source,'geometry':asdict(spec),'native_piece_index':index}
+            self.source_edges[tag]={'source':source,'geometry':asdict(spec),'native_piece_index':index,
+                                    **native_curve_data}
         if spec.parameter_interval is not None:
-            if len(tags)!=1:
-                raise ValueError("explicit source parameter trimming needs one native curve")
             self.occ.synchronize()
             tag=tags[0]
             lo,hi=spec.parameter_interval
@@ -899,6 +911,8 @@ def build_curved_construction_plan(build_input,*,route):
         for loop in loops:
             surface_curves[loop.surface_id].update(ref.curve_id for ref in loop.curve_refs)
         volumes = []
+        # Source identities survive native shell correction and face replacement.
+        surface_basis_parity = {sid: 1 for sid in native_surfaces}
         for root, members in components.items():
             vid = volume_ids[root]
             refs = tuple(volume_refs[vid])
@@ -917,8 +931,18 @@ def build_curved_construction_plan(build_input,*,route):
                 shells.append(tuple(connected))
             enclosed = []
             for index, shell in enumerate(shells):
-                native_volume = add_surface_first_volume(
-                    gmsh, [[native_surfaces[ref.surface_id] for ref in shell]])
+                repaired = add_surface_first_volume(
+                    gmsh, [[native_surfaces[ref.surface_id] for ref in shell]],
+                    outer_wire_edges=_surface_outer_wire_edges(
+                        surfaces, loops, {cid: edge for edge, cid in curve_ids.items()}, native_surfaces))
+                loops = _rebind_surface_loops(
+                    surfaces, loops, {cid: edge for edge, cid in curve_ids.items()}, native_surfaces, repaired)
+                native_volume = repaired.volume_tag
+                for sid, old_tag in tuple(native_surfaces.items()):
+                    if old_tag in repaired.face_bindings:
+                        new_tag, parity = repaired.face_bindings[old_tag]
+                        native_surfaces[sid] = new_tag
+                        surface_basis_parity[sid] *= parity
                 signed_mass = occ.getMass(3, native_volume)
                 enclosed.append(abs(signed_mass))
                 occ.synchronize()
@@ -926,8 +950,11 @@ def build_curved_construction_plan(build_input,*,route):
                 directions = {abs(tag): 'forward' if tag * outward_sign > 0 else 'reversed'
                               for dim, tag in gmsh.model.getBoundary([(3, native_volume)], oriented=True)
                               if dim == 2}
-                shells[index] = tuple(replace(ref, orientation=directions[native_surfaces[ref.surface_id]])
-                                      for ref in shell)
+                # Store the temporary observation in the original source-face basis.
+                shells[index] = tuple(replace(ref, orientation=(
+                    directions[native_surfaces[ref.surface_id]] if surface_basis_parity[ref.surface_id] > 0
+                    else 'reversed' if directions[native_surfaces[ref.surface_id]] == 'forward' else 'forward'))
+                    for ref in shell)
                 occ.remove([(3, native_volume)], recursive=False)
             exterior_index = max(range(len(shells)), key=enclosed.__getitem__)
             inner = []
@@ -954,7 +981,8 @@ def build_curved_construction_plan(build_input,*,route):
                           'material_kind': entities[owners[root]].material_kind,
                           'curved_arrangement_cells': [(s, cell_ids[c]) for s, c in members],
                           'native_boundary_shell_enclosed_volumes_um3': enclosed}))
-        volumes = tuple(volumes)
+        # Rebase all retained observations only after the final global face map is known.
+        volumes = _rebind_volume_surface_refs(volumes, surface_basis_parity)
         # Preserve exact shared boundary shapes in one detached XAO, before any volume exists.
         active_faces=set(native_surfaces.values())
         occ.remove([(2,t) for _,t in occ.getEntities(2) if t not in active_faces],recursive=False)

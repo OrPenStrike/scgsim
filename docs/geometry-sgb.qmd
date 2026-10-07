@@ -44,7 +44,11 @@ from a rendered layout or a mesh.
 `bspline` (control points with explicit degree, rational weights, distinct knots
 and their multiplicities when supplied). An optional `parameter_interval`
 trims the native source curve; it does not rescale or refit its geometry.
-Control points are not topological vertices.
+Control points are not topological vertices. A `circular_arc` lowers to one
+exact composite rational B-spline on native domain `[0, 1]`; its internal knots
+separate the exact spans, and a trim may cross those knots. For a caller-authored
+`bspline`, the supplied degree, weights, knots, multiplicities, and native
+parameter domain remain authoritative.
 
 A `BoundaryCurveChainSpec` binds an ordered closed boundary to `entity_id`,
 `boundary_id`, and `selector_point_um`. The selector lies in the selected
@@ -84,6 +88,16 @@ creates exact ruled walls and preserves trimmed curve geometry. It retains
 shared upper edges and one vertical edge per source vertex. Surface-first shells then form solution
 volumes, including inner PEC void shells. Native construction errors propagate;
 there is no straight-edge fallback, per-surface refit or global volume repair.
+
+Stock Gmsh shell AutoFix can replace native face tags while correcting shell
+orientation. SGB binds each repaired face back to its source `SurfaceID` by
+complete native wire/edge correspondence, then carries that source mapping
+through export and backend construction. Source identity remains fixed while
+numeric Gmsh tags may change; tags, coordinates, area, and ordering are not
+used to guess replacements. In the observed Circle Route B construction, shared
+faces and metal-cutout boundaries remained source-bound, while port sheets
+stayed separately represented. If correspondence or required topology cannot be
+preserved, native construction fails instead of emitting a fallback geometry.
 
 Hidden same-Net contacts retain typed `MMContactRecord` ownership and never
 become MM physical groups. Its additive `geometry_ref` contains detached

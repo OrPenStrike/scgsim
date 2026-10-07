@@ -11,6 +11,15 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
+def _corner_chord_statistics(edges: set[tuple[int, int]], points: Mapping[int, tuple[float, ...]]) -> dict[str, Any]:
+    """Measure unique primary-edge chords in Palace's micrometre coordinates."""
+    lengths = [math.dist(points[a], points[b]) for a, b in edges]
+    return dict(unit='um', interpretation='primary-corner chords, not curved edge lengths',
+                count=len(lengths), minimum=min(lengths) if lengths else None,
+                maximum=max(lengths) if lengths else None,
+                mean=sum(lengths)/len(lengths) if lengths else None)
+
+
 def observe_native_mesh(groups: Mapping[str, Any]) -> dict[str, Any]:
     """Read final Gmsh connectivity before its native session is finalized."""
     import gmsh
@@ -29,14 +38,28 @@ def observe_native_mesh(groups: Mapping[str, Any]) -> dict[str, Any]:
     regions = []
     for dim, attribute in gmsh.model.getPhysicalGroups():
         codes: dict[int, set[int]] = {}
+        region_edges: set[tuple[int, int]] = set()
         for entity in gmsh.model.getEntitiesForPhysicalGroup(dim, attribute):
-            ts, ids, _ = gmsh.model.mesh.getElements(dim, int(entity))
-            for code, tags in zip(ts, ids, strict=True):
+            ts, ids, connectivity = gmsh.model.mesh.getElements(dim, int(entity))
+            for code, tags, nodes in zip(ts, ids, connectivity, strict=True):
                 codes.setdefault(int(code), set()).update(int(t) for t in tags)
+                if dim == 1:
+                    _, _, _, count, _, _ = gmsh.model.mesh.getElementProperties(code)
+                    endpoints = [int(n) for i in range(len(tags))
+                                 for n in nodes[i*count:i*count+2]]
+                elif dim > 1:
+                    # Native edge topology avoids treating quad/hex diagonals as edges.
+                    endpoints = gmsh.model.mesh.getElementEdgeNodes(
+                        int(code), int(entity), primary=True)
+                else:
+                    endpoints = ()
+                region_edges.update(tuple(sorted((int(endpoints[i]), int(endpoints[i+1]))))
+                                    for i in range(0, len(endpoints), 2))
         regions.append(dict(dimension=int(dim), attribute=int(attribute),
                             name=gmsh.model.getPhysicalName(dim, attribute),
                             element_count=sum(len(v) for v in codes.values()),
-                            element_types={str(k): len(v) for k, v in codes.items()}))
+                            element_types={str(k): len(v) for k, v in codes.items()},
+                            corner_chord_edge_lengths=_corner_chord_statistics(region_edges, points)))
     edges: set[tuple[int, int]] = set()
     faces: set[tuple[int, int, int]] = set()
     tetrahedra: set[int] = set()
@@ -66,15 +89,11 @@ def observe_native_mesh(groups: Mapping[str, Any]) -> dict[str, Any]:
                 if key in shared and shared[key] != value:
                     raise ValueError('shared tetrahedral face has different high-order nodes')
                 shared[key] = value
-    lengths = [math.dist(points[a], points[b]) for a, b in edges]
     return dict(node_count=len(node_tags), element_count=sum(len(t) for t in element_tags),
                 element_types=types, physical_regions=regions,
                 tetrahedral_topology=dict(vertices=len(vertices), edges=len(edges),
                                           faces=len(faces), tetrahedra=len(tetrahedra)),
-                corner_chord_edge_lengths=dict(unit='um', interpretation='primary-corner chords, not curved edge lengths',
-                                               count=len(lengths), minimum=min(lengths) if lengths else None,
-                                               maximum=max(lengths) if lengths else None,
-                                               mean=sum(lengths)/len(lengths) if lengths else None))
+                corner_chord_edge_lengths=_corner_chord_statistics(edges, points))
 
 
 def mesh_summary(

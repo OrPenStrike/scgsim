@@ -6,9 +6,9 @@ by running global `occ.fragment()` over arbitrary volumes.
 Implemented lowering shape:
 
 1. consume planned canonical curves/surface loops and create live surfaces;
-2. reuse the same surface tag for planned conformal interfaces;
-3. assemble every backend-live volume with `occ.addSurfaceLoop()` and
-   `occ.addVolume()`;
+2. retain one source-bound native face for each planned conformal interface;
+3. assemble backend-live volumes with `occ.addSurfaceLoop()` and
+   `occ.addVolume()`, consuming exact face correspondence from native correction;
 4. recover backend dim-tags by `SurfacePlanRecord.surface_id` and
    `VolumePlanRecord.volume_id`;
 5. write those tags to `BackendEntityTagRecord`;
@@ -34,7 +34,9 @@ Concrete Gmsh/OCC lowering target:
 - For each planned surface, call `gmsh.model.occ.addPlaneSurface()` with the
   planned outer loop and any hole loops in one call.
 - For each backend-live volume, call `gmsh.model.occ.addSurfaceLoop()` with the
-  planned `SurfaceRefRecord`s, then `gmsh.model.occ.addVolume()`.
+  planned `SurfaceRefRecord`s, then `gmsh.model.occ.addVolume()`. Route A/B
+  consume corrected face bindings by complete canonical wire/edge incidence;
+  final native bodies must actually share the final source-bound faces.
 - After `gmsh.model.occ.synchronize()`, recover dim-tags by source record id,
   call `gmsh.model.addPhysicalGroup()` for each `TagPlanRecord`, call
   `gmsh.model.setPhysicalName()` with the planned physical name, and write one
@@ -85,7 +87,10 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from scgsim.sgb.native_construction import add_surface_first_volume
+from scgsim.sgb.native_construction import (
+    add_surface_first_volume, _surface_outer_wire_edges,
+    _rebind_surface_loops, _rebind_volume_surface_refs,
+)
 from scgsim.sgb.engine_gates import (
     engine_gate_gmsh_brep_conformality,
 )
@@ -260,6 +265,7 @@ def write_occ_geometry_from_plan(
             timings,
         ):
             largest_volume_boundary: tuple[int, str] = (0, "")
+            surface_basis_parity = {surface.surface_id: 1 for surface in plan.surfaces}
             for volume in live_volumes:
                 if plan.route in {"A", "B"}:
                     exterior_refs = (
@@ -281,11 +287,26 @@ def write_occ_geometry_from_plan(
                     shell_tags = [gmsh.model.occ.addSurfaceLoop(exterior_tags)]
                 if len(exterior_tags) > largest_volume_boundary[0]:
                     largest_volume_boundary = (len(exterior_tags), volume.volume_id)
-                volume_tag = (
-                    add_surface_first_volume(gmsh, shell_surfaces)
-                    if plan.route in {"A", "B"}
-                    else gmsh.model.occ.addVolume(shell_tags)
-                )
+                if plan.route in {"A", "B"}:
+                    surface_tags = {sid: values[0][1] for (kind, sid), values in source_tags.items()
+                                    if kind == 'surface'}
+                    repaired = add_surface_first_volume(
+                        gmsh, shell_surfaces, outer_wire_edges=_surface_outer_wire_edges(
+                            plan.surfaces, plan.surface_loops, curve_tags, surface_tags))
+                    plan = replace(plan, surface_loops=_rebind_surface_loops(
+                        plan.surfaces, plan.surface_loops, curve_tags, surface_tags, repaired))
+                    for sid, tag in surface_tags.items():
+                        if tag in repaired.face_bindings:
+                            surface_basis_parity[sid] *= repaired.face_bindings[tag][1]
+                    volume_tag = repaired.volume_tag
+                    for key, values in tuple(source_tags.items()):
+                        if key[0] != 'surface':
+                            continue
+                        source_tags[key] = [(dim, repaired.face_bindings[tag][0]
+                                             if dim == 2 and tag in repaired.face_bindings else tag)
+                                            for dim, tag in values]
+                else:
+                    volume_tag = gmsh.model.occ.addVolume(shell_tags)
                 source_tags.setdefault(("volume", volume.volume_id), []).append(
                     (3, volume_tag)
                 )
@@ -297,6 +318,8 @@ def write_occ_geometry_from_plan(
                     flush=True,
                 )
 
+        if plan.route in {"A", "B"}:
+            plan = replace(plan, volumes=_rebind_volume_surface_refs(plan.volumes, surface_basis_parity))
         with _debug_stage(debug_logging, "synchronize OCC model", timings):
             gmsh.model.occ.synchronize()
         with _debug_stage(debug_logging, "engine gate gmsh_brep_conformality", timings):

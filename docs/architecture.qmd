@@ -46,6 +46,16 @@ arrangement semantics. Native observations do not replace source identity or
 establish connectivity. AEDT binding evidence retains source members and
 coverage through native aggregation.
 
+On the Palace OCC path, stock shell AutoFix may replace native face tags while
+correcting shell orientation. SGB maps repaired faces to source surfaces by
+complete native wire/edge correspondence and carries that mapping through
+export and backend construction. Source `SurfaceID`s remain authoritative;
+numeric Gmsh tags may change. In the observed Circle Route B construction,
+shared faces and metal-cutout boundaries remained source-bound, with port
+sheets still separate. That observation is scoped to this geometry case. Construction fails
+when required correspondence cannot be established. The geometry contract
+owns the exact behavior and failure boundary.
+
 ## Contract boundaries
 
 | Boundary | Authority |
