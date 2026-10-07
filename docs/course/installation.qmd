@@ -13,9 +13,11 @@ the [portable handoff lesson](execute.qmd) explains that workflow.
 
 ## Create a fresh environment
 
-Clone the stable `main` checkout to follow the released documentation. To
-reproduce a particular documentation version, select its recorded source
-revision before installing.
+Select the SCGSim source revision recorded for the documentation version you
+are using; the version selector and page footer identify that captured
+revision. Check out that source before creating the environment and
+installing. The general example below uses stable `main`; use the versioned
+checkout for version-specific workflows.
 
 ```bash
 git clone --branch main https://github.com/OrPenStrike/scgsim.git
@@ -60,26 +62,74 @@ python -m pip install -e '.[palace,aedt-epr,visualization]' 'orpen-sc-pdk @ git+
 ### Select the curved source cell
 
 Keep the `51985d9` pin above for the SimplePad beginner notebooks and use a
-separate environment for the curved-source study. The circular source used in
-[Work with your own model](working-model.qmd) is available from OrPen SC PDK revision
-[`ff4dcea`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/ff4dcea00d4961ff4f8264f69a0bb8bfe43ed10d).
-Install that source revision in the same Python environment as the SCGSim
-backend extra:
+separate environment for the curved-source study. OrPen SC PDK revision
+[`c79b91e`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/c79b91ef882079d937fce20129f3cbd477e8438d)
+contains the canonical Circular Pad source lesson, its derived executable
+notebook, and public figures and tables for the returned result: [source
+QMD](https://github.com/OrPenStrike/orpen-sc-pdk/blob/c79b91ef882079d937fce20129f3cbd477e8438d/notebooks/src/ComponentSimulation/CircularPad/palace_eigenmode.qmd),
+[IPYNB](https://github.com/OrPenStrike/orpen-sc-pdk/blob/c79b91ef882079d937fce20129f3cbd477e8438d/notebooks/ComponentSimulation/CircularPad/palace_eigenmode.ipynb),
+and [evidence](https://github.com/OrPenStrike/orpen-sc-pdk/blob/c79b91ef882079d937fce20129f3cbd477e8438d/notebooks/ComponentSimulation/CircularPad/evidence/README.md).
+The QMD is the source authority; the IPYNB is derived from it.
+
+The curved-source APIs in this study require SCGSim 1.1.0. SCGSim 1.0.2 does
+not include them. For a released documentation version, use the SCGSim source
+revision captured for that version by the selector/footer above. From the root
+of that selected checkout, create this separate environment and install the
+canonical OrPen source:
+
+The OrPen package does not install SCGSim as a pip dependency; its `uv`
+notebook group selects SCGSim for OrPen's own development workflow. This
+separate environment installs the explicitly selected SCGSim source and the
+canonical OrPen source together:
 
 ```bash
-python -m pip install 'orpen-sc-pdk @ git+https://github.com/OrPenStrike/orpen-sc-pdk.git@ff4dcea00d4961ff4f8264f69a0bb8bfe43ed10d'
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[palace,visualization]' \
+  'orpen-sc-pdk @ git+https://github.com/OrPenStrike/orpen-sc-pdk.git@c79b91ef882079d937fce20129f3cbd477e8438d' \
+  ipykernel
 ```
 
-This selects OrPen's curved source component. Passing its authored curve
-records through GeometryPlan requires SCGSim source-curve support; this
-OrPen-only command does not select a SCGSim revision or a curved solver
-notebook.
+::: {.callout-note title="Reproduce the current development candidate" collapse="true"}
+For development or historical reproduction, the 1.1.0rc1 SCGSim candidate is
+commit [`cd107e4`](https://github.com/OrPenStrike/scgsim/tree/cd107e4b0d2cca48ef9d58143e0b4b3d3271a263).
+Clone the development history and select this exact revision before creating
+the curved-study environment:
 
-Open the public IPYNB linked by your selected lesson in your notebook frontend.
-Select the Python kernel for this checkout's `.venv` environment, using
-`.venv/bin/python`. The pinned PDK supplies `square_pad_capacitor` and
-`get_single_die_layer_stack`. You can also run the lesson's Python API steps
-in a script with this environment's Python.
+```bash
+git clone --branch develop https://github.com/OrPenStrike/scgsim.git scgsim-development
+cd scgsim-development
+git switch --detach cd107e4b0d2cca48ef9d58143e0b4b3d3271a263
+```
+
+Then run the curved-study install command above. This candidate is an optional
+development source, not the default for version-selected installation.
+:::
+
+::: {#native-palace-for-this-curved-uniform-port .callout-note title="Native Palace for this curved Uniform port"}
+Use a native Palace executable built from [revision
+`4e9e1b7`](https://github.com/arfiligol/palace/tree/4e9e1b7232b4c8ca8b964be7e70f1848f578de37),
+or a descendant containing the [curved-port extent correction](https://github.com/arfiligol/palace/blob/4e9e1b7232b4c8ca8b964be7e70f1848f578de37/palace/utils/geodata_impl.cpp).
+The SCGSim Python extra above does not install or update the native Palace
+executable. Configure this study to use that executable or a wrapper that
+invokes it. This prerequisite is specific to this curved Uniform-port
+example, not ordinary Palace geometry preparation or AEDT workflows.
+:::
+
+Open the linked IPYNB in your notebook frontend and select this checkout's
+`.venv` kernel, using `.venv/bin/python`. Its default `analyze_handoff` action
+reads a retained `.artifacts` run tree, which is not included with the public
+source and figures. To prepare or execute your own run, select
+`prepare_handoff` or `run` in the notebook and choose a fresh run ID; `run`
+uses the separately installed native Palace executable described above.
+
+The linked public record includes a completed mode-1 result at
+5.571696800247 GHz after four refinements. Its final native indicator
+0.1200141096788 remained above the configured 0.02, and PCG warnings were
+reported. These observations describe that run; they do not establish mesh
+convergence or numerical accuracy. The
+[Palace lesson](palace-eigenmode.qmd#circular-pad-lc-study) shows the result
+and its limits.
 
 Check which SCGSim version you installed:
 
