@@ -5,9 +5,13 @@ from __future__ import annotations
 import shutil
 import tarfile
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from tempfile import TemporaryDirectory
+from typing import Any, Literal
+
+from scgsim.sgb import GeometryPlanSnapshot
 
 from ._epr_geometry import validate_geometry_workers
 from ._epr_models import (
@@ -32,7 +36,10 @@ from .spec import (
     EigenmodeRunControl,
     HfssEprAnalysisSpec,
     HfssEprSpec,
+    MatrixRunControl,
+    PdkMaterial,
     Q2dSpec,
+    Q3dSpec,
 )
 from .util import file_sha256, write_json
 
@@ -98,6 +105,24 @@ def prepare_handoff(
     payload = spec.to_payload()
     if not isinstance(spec, Q2dSpec):
         payload["gds"]["path"] = "geometry/design.gds"
+    source_attachments = []
+    if isinstance(spec, Q3dSpec) and spec.geometry_source is not None:
+        geometry_source = detached(spec.geometry_source)
+        destinations = {
+            "canonical_gds": "geometry/source.gds",
+            "stack": "metadata/geometry_stack.json",
+            "trace": "metadata/geometry_trace.json",
+        }
+        for key, destination in destinations.items():
+            reference = geometry_source["files"][key]
+            source_path = Path(reference["path"])
+            if file_sha256(source_path) != reference["sha256"]:
+                raise ValueError(f"Q3D source attachment identity differs: {key}")
+            target = run_dir / destination
+            shutil.copy2(source_path, target)
+            reference["path"] = destination
+            source_attachments.append(target)
+        payload["geometry_source"] = geometry_source
     write_json(spec_path, payload)
     files = {
         "spec": spec_path.name,
@@ -165,6 +190,7 @@ def prepare_handoff(
             metadata_path,
             receipt_path,
             manifest_path,
+            *source_attachments,
         )
         if path is not None
     )
@@ -193,6 +219,37 @@ def prepare_handoff(
         manifest_path,
         archive_path,
     )
+
+
+def prepare_q3d_from_geometry(
+    snapshot: GeometryPlanSnapshot,
+    *,
+    output_dir: str | Path,
+    project_name: str,
+    design_name: str,
+    materials: Mapping[str, PdkMaterial],
+    net_types: Mapping[str, Literal["Signal", "Ground"]],
+    physical_ground_nets: Sequence[str],
+    run_control: MatrixRunControl,
+    region_padding_um: Sequence[float],
+    resources: AedtResources | None = None,
+) -> HandoffPlan:
+    """Prepare finite C/G geometry from detached source facts, without AEDT.
+
+    The caller owns final Net membership and native net types independently
+    of physical ground roles. Component/PDK source geometry remains unchanged;
+    generated import layers, source trace and originals travel in the handoff.
+    """
+    from ._q3d_geometry import lower_q3d_geometry
+
+    with TemporaryDirectory(prefix="scgsim-q3d-geometry-") as temporary:
+        spec = lower_q3d_geometry(
+            snapshot, directory=Path(temporary), project_name=project_name,
+            design_name=design_name, materials=materials, net_types=net_types,
+            physical_ground_nets=physical_ground_nets, run_control=run_control,
+            region_padding_um=region_padding_um,
+        )
+        return prepare_handoff(spec=spec, output_dir=output_dir, resources=resources)
 
 
 def prepare_hfss_eigenmode_from_geometry(

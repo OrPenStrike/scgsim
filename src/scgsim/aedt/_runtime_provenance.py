@@ -24,7 +24,8 @@ SOURCE_SCHEMA_V5 = "scgsim.aedt.runtime-source.v5"
 SOURCE_SCHEMA_V6 = "scgsim.aedt.runtime-source.v6"
 SOURCE_SCHEMA_V7 = "scgsim.aedt.runtime-source.v7"
 SOURCE_SCHEMA_V8 = "scgsim.aedt.runtime-source.v8"
-SOURCE_SCHEMA = SOURCE_SCHEMA_V8
+SOURCE_SCHEMA_V9 = "scgsim.aedt.runtime-source.v9"
+SOURCE_SCHEMA = SOURCE_SCHEMA_V9
 
 # Frozen membership of the public runtime-source.v1 evidence format. Changing
 # producer structure must not silently change what historical readers mean.
@@ -102,6 +103,20 @@ _RUNTIME_SOURCE_V8_PATHS = tuple(
     )
 )
 
+# Q3D source-backed geometry preparation and binding are execution inputs.
+# Older manifests retain their exact historical module membership.
+_RUNTIME_SOURCE_V9_PATHS = tuple(
+    sorted(
+        (
+            *_RUNTIME_SOURCE_V8_PATHS,
+            "scgsim/aedt/__init__.py",
+            "scgsim/aedt/_q3d_geometry.py",
+            "scgsim/sgb/adapter.py",
+            "scgsim/sgb/stack.py",
+        )
+    )
+)
+
 
 def _module_manifest() -> list[dict[str, str]]:
     package_root = Path(__file__).resolve().parents[1]
@@ -111,7 +126,7 @@ def _module_manifest() -> list[dict[str, str]]:
             "path": path,
             "sha256": file_sha256(package_root.parent / path),
         }
-        for path in _RUNTIME_SOURCE_V8_PATHS
+        for path in _RUNTIME_SOURCE_V9_PATHS
     ]
 
 
@@ -215,6 +230,7 @@ def validate_runtime_source(
         SOURCE_SCHEMA_V6: _RUNTIME_SOURCE_V6_PATHS,
         SOURCE_SCHEMA_V7: _RUNTIME_SOURCE_V7_PATHS,
         SOURCE_SCHEMA_V8: _RUNTIME_SOURCE_V8_PATHS,
+        SOURCE_SCHEMA_V9: _RUNTIME_SOURCE_V9_PATHS,
     }.get(schema)
     if (
         expected_paths is None

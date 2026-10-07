@@ -345,6 +345,10 @@ def _route_representations(part_role: str) -> dict[str, str]:
         return {"A": "surface_sheet", "B": "cutout_boundary_shell"}
     if part_role == "bump_body":
         return {"A": "cutout_boundary_shell", "B": "cutout_boundary_shell"}
+    if part_role in {"airbridge_deck", "airbridge_post"}:
+        # Retain fabrication/source facts for finite-geometry consumers.
+        # Neither Palace route currently defines these representations.
+        return {}
     raise ValueError(f"unsupported PDK conductor part_role {part_role!r}.")
 
 

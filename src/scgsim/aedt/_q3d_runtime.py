@@ -25,7 +25,12 @@ from ._native_common import (
     saved_setup_properties as _saved_setup_properties,
 )
 from ._q2d_convergence import read_q3d_convergence
-from .spec import AedtResources, REQUIRED_AEDT_VERSION, Q3dSpec
+from .spec import (
+    AedtResources,
+    Q3D_SCHEMA_VERSION_V2,
+    REQUIRED_AEDT_VERSION,
+    Q3dSpec,
+)
 from .util import file_sha256, write_csv
 
 _Q3D_REGION_DIRECTIONS = ("+X", "-X", "+Y", "-Y", "+Z", "-Z")
@@ -627,7 +632,7 @@ def _assign_q3d_nets(app: Any, spec: Q3dSpec) -> list[dict[str, Any]]:
             "object_names": list(net.object_names),
             "native_object_ids": observed_ids,
         }
-        if net.net_type == "Signal":
+        if net.net_type == "Signal" and net.source_object is not None:
             source_name = f"{net.name}Source"
             sink_name = f"{net.name}Sink"
             source_direction = directions[net.source_side]
@@ -795,8 +800,22 @@ def _export_q3d(
             "C": {"Capacitance Matrix": "C", "Conductance Matrix": "G"},
             "AC RL": {"AC Inductance Matrix": "L", "AC Resistance Matrix": "R"},
         }[problem]
+        matrix_options = (
+            {
+                "expected_label_set": {
+                    net.name for net in spec.nets if net.net_type == "Signal"
+                }
+            }
+            if problem == "C" and spec.schema_version == Q3D_SCHEMA_VERSION_V2
+            else {}
+        )
         rows, summary = parse_matrix_export(
-            path, "Q3D", problem, spec.run_control.frequency_ghz, titles
+            path,
+            "Q3D",
+            problem,
+            spec.run_control.frequency_ghz,
+            titles,
+            **matrix_options,
         )
         if spec.solve_ac_rl:
             normalized.extend(rows)

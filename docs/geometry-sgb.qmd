@@ -219,6 +219,17 @@ These are the accepted V1 semantics. Source preparation establishes
 the geometry input contract; it does not imply native geometry validation or
 solver execution.
 
+### Additive Q3D source-normalization candidate
+
+The Q3D GeometryPlan frontend is **CONVERGING**. Its recognized
+`airbridge_deck` and `airbridge_post` records remain role-neutral source
+geometry in the normalized snapshot; they are not given a Palace route
+representation or a native conductor role by normalization. A selected Palace
+route continues to reject conductors it cannot represent. AEDT Q3D consumes
+the snapshot's final caller-authored Net membership and explicit physical
+ground roles through its separate C/G source frontend. Source curve intent is
+still rejected by current AEDT lowering rather than silently linearized.
+
 ## Current Surface-EPR direction
 
 | Route | Public intent | Current state |

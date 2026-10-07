@@ -32,6 +32,7 @@ from .handoff import (
     analyze_epr,
     prepare_handoff,
     prepare_hfss_eigenmode_from_geometry,
+    prepare_q3d_from_geometry,
 )
 from .resolve import ResolvedRun, resolve_results
 from .spec import (
@@ -106,6 +107,7 @@ __all__ = [
     "prepare_handoff",
     "prepare_hfss_eigenmode_from_geometry",
     "prepare_planar_geometry_input",
+    "prepare_q3d_from_geometry",
     "reanalyze_epr",
     "resolve_epr_result",
     "resolve_results",

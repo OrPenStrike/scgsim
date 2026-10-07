@@ -21,6 +21,7 @@ def parse_matrix_export(
     expected_setup: str | None = None,
     expected_unit_line: str | None = None,
     expected_labels: list[str] | None = None,
+    expected_label_set: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if not path.is_file() or path.stat().st_size == 0:
         raise RuntimeError(f"{solver} {problem} matrix export is missing or empty")
@@ -31,7 +32,12 @@ def parse_matrix_export(
     }
     strict = any(
         value is not None
-        for value in (expected_setup, expected_unit_line, expected_labels)
+        for value in (
+            expected_setup,
+            expected_unit_line,
+            expected_labels,
+            expected_label_set,
+        )
     )
     if any(line not in lines for line in required_lines):
         raise RuntimeError(f"{solver} {problem} matrix header is invalid")
@@ -62,6 +68,7 @@ def parse_matrix_export(
             not labels
             or len(set(labels)) != len(labels)
             or (expected_labels is not None and labels != expected_labels)
+            or (expected_label_set is not None and set(labels) != expected_label_set)
         ):
             raise RuntimeError(f"{solver} {title} labels are invalid")
         labels_by_quantity[quantity] = labels

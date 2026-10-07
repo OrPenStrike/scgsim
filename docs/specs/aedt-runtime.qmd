@@ -161,7 +161,7 @@ version checks, receipts, and path/hash validation:
 | HFSS Driven Terminal | terminal ports with explicit reference conductors | ordered terminal S-parameters and Touchstone |
 | HFSS Driven Modal | modal ports with exact integration lines | ordered modal S-parameters, impedance, and Touchstone |
 | HFSS Eigenmode | the existing runtime remains port-free, with explicit mode count and search frequency; the EPR frontend separately declares linearized Lumped RLC junction sheets as model elements, not driven excitation ports | ordinary real mode frequency, native Q, and convergence evidence; EPR history and saved-field results use their separate result contract |
-| Q3D | exact nets with source/sink assignments; optional exact six-face Region ground seal | native capacitance and, when enabled, resistance/inductance matrices |
+| Q3D | exact conductor Net membership; real Signal source/sink pairs for AC/RL; terminal-free C/G is supported; optional exact six-face Region ground seal | native capacitance and, when enabled, resistance/inductance matrices |
 | Q2D | explicit cross-section geometry and conductor/reference assignments | per-unit-length capacitance/conductance and resistance/inductance matrices |
 
 No family may report completion from requested PyAEDT object properties alone.
@@ -404,6 +404,61 @@ the requested padding and this zero-offset finalization explicitly.
 The prior failed `_01` project remains immutable diagnostic evidence. There is
 no compatibility fallback, physical bridge, or unite path. This replacement
 contract is `STABILIZED`; historical diagnostic evidence is not relabeled.
+
+### GeometryPlan-backed Q3D C/G preparation candidate {#q3d-geometry-input-v2}
+
+This is a separate Q3D input-v2 candidate and is **CONVERGING**. It does not
+change the accepted `Q3dSpec` input or its AC/RL, Region-ground, receipt, or
+historical-reader behavior. The candidate public frontend is
+`prepare_q3d_from_geometry(snapshot: GeometryPlanSnapshot, *, output_dir,
+project_name, design_name, materials: Mapping[str, PdkMaterial],
+net_types: Mapping[str, Literal["Signal", "Ground"]],
+physical_ground_nets: Sequence[str], run_control: MatrixRunControl,
+region_padding_um, resources: AedtResources | None = None) -> HandoffPlan`.
+It consumes an immutable snapshot and returns a portable handoff. This
+frontend requests C/G only (`solve_ac_rl=False`); the explicit `Q3dSpec` path
+continues to own combined AC/RL extraction.
+
+The snapshot is the source and final `Net -> Entity` authority. `net_types`
+must cover exactly its conductor Net IDs; each value is the native `Signal` or
+`Ground` type. `physical_ground_nets` is an explicit subset of those IDs and
+marks physical roles independently of native type. The caller supplies
+materials, run control, `region_padding_um`, and optional resources explicitly.
+The frontend does not infer connectivity, rewrite Net membership, or derive
+native types from Net names. It generates no terminals or locator sheets. A
+C/G Signal net may omit terminal members entirely, but partial terminal
+authoring is invalid. AC/RL remains on the explicit `Q3dSpec` path and requires
+complete Signal source/sink terminal pairs.
+Original-Maxwell C/G matrices retain every declared native Signal row,
+including a physical-ground net classified as Signal; resolution and reports
+preserve those rows. A native Ground definition is not required for this C/G
+candidate.
+
+The finite Q3D import is an analysis export separate from canonical source
+geometry. Deterministic positive polygon records use unique numeric import
+layers and remain traced to source polygon, Entity and conductor level,
+layer/datatype, occurrence and transform, material, Z interval, and final Net,
+with source and export hashes sealed in new input-v2 handoff serialization.
+The `Q3dSpec.geometry_source` attachment uses schema
+`scgsim.aedt.q3d-geometry-source.v1`; it binds the canonical GDS, detached
+stack, and source trace by path and SHA-256, then records each exported piece's
+source Entity/polygon, occurrence/local Entity, conductor level, material,
+final Net and physical role, Z interval, numeric export layer/datatype, and
+destination object identity. The trace carries the per-piece mapping without
+self-referencing file paths. The handoff relocates the three declared files
+before sealing the portable payload. Hole regions remain empty by exporting
+positive holeless pieces; bridge-encoded fill is not used. Explicit PDK
+material IDs bind to matching explicit AEDT material records; the selected
+record's ID and kind must match the source material, and its explicit AEDT
+library name is used without guessed names or claimed numeric property
+transfer. Source curves are not silently linearized;
+the existing AEDT curve-intent exclusion remains in force. This C/G-only
+frontend does not claim native geometry validation, a completed solve, or
+returned matrices.
+
+New Q3D input-v2 serialization has its own reader contract. Historical
+input-v1 decoding retains its existing constraints and serialization identity;
+the new frontend does not permissively reinterpret historical handoffs.
 
 ## Eigenmode saved fields and Surface-EPR direction
 

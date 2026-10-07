@@ -21,7 +21,10 @@ EPR_ANALYSIS_SCHEMA_VERSION = "scgsim.aedt.hfss-eigenmode-epr-analysis.v1"
 EPR_EIGENMODE_SCHEMA_VERSION_V2 = "scgsim.aedt.hfss-eigenmode-epr.v2"
 EPR_EIGENMODE_SCHEMA_VERSION_V3 = "scgsim.aedt.hfss-eigenmode-epr.v3"
 EPR_ANALYSIS_SCHEMA_VERSION_V2 = "scgsim.aedt.hfss-eigenmode-epr-analysis.v2"
-Q3D_SCHEMA_VERSION = "scgsim.aedt.q3d.v1"
+Q3D_SCHEMA_VERSION_V1 = "scgsim.aedt.q3d.v1"
+Q3D_SCHEMA_VERSION_V2 = "scgsim.aedt.q3d.v2"
+Q3D_SCHEMA_VERSION = Q3D_SCHEMA_VERSION_V2
+Q3D_GEOMETRY_SOURCE_SCHEMA_VERSION = "scgsim.aedt.q3d-geometry-source.v1"
 Q2D_SCHEMA_VERSION = "scgsim.aedt.q2d.v1"
 OFFICIAL_PYAEDT_SOURCE_URL = "https://github.com/ansys/pyaedt/tree/v1.3.0"
 LOCKED_PYAEDT = "1.3.0"
@@ -1239,9 +1242,11 @@ class Q3dNetSpec:
             if any(value is not None for value in terminal_values):
                 raise ValueError("Q3D Ground nets must not define source or sink")
             return
+        if all(value is None for value in terminal_values):
+            return
         if any(value is None for value in terminal_values):
             raise ValueError(
-                "Q3D Signal nets require exact source and sink objects/sides"
+                "Q3D Signal terminals must be all absent or a complete source/sink pair"
             )
         source = _text(self.source_object, "net.source_object")
         sink = _text(self.sink_object, "net.sink_object")
@@ -1278,9 +1283,208 @@ class Q3dNetSpec:
         }
 
 
+def _q3d_geometry_source(
+    value: Mapping[str, Any],
+    *,
+    layer_imports: tuple[LayerImport, ...],
+    object_bindings: tuple[ObjectBinding, ...],
+    nets: tuple[Q3dNetSpec, ...],
+) -> dict[str, Any]:
+    """Validate the declared geometry/source-to-object binding structure."""
+    source = dict(value)
+    expected_keys = {
+        "schema_version",
+        "source_gds_sha256",
+        "source_geometry_sha256",
+        "source_stack_sha256",
+        "export_gds_sha256",
+        "files",
+        "physical_ground_nets",
+        "pieces",
+    }
+    if set(source) != expected_keys:
+        raise ValueError("Q3D geometry_source fields are invalid")
+    if source["schema_version"] != Q3D_GEOMETRY_SOURCE_SCHEMA_VERSION:
+        raise ValueError("Q3D geometry_source schema is unsupported")
+    for field in (
+        "source_gds_sha256",
+        "source_geometry_sha256",
+        "source_stack_sha256",
+        "export_gds_sha256",
+    ):
+        digest = source[field]
+        if (
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            raise ValueError(f"Q3D geometry_source {field} is invalid")
+    files = source["files"]
+    if not isinstance(files, Mapping) or set(files) != {
+        "canonical_gds",
+        "stack",
+        "trace",
+    }:
+        raise ValueError("Q3D geometry_source files are invalid")
+    copied_files: dict[str, dict[str, str]] = {}
+    for key, reference in files.items():
+        if not isinstance(reference, Mapping) or set(reference) != {"path", "sha256"}:
+            raise ValueError(f"Q3D geometry_source file reference is invalid: {key}")
+        path = reference["path"]
+        digest = reference["sha256"]
+        if not isinstance(path, str) or not path:
+            raise ValueError(f"Q3D geometry_source file path is invalid: {key}")
+        if (
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            raise ValueError(f"Q3D geometry_source file hash is invalid: {key}")
+        copied_files[key] = {"path": path, "sha256": digest}
+    if copied_files["canonical_gds"]["sha256"] != source["source_gds_sha256"]:
+        raise ValueError("Q3D source GDS digest differs from its file reference")
+    if copied_files["stack"]["sha256"] != source["source_stack_sha256"]:
+        raise ValueError("Q3D source stack digest differs from its file reference")
+
+    physical_ground_nets = source["physical_ground_nets"]
+    net_by_name = {net.name: net for net in nets}
+    if (
+        not isinstance(physical_ground_nets, list)
+        or any(not isinstance(name, str) or not name for name in physical_ground_nets)
+        or len(set(physical_ground_nets)) != len(physical_ground_nets)
+        or not set(physical_ground_nets) <= set(net_by_name)
+    ):
+        raise ValueError("Q3D geometry_source physical_ground_nets are invalid")
+
+    raw_pieces = source["pieces"]
+    if not isinstance(raw_pieces, list) or not raw_pieces:
+        raise ValueError("Q3D geometry_source pieces must be a nonempty array")
+    piece_keys = {
+        "piece_id",
+        "source_entity_id",
+        "source_polygon_id",
+        "source_layer_datatype",
+        "source_occurrence_path",
+        "source_local_entity_id",
+        "source_level",
+        "material_id",
+        "net_id",
+        "physical_role",
+        "z_min_um",
+        "z_max_um",
+        "export_layer",
+        "export_datatype",
+        "destination_layer_name",
+        "object_name",
+    }
+    layers = {item.layer: item for item in layer_imports}
+    bindings = {item.object_name: item for item in object_bindings}
+    net_owners = {
+        object_name: net.name
+        for net in nets
+        for object_name in net.object_names
+    }
+    piece_ids: set[str] = set()
+    object_names: set[str] = set()
+    copied_pieces: list[dict[str, Any]] = []
+    for raw_piece in raw_pieces:
+        if not isinstance(raw_piece, Mapping) or set(raw_piece) != piece_keys:
+            raise ValueError("Q3D geometry_source piece fields are invalid")
+        piece = dict(raw_piece)
+        for field in (
+            "piece_id",
+            "source_entity_id",
+            "material_id",
+            "destination_layer_name",
+            "object_name",
+        ):
+            _text(piece[field], f"geometry_source.pieces.{field}")
+        if piece["piece_id"] in piece_ids or piece["object_name"] in object_names:
+            raise ValueError("Q3D geometry_source piece identities must be unique")
+        piece_ids.add(piece["piece_id"])
+        object_names.add(piece["object_name"])
+        polygon_id = piece["source_polygon_id"]
+        if polygon_id is not None:
+            _text(polygon_id, "geometry_source.pieces.source_polygon_id")
+        pair = piece["source_layer_datatype"]
+        if pair is not None and (
+            not isinstance(pair, list)
+            or len(pair) != 2
+            or any(
+                not isinstance(item, int) or isinstance(item, bool) or item < 0
+                for item in pair
+            )
+        ):
+            raise ValueError("Q3D geometry_source source_layer_datatype is invalid")
+        for field in (
+            "source_occurrence_path",
+            "source_local_entity_id",
+            "source_level",
+        ):
+            if piece[field] is not None:
+                _text(piece[field], f"geometry_source.pieces.{field}")
+        if piece["physical_role"] not in {"signal", "ground", "substrate"}:
+            raise ValueError("Q3D geometry_source physical_role is invalid")
+        layer_number = _nonnegative_int(
+            piece["export_layer"], "geometry_source.pieces.export_layer"
+        )
+        datatype = _nonnegative_int(
+            piece["export_datatype"], "geometry_source.pieces.export_datatype"
+        )
+        low = _number(piece["z_min_um"], "geometry_source.pieces.z_min_um")
+        high = _number(piece["z_max_um"], "geometry_source.pieces.z_max_um")
+        layer = layers.get(layer_number)
+        binding = bindings.get(piece["object_name"])
+        if (
+            layer is None
+            or binding is None
+            or (
+                piece["physical_role"] == "substrate"
+                and piece["object_name"] in net_owners
+            )
+            or (
+                piece["physical_role"] != "substrate"
+                and piece["object_name"] not in net_owners
+            )
+            or piece["destination_layer_name"] != layer.layer_name
+            or datatype != layer.datatype
+            or low != layer.z_min_um
+            or high != layer.z_max_um
+            or binding.layer != layer_number
+            or binding.role != piece["physical_role"]
+            or binding.material_id != piece["material_id"]
+        ):
+            raise ValueError(
+                "Q3D geometry_source piece differs from its object binding"
+            )
+        net_id = piece["net_id"]
+        if piece["physical_role"] == "substrate":
+            if net_id is not None:
+                raise ValueError(
+                    "Q3D dielectric geometry_source pieces must not name a net"
+                )
+        elif not isinstance(net_id, str) or net_owners[piece["object_name"]] != net_id:
+            raise ValueError(
+                "Q3D conductor geometry_source net differs from its binding"
+            )
+        copied_pieces.append(piece)
+    if object_names != set(bindings):
+        raise ValueError("Q3D geometry_source pieces must cover every object binding")
+    for net_name in physical_ground_nets:
+        if any(
+            piece["net_id"] == net_name and piece["physical_role"] != "ground"
+            for piece in copied_pieces
+        ):
+            raise ValueError("Q3D physical ground pieces must retain the ground role")
+
+    source["files"] = copied_files
+    source["pieces"] = copied_pieces
+    return source
+
+
 @dataclass(frozen=True)
 class Q3dSpec:
-    """One direct-GDS Q3D capacitance and AC R/L extraction."""
+    """One Q3D capacitance and optional AC R/L extraction request."""
 
     gds_path: Path | str
     project_name: str
@@ -1296,28 +1500,47 @@ class Q3dSpec:
     grounded_region_net: str | None = None
     aedt_version: str = REQUIRED_AEDT_VERSION
     pyaedt_version: str = LOCKED_PYAEDT
+    schema_version: Literal[
+        "scgsim.aedt.q3d.v1", "scgsim.aedt.q3d.v2"
+    ] = Q3D_SCHEMA_VERSION_V2
+    geometry_source: Mapping[str, Any] | None = None
 
     @property
     def mode(self) -> Literal["q3d"]:
         return "q3d"
 
     def __post_init__(self) -> None:
+        if self.schema_version not in {Q3D_SCHEMA_VERSION_V1, Q3D_SCHEMA_VERSION_V2}:
+            raise ValueError("unsupported Q3D schema")
+        if self.geometry_source is not None:
+            if self.schema_version != Q3D_SCHEMA_VERSION_V2:
+                raise ValueError("geometry_source is available only in Q3D schema v2")
+            if not isinstance(self.geometry_source, Mapping):
+                raise TypeError("geometry_source must be a JSON object")
         grounds, signals = _normalize_gds_spec(self)
         object.__setattr__(self, "region_padding_um", _padding(self.region_padding_um))
         nets = tuple(self.nets)
-        if (
-            not nets
-            or len({net.name for net in nets}) != len(nets)
-            or not any(net.net_type == "Signal" for net in nets)
-            or not any(net.net_type == "Ground" for net in nets)
-        ):
-            raise ValueError("Q3D requires unique Signal and Ground nets")
+        unique_names = len({net.name for net in nets}) == len(nets)
+        has_signal = any(net.net_type == "Signal" for net in nets)
+        has_ground = any(net.net_type == "Ground" for net in nets)
+        if self.schema_version == Q3D_SCHEMA_VERSION_V1:
+            if not nets or not unique_names or not has_signal or not has_ground:
+                raise ValueError("Q3D requires unique Signal and Ground nets")
+            if any(
+                net.net_type == "Signal" and net.source_object is None
+                for net in nets
+            ):
+                raise ValueError(
+                    "Q3D schema v1 Signal nets require source and sink terminals"
+                )
+        elif not nets or not unique_names or not has_signal:
+            raise ValueError("Q3D schema v2 requires at least one unique Signal net")
         owners = {object_name: net for net in nets for object_name in net.object_names}
         if len(owners) != sum(len(net.object_names) for net in nets):
             raise ValueError("Q3D conductor objects must belong to exactly one net")
         if set(owners) != grounds | signals:
             raise ValueError("Q3D nets must cover every declared conductor exactly")
-        if any(
+        if self.schema_version == Q3D_SCHEMA_VERSION_V1 and any(
             (name in signals) != (net.net_type == "Signal")
             for name, net in owners.items()
         ):
@@ -1331,6 +1554,23 @@ class Q3dSpec:
             raise ValueError("Q3D conductor imports require positive finite thickness")
         if not isinstance(self.solve_ac_rl, bool):
             raise TypeError("solve_ac_rl must be boolean")
+        if self.schema_version == Q3D_SCHEMA_VERSION_V2 and self.solve_ac_rl and any(
+            net.net_type == "Signal" and net.source_object is None for net in nets
+        ):
+            raise ValueError(
+                "Q3D AC/RL requires complete terminals for every Signal net"
+            )
+        if self.geometry_source is not None:
+            object.__setattr__(
+                self,
+                "geometry_source",
+                _q3d_geometry_source(
+                    self.geometry_source,
+                    layer_imports=self.layer_imports,
+                    object_bindings=self.object_bindings,
+                    nets=nets,
+                ),
+            )
         grounded_region_net = self.grounded_region_net
         if grounded_region_net is not None:
             if _text(grounded_region_net, "grounded_region_net") != grounded_region_net:
@@ -1344,8 +1584,8 @@ class Q3dSpec:
         object.__setattr__(self, "nets", nets)
 
     def to_payload(self) -> dict[str, Any]:
-        return {
-            "schema_version": Q3D_SCHEMA_VERSION,
+        payload = {
+            "schema_version": self.schema_version,
             "mode": self.mode,
             "aedt": {"requested_version": self.aedt_version},
             "pyaedt": {
@@ -1367,13 +1607,22 @@ class Q3dSpec:
             "solve_ac_rl": self.solve_ac_rl,
             "grounded_region_net": self.grounded_region_net,
         }
+        if (
+            self.schema_version == Q3D_SCHEMA_VERSION_V2
+            and self.geometry_source is not None
+        ):
+            payload["geometry_source"] = dict(self.geometry_source)
+        return payload
 
     @classmethod
     def from_payload(
         cls, payload: dict[str, Any], *, base_dir: Path | None = None
     ) -> Q3dSpec:
-        if payload.get("schema_version") != Q3D_SCHEMA_VERSION:
+        schema_version = payload.get("schema_version")
+        if schema_version not in {Q3D_SCHEMA_VERSION_V1, Q3D_SCHEMA_VERSION_V2}:
             raise ValueError("unsupported Q3D schema")
+        if schema_version == Q3D_SCHEMA_VERSION_V1 and "geometry_source" in payload:
+            raise ValueError("geometry_source is not valid in Q3D schema v1")
         gds = Path(_text(payload.get("gds", {}).get("path"), "gds.path"))
         if base_dir is not None and not gds.is_absolute():
             gds = base_dir / gds
@@ -1417,6 +1666,8 @@ class Q3dSpec:
             pyaedt_version=_text(
                 payload.get("pyaedt", {}).get("locked_version"), "pyaedt.locked_version"
             ),
+            schema_version=schema_version,
+            geometry_source=payload.get("geometry_source"),
         )
 
 
@@ -1634,7 +1885,10 @@ def parse_aedt_spec(
         return HfssEprSpec.from_payload(payload)
     if payload.get("schema_version") in {EPR_ANALYSIS_SCHEMA_VERSION, EPR_ANALYSIS_SCHEMA_VERSION_V2}:
         return HfssEprAnalysisSpec.from_payload(payload, base_dir=base_dir)
-    if payload.get("schema_version") == Q3D_SCHEMA_VERSION:
+    if payload.get("schema_version") in {
+        Q3D_SCHEMA_VERSION_V1,
+        Q3D_SCHEMA_VERSION_V2,
+    }:
         return Q3dSpec.from_payload(payload, base_dir=base_dir)
     if payload.get("schema_version") == Q2D_SCHEMA_VERSION:
         return Q2dSpec.from_payload(payload)

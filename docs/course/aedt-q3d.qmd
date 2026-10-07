@@ -40,11 +40,12 @@ handoff = prepare_handoff(spec=spec, output_dir=Path(".artifacts/public-cpw-q3d"
 print(handoff.spec_path, handoff.archive_path)
 ```
 
-A Signal net explicitly names its source/sink object and sides. Ground nets
-have no source/sink. Together the nets cover every declared conductor exactly;
-net names are not reconstructed from object labels. The public example's 6 GHz
-frequency and three-pass limit are study inputs. Preserve the actual extraction
-criteria, any changes and native completion/convergence status in your study notes.
+In this combined AC/RL example, each Signal net explicitly names its source/sink
+object and sides. Ground nets have no source/sink. Together the nets cover every
+declared conductor exactly; net names are not reconstructed from object labels.
+The public example's 6 GHz frequency and three-pass limit are study inputs.
+Preserve the actual extraction criteria, any changes and native
+completion/convergence status in your study notes.
 The [result-reading lesson](returned-results.qmd#interpret-for-scq-use) relates
 the selected matrix quantity and its available history to the intended SCQ use;
 the native stopping flag alone does not decide its adequacy.
@@ -76,3 +77,52 @@ Review the layer thickness, exact net membership and extraction choice, then
 Read matrices with their native units and conductor order. Changing enclosure
 or extraction formulation creates a different experiment, not an offline loss
 update to old results.
+
+## GeometryPlan-backed C/G candidate
+
+The shared [Xmon input lesson](../tutorial-xmon-input.qmd) prepares an
+immutable `snapshot` with its final Net assignments. The following candidate
+uses that exact source snapshot for a separate capacitance/conductance-only
+handoff. Supply one `PdkMaterial` per source material ID in `materials`; this
+explicit mapping preserves source material identity and selects each declared
+AEDT library record. This new path does not change the direct-GDS CPW workflow
+above.
+
+```python
+from pathlib import Path
+from scgsim.aedt import MatrixRunControl, prepare_q3d_from_geometry
+
+handoff = prepare_q3d_from_geometry(
+    snapshot,
+    output_dir=Path(".artifacts/public-xmon-q3d-cg"),
+    project_name="public_xmon_q3d_cg",
+    design_name="PublicXmonQ3dCg",
+    materials=materials,
+    net_types={"xmon_pad": "Signal", "Ground": "Signal"},
+    physical_ground_nets=("Ground",),
+    run_control=MatrixRunControl(
+        "Setup1", frequency_ghz=6.0, maximum_passes=3,
+    ),
+    region_padding_um=(0.0, 0.0, 100.0, 100.0, 1000.0, 1000.0),
+)
+print(handoff.spec_path, handoff.archive_path)
+```
+
+The example keeps the caller's final Net IDs and explicitly classifies the
+physical `Ground` role while requesting native `Signal` matrix rows for both
+Nets. The frontend creates no terminal or locator-sheet geometry and performs
+no connectivity inference. It emits positive, source-traced finite pieces for
+the Q3D import while the canonical snapshot GDS remains unchanged; source
+holes remain holes. GeometryPlan source IDs, material and occurrence lineage,
+piece transforms and Z intervals, final Net and physical role, and hashes are
+retained in the input-v2 handoff. A mapped Q3D object must later be bound by
+the exact destination import layer and requested object name, then checked
+against observed native object identity; this preparation example does not
+demonstrate native import, solve, or matrix readback. Source curves remain
+outside the current AEDT lowering contract.
+
+Use the existing `aedt-epr` installation extra when preparing this structured
+GDSFactory/KLayout source. Direct-GDS `Q3dSpec` preparation above continues to
+use the `aedt` extra. Configured resource values are recorded run inputs; they
+do not by themselves guarantee a hard process-memory cap or report an
+independently observed effective solver allocation.

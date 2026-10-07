@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -27,6 +28,7 @@ from .spec import (
     HfssEigenmodeSpec,
     ModalPort,
     Q2dSpec,
+    Q3D_SCHEMA_VERSION_V2,
     Q3dSpec,
     parse_aedt_spec,
 )
@@ -279,6 +281,8 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
         if source.get("gds") != "geometry/design.gds":
             raise RuntimeError("receipt GDS path is not canonical")
         _verified(root, "geometry/design.gds", source, "gds_sha256")
+        if isinstance(spec, Q3dSpec) and spec.geometry_source is not None:
+            _validate_q3d_geometry_source(root, source, spec)
     if (
         mode not in {"terminal", "modal", "eigenmode", "q3d", "q2d"}
         or spec.mode != mode
@@ -1101,7 +1105,7 @@ def _validate_q3d_readback(root: Path, receipt: dict[str, Any], spec: Q3dSpec) -
             )
         ):
             raise RuntimeError("Q3D native net evidence does not match the spec")
-        if expected.net_type == "Signal":
+        if expected.net_type == "Signal" and expected.source_object is not None:
             for kind, object_name, side in (
                 ("source", expected.source_object, expected.source_side),
                 ("sink", expected.sink_object, expected.sink_side),
@@ -1118,12 +1122,14 @@ def _validate_q3d_readback(root: Path, receipt: dict[str, Any], spec: Q3dSpec) -
                 ):
                     raise RuntimeError("Q3D native terminal evidence is invalid")
         elif "source" in record or "sink" in record:
-            raise RuntimeError("Q3D Ground net receipt must not contain terminals")
+            raise RuntimeError("Q3D net receipt contains undeclared terminals")
     net_object_ids = [
         object_id for record in nets for object_id in record["native_object_ids"]
     ]
     if len(set(net_object_ids)) != len(net_object_ids):
         raise RuntimeError("Q3D native object IDs must be unique across nets")
+    if spec.geometry_source is not None:
+        _validate_q3d_source_bindings(receipt, spec, nets)
     _validate_q3d_region_ground(receipt, spec, nets)
     expected_setup = {
         "name": spec.run_control.setup_name,
@@ -1171,14 +1177,10 @@ def _validate_q3d_readback(root: Path, receipt: dict[str, Any], spec: Q3dSpec) -
             matrices["normalized_rows"],
             {"C", "AC RL"},
         )
+        if spec.schema_version == Q3D_SCHEMA_VERSION_V2:
+            _read_q3d_original_cg(root, spec)
         return
-    rows, summary = parse_matrix_export(
-        _contained(root, "results/q3d/c_matrix.csv"),
-        "Q3D",
-        "C",
-        spec.run_control.frequency_ghz,
-        {"Capacitance Matrix": "C", "Conductance Matrix": "G"},
-    )
+    rows, summary = _read_q3d_original_cg(root, spec)
     expected_matrices = {
         "path": "results/q3d/c_matrix.csv",
         "frequency_ghz": spec.run_control.frequency_ghz,
@@ -1187,6 +1189,136 @@ def _validate_q3d_readback(root: Path, receipt: dict[str, Any], spec: Q3dSpec) -
     }
     if matrices != expected_matrices:
         raise RuntimeError("Q3D capacitance-only matrix readback is invalid")
+
+
+def _read_q3d_original_cg(
+    root: Path, spec: Q3dSpec
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    options = (
+        {
+            "expected_label_set": {
+                net.name for net in spec.nets if net.net_type == "Signal"
+            }
+        }
+        if spec.schema_version == Q3D_SCHEMA_VERSION_V2
+        else {}
+    )
+    return parse_matrix_export(
+        _contained(root, "results/q3d/c_matrix.csv"),
+        "Q3D",
+        "C",
+        spec.run_control.frequency_ghz,
+        {"Capacitance Matrix": "C", "Conductance Matrix": "G"},
+        **options,
+    )
+
+
+def _validate_q3d_geometry_source(
+    root: Path, receipt_source: dict[str, Any], spec: Q3dSpec
+) -> None:
+    """Bind sealed geometry attachments and the trace mapping to the spec."""
+    geometry_source = spec.geometry_source
+    if geometry_source is None:
+        return
+    if receipt_source.get("gds_sha256") != geometry_source["export_gds_sha256"]:
+        raise RuntimeError("Q3D imported GDS digest differs from geometry_source")
+    expected_paths = {
+        "canonical_gds": "geometry/source.gds",
+        "stack": "metadata/geometry_stack.json",
+        "trace": "metadata/geometry_trace.json",
+    }
+    verified: dict[str, Path] = {}
+    for key, expected_path in expected_paths.items():
+        reference = geometry_source["files"][key]
+        if reference["path"] != expected_path:
+            raise RuntimeError("Q3D geometry_source attachment path is not canonical")
+        verified[key] = _verified(
+            root,
+            reference["path"],
+            {"geometry_source": reference["sha256"]},
+            "geometry_source",
+        )
+    if (
+        geometry_source["files"]["canonical_gds"]["sha256"]
+        != geometry_source["source_gds_sha256"]
+        or geometry_source["files"]["stack"]["sha256"]
+        != geometry_source["source_stack_sha256"]
+    ):
+        raise RuntimeError("Q3D geometry_source attachment digests are inconsistent")
+    trace = read_json(verified["trace"])
+    if not isinstance(trace, Mapping):
+        raise RuntimeError("Q3D geometry trace mapping is invalid")
+    trace_source = trace.get("geometry_source")
+    expected_trace_source = dict(geometry_source)
+    expected_trace_source.pop("files")
+    if trace_source != expected_trace_source:
+        raise RuntimeError("Q3D geometry trace mapping differs from the sealed spec")
+
+
+def _validate_q3d_source_bindings(
+    receipt: dict[str, Any], spec: Q3dSpec, nets: list[dict[str, Any]]
+) -> None:
+    geometry_source = spec.geometry_source
+    if geometry_source is None:
+        return
+    materials = receipt.get("materials")
+    if not isinstance(materials, list) or len(materials) != len(spec.object_bindings):
+        raise RuntimeError("Q3D geometry source object readback is invalid")
+    layers = {layer.layer: layer for layer in spec.layer_imports}
+    pieces = {piece["object_name"]: piece for piece in geometry_source["pieces"]}
+    net_object_ids = {
+        name: native_id
+        for net_record, net_spec in zip(nets, spec.nets, strict=True)
+        for name, native_id in zip(
+            net_spec.object_names, net_record["native_object_ids"], strict=True
+        )
+    }
+    records = {
+        record.get("object_name"): record
+        for record in materials
+        if isinstance(record, dict)
+    }
+    if len(records) != len(materials) or set(records) != set(pieces):
+        raise RuntimeError("Q3D geometry source object names are invalid")
+    binding_fields = {
+        "piece_id",
+        "source_entity_id",
+        "source_polygon_id",
+        "destination_layer_name",
+        "imported_object_name",
+        "native_object_id",
+        "object_name",
+    }
+    seen_native_ids: set[int] = set()
+    for object_binding in spec.object_bindings:
+        piece = pieces[object_binding.object_name]
+        record = records[object_binding.object_name]
+        layer = layers[object_binding.layer]
+        evidence = record.get("geometry_source_binding")
+        if not isinstance(evidence, dict) or set(evidence) != binding_fields:
+            raise RuntimeError("Q3D geometry source binding evidence is invalid")
+        imported_name = evidence.get("imported_object_name")
+        native_id = evidence.get("native_object_id")
+        if (
+            evidence.get("piece_id") != piece["piece_id"]
+            or evidence.get("source_entity_id") != piece["source_entity_id"]
+            or evidence.get("source_polygon_id") != piece["source_polygon_id"]
+            or evidence.get("destination_layer_name") != layer.layer_name
+            or not isinstance(imported_name, str)
+            or not imported_name.startswith(f"{layer.layer_name}_")
+            or evidence.get("object_name") != object_binding.object_name
+            or record.get("object_name") != object_binding.object_name
+            or not _positive_unique_ids([native_id], 1)
+            or native_id in seen_native_ids
+            or (
+                piece["physical_role"] != "substrate"
+                and net_object_ids.get(object_binding.object_name) != native_id
+            )
+        ):
+            raise RuntimeError(
+                "Q3D geometry source binding differs from native readback"
+            )
+        seen_native_ids.add(native_id)
 
 
 def _validate_q3d_region_ground(
