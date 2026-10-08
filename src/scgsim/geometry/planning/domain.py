@@ -723,7 +723,12 @@ def _planar_side_solution_regions(
             if side == "bottom"
             else _same_z(z_min_um, plane_z_um)
         )
-        contains_plane = z_min_um < plane_z_um < z_max_um
+        # Endpoint equivalence and strict interior must be mutually exclusive.
+        contains_plane = (
+            z_min_um < plane_z_um < z_max_um
+            and not _same_z(z_min_um, plane_z_um)
+            and not _same_z(z_max_um, plane_z_um)
+        )
         if not on_boundary and not contains_plane:
             continue
         overlap = _boolean_gdstk_region(
