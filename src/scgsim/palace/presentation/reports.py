@@ -1768,7 +1768,22 @@ def _line_figure(
     tokens = _theme_tokens(theme)
     go = _plotly()
     fig = go.Figure()
-    _style_figure(fig, title=title, theme=theme)
+    # A responsive width does not reclaim the fixed gutter for an outside legend.
+    _style_figure(
+        fig,
+        title=title,
+        margin={"l": 84, "r": 36, "t": 116, "b": 64},
+        theme=theme,
+    )
+    fig.update_layout(
+        legend={
+            "orientation": "h",
+            "x": 0,
+            "xanchor": "left",
+            "y": 1.04,
+            "yanchor": "bottom",
+        },
+    )
     plotted = False
     for name, ys in traces:
         plot_ys = _positive_or_none(ys) if yaxis_type == "log" else list(ys)
