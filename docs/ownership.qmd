@@ -19,6 +19,59 @@ Repository layout, implementation responsibilities, documentation builds and
 release procedures belong to the secondary
 [maintainer entry](https://github.com/OrPenStrike/scgsim/blob/develop/MAINTAINING.md).
 
+## SCGSim 2.0 ownership candidate — CONVERGING
+
+The v2 module and API structure is implemented as a current source candidate
+and remains `CONVERGING`; source review, installed-package observations and
+native behavior are separate from this layout. The intake baseline is
+`develop@3a52fb1`, tree `96adcf8672b497a29dd0a6b43043cca11efc3043`. Existing
+consumers remain on their recorded pins until they choose a migration.
+
+| Target area | Owns | Must not take ownership of |
+|---|---|---|
+| `scgsim.geometry` | Source-facing component/occurrence and stack adaptation, GeometryPlan/snapshot, normalized inputs, vacuum/curve preparation and detached summaries | Compiler stage orchestration, Palace/AEDT physics or execution state |
+| `scgsim.geometry.compiler` | Advanced builder, derived records, pipeline validators and construction dispatch | Component source ownership or solver state |
+| `scgsim.geometry.models` and lower primitives | One canonical model/type definition and shared source/compiler primitives | Duplicate definitions, source-to-planning dependency cycles |
+| `scgsim.semantics` | Stdlib-only immutable, revision-bound facts | Mutable backend objects, solver tags interpreted as source truth |
+| `scgsim.palace.preparation` | Separate Electrostatic and Eigenmode setup objects, mutable state/invalidation, and shared preparation functions | A common Simulation base, Palace submission, or merged state owners |
+| `scgsim.palace.mesh` | Route build, dynamic Gmsh worker, native mesh summaries, and offline mesh-quality reader | Result receipt custody or physical convergence judgments |
+| `scgsim.palace.execution` | Manual handoff packages and standalone host receipt recording | Automatic solver submission or result interpretation |
+| `scgsim.palace.results` | Returned artifact/custody validation, result data, and detached EPR | Solver execution or plotting state |
+| `scgsim.palace.presentation` | Palace trust, physics and cost projections and report figures | A common cross-solver physical quantity model |
+| `scgsim.aedt.specs` | Shared request primitives, HFSS/Q2D/Q3D-v3 records, and explicit parser dispatch | Runtime/Desktop state or Q3D input-v1/v2 |
+| `scgsim.aedt.preparation` | Portable handoff, source-backed family preparation, canonical cohort membership | Desktop lifetime, mutable EigenmodeSim state, or solve results |
+| `scgsim.aedt.runtime` | Sole transaction/receipt coordinator and one Desktop lifecycle; family-specific native prepare/solve/export/readback | Shared geometry source ownership or family-crossing physics |
+| `scgsim.aedt.epr` | EPR source geometry, fields/cache, and analysis workflow | Desktop lifecycle or general result custody |
+| `scgsim.aedt.results` | Strict run/EPR resolution, provenance readers, convergence and matrix observations | Solver execution or display state |
+| `scgsim.aedt.presentation` | Display-only projections and plotting with lazy optional imports | Native calculations or result validation |
+| `scgsim.visualization` | Backend-bound source/receipt loaders, detached scene/preview objects, and rendering | Solver state, simulation status or physical acceptance |
+| `scgsim.presentation` | Shared, solver-physics-neutral notebook formatting | Domain projections or scientific calculations |
+
+The baseline facade and direct-submodule symbol maps for geometry, AEDT, Palace
+and visualization, with their implemented destinations, are in the
+[API migration reference](api-migration.qmd).
+Publicness comes from documented facades/contracts and declared exports, not
+from whether a Python module happens to be importable. The v2 change
+intentionally does not preserve `scgsim.sgb` compatibility wrappers or Q3D
+input-v1/v2 paths; the public AEDT command `python -m scgsim.aedt.run` remains
+a supported entry and delegates to the transaction owner.
+
+State boundaries remain observable. Palace Electrostatic and Eigenmode
+preparation retain separate mutable state and invalidation/failure ordering;
+the Gmsh worker is a process boundary, and its mesh observer is not the offline
+quality reader. AEDT `EigenmodeSim` retains mutable configuration and
+invalidation state, while one transaction owns receipt transitions and Desktop
+release precedence. Geometry snapshots remain detached; compiler records are
+derived outputs, and backend tags remain observations rather than source
+authority. Relocation must preserve these ownership and failure contracts.
+
+The SCGSim Development Lead owns tracked source. A fixed worker may write only
+its assigned paths under a bounded lease; shared facade, receipt and package
+metadata paths have one writer at a time. The architecture and complete
+submodule migration contract are recorded alongside the source candidate.
+Native observations and solver-specific result interpretation remain
+separately owned and must not be implied by a directory reorganization.
+
 ## Implementation and project references
 
 | Reference | Purpose |

@@ -1,0 +1,270 @@
+---
+title: "SCGSim 2.0 API Migration Map"
+description: "Current public geometry, AEDT, Palace and visualization symbols mapped to the converging SCGSim 2.0 module structure."
+scgsim-kind: "contract"
+scgsim-status: "CONVERGING"
+scgsim-id: "docs/api-migration"
+---
+
+This reference maps the frozen v1 API surfaces to the v2 source candidate.
+The baseline is `develop@3a52fb1`, tree
+`96adcf8672b497a29dd0a6b43043cca11efc3043`. Geometry, Palace, visualization,
+and AEDT responsibility relocations are implemented in the current source
+tree. The candidate remains `CONVERGING`, is not integrated,
+and has not received Human API acceptance. A candidate wheel was installed
+in an isolated environment for bounded package/API and documentation
+observations; this does not establish a user installation or native behavior.
+
+Package-level facades remain the supported high-level entrypoints. The move
+does not add compatibility wrappers for old internal paths. Existing consumer
+pins remain unchanged; a consumer migrates only when it deliberately adopts
+the v2 package and the corresponding old-to-new map.
+
+## Migration rules
+
+- Keep `scgsim.geometry`, `scgsim.palace`, `scgsim.aedt`, and
+  `scgsim.visualization` as package entrypoints; keep `scgsim.geometry.compiler`
+  as the explicit advanced compiler surface.
+- Treat documented facades and declared exports as public. A private or
+  importable implementation module is not automatically a supported API.
+- Move each supported symbol to its single responsibility owner and re-export
+  the approved high-level symbols from the package facade. Do not leave a
+  second old implementation or compatibility wrapper reachable.
+- Do not revive Q3D input-v1 or input-v2. The body-backed v3 input is the
+  current Q3D candidate; its native consumer endpoint remains unobserved and
+  this map makes no native-completion claim.
+- Preserve the formal `python -m scgsim.aedt.run` command as the AEDT
+  transaction entrypoint. It is a supported CLI, not a legacy wrapper.
+- The v2 AEDT producer emits `scgsim.aedt.runtime-source.v13`. Its manifest
+  declares 61 canonical module paths, including 41 AEDT modules, and records
+  `schema_version`, `stage`, `modules`, `content_sha256`, and
+  `revision_observation`; declared module bytes and digest are required, while
+  the truthful Git observation may be unavailable. V13 adds no helper-hash
+  map. Its declared files are not a transitive dependency attestation.
+  Historical runtime-source v1–v12 retain their exact paths and identity rules;
+  migration does not rewrite or reinterpret historical receipts.
+
+## Geometry and compiler API
+
+The migration divides the baseline `scgsim.sgb` facade into two deliberate
+surfaces. `scgsim.geometry` owns source-facing planning, snapshots, normalized
+input records, adapters, stack/vacuum/curve preparation and detached summaries.
+`scgsim.geometry.compiler` is the advanced build surface for stage
+orchestration, derived records and validators. Source-facing exports and
+advanced compiler exports remain separate. The following complete inventories
+record the baseline facade and submodule export sets, including model and
+pipeline-only validator surfaces. Repeated
+names mark a baseline symbol exported by more than one declared surface. Each
+has one current definition, without an old-path compatibility wrapper.
+
+
+- **Baseline `scgsim.sgb` → current owner `scgsim.geometry`.** Declared names: `BoundaryCurveChainSpec`, `Coordinate`, `CurveKindLiteral`, `CurveOrientationLiteral`, `GdsBoundaryReconstructionSpec`, `GeometryBuildInput`, `GeometryPlan`, `GeometryPlanSnapshot`, `InputSummary`, `LayoutPolygonSpec`, `PathInput`, `PolygonRing`, `PortSheetOverlapRecord`, `PortSheetRegionRecord`, `RouteLiteral`, `SemanticEntitySpec`, `SourceCurveSpec`, `VacuumRegionSpec`, `Vector3D`, `apply_vacuum_region_to_stack`, `bind_source_curves`, `build_component_stack`, `build_gds_stack_geometry_input`, `build_gdsfactory_geometry_input`, `summarize_geometry_input`.
+- **Baseline `scgsim.sgb` → current owner `scgsim.geometry.compiler`.** Declared names: `BackendEntityTagRecord`, `ConstructionBodyPlanRecord`, `ConstructionPlanRecord`, `CurvePlanRecord`, `CurveRefRecord`, `CutHostOperationRecord`, `DimensionLiteral`, `FinalPhysicalGroupRecord`, `GmshDimTag`, `InnerPecVoidShellRecord`, `InterfaceKindLiteral`, `InterfacePlanRecord`, `MMContactRecord`, `PointPlanRecord`, `RUN_METADATA_DIR`, `SEMANTIC_GEOMETRY_METADATA_DIR`, `SemanticGeometryBuilder`, `SolverUseLiteral`, `SurfaceLoopRecord`, `SurfaceLoopRoleLiteral`, `SurfaceOrientationLiteral`, `SurfacePartitionRecord`, `SurfacePlanRecord`, `SurfaceRefRecord`, `TagPlanRecord`, `TagSourceKindLiteral`, `VolumePlanRecord`, `build_route_construction_plan`, `export_physical_group_records`, `plan_conductor_contact_patches`, `plan_cut_host_operations`, `plan_mm_contact_records`, `plan_route_construction_bodies`, `plan_route_surfaces`, `plan_route_tags`, `plan_route_volumes`, `plan_surface_partitions`, `recognize_route_interfaces`, `validate_backend_tag_ledger`, `validate_curve_plan_coverage`, `validate_geometry_input`, `validate_interface_surface_source_of_truth`, `validate_no_surface_overlap`, `validate_route_operation_coverage`, `validate_selected_route`, `validate_surface_deduplication`, `validate_surface_partition_coverage`, `validate_surface_use_counts`, `validate_tag_plan_coverage`, `validate_volume_surface_closure`.
+- **Baseline `scgsim.sgb.geometry_plan` → current owner `scgsim.geometry`.** Declared names: `GeometryPlan`, `GeometryPlanSnapshot`.
+- **Baseline `scgsim.sgb.models` → current owner `scgsim.geometry.models`.** Declared names: `BackendEntityTagRecord`, `BoundaryCurveChainSpec`, `ConductorPartRoleLiteral`, `ConductorRepresentationLiteral`, `ConstructionBodyPlanRecord`, `ConstructionPlanRecord`, `Coordinate`, `CurveKindLiteral`, `CurveOrientationLiteral`, `CurvePlanRecord`, `CurveRefRecord`, `CutHostOperationRecord`, `DEFAULT_INTERFACE_SOLVER_USE`, `DimensionLiteral`, `FinalPhysicalGroupRecord`, `GdsBoundaryReconstructionSpec`, `GeometryBuildInput`, `GmshDimTag`, `HIGH_COUNT_LOCAL_CONDUCTOR_PART_ROLES`, `InnerPecVoidShellRecord`, `InterfaceKindLiteral`, `InterfacePlanRecord`, `LayoutPolygonSpec`, `MMContactRecord`, `PathInput`, `PointPlanRecord`, `PolygonRing`, `PortSheetOverlapRecord`, `PortSheetRegionRecord`, `ROUTE_ALLOWED_REPRESENTATIONS`, `RUN_METADATA_DIR`, `RouteABConstructionPlanRecord`, `RouteABVolumePlanRecord`, `RouteLiteral`, `SEMANTIC_GEOMETRY_METADATA_DIR`, `SemanticEntitySpec`, `SolverUseLiteral`, `SourceCurveSpec`, `StructuredFinalPhysicalGroupRecord`, `SurfaceLoopRecord`, `SurfaceLoopRoleLiteral`, `SurfaceOrientationLiteral`, `SurfacePartitionRecord`, `SurfacePlanRecord`, `SurfaceRefRecord`, `TagPlanRecord`, `TagSourceKindLiteral`, `VacuumRegionSpec`, `Vector3D`, `VolumePlanRecord`.
+- **Baseline `scgsim.sgb.pipeline` → current owner `scgsim.geometry.compiler`.** Declared names: `SemanticGeometryBuilder`, `build_route_construction_plan`, `export_physical_group_records`, `plan_conductor_contact_patches`, `plan_cut_host_operations`, `plan_mm_contact_records`, `plan_route_construction_bodies`, `plan_route_surfaces`, `plan_route_tags`, `plan_route_volumes`, `plan_surface_partitions`, `recognize_route_interfaces`, `validate_backend_tag_ledger`, `validate_curve_plan_coverage`, `validate_geometry_input`, `validate_interface_surface_source_of_truth`, `validate_no_surface_overlap`, `validate_route_operation_coverage`, `validate_route_volume_surface_refs`, `validate_selected_route`, `validate_surface_deduplication`, `validate_surface_partition_coverage`, `validate_surface_sheet_interface_coverage`, `validate_surface_use_counts`, `validate_tag_plan_coverage`, `validate_volume_surface_closure`.
+- **Baseline `scgsim.sgb.vacuum` → current owner `scgsim.geometry`.** Declared names: `apply_vacuum_region_to_stack`.
+
+
+Every defining model keeps one canonical class/type definition under
+`scgsim.geometry.models` and its record modules. The package facades re-export
+those same objects. Direct aliases below enumerate the baseline submodule
+entries, including model aliases, stage functions and validators. Each entry
+records the preferred supported facade; a definition may live in a lower-level
+module to preserve dependency direction.
+
+
+- **Baseline `scgsim.sgb.adapter` → current defining module `scgsim.geometry.source.adapter`.** Declared names: `build_gds_stack_geometry_input`, `build_gdsfactory_geometry_input`. Preferred API: `scgsim.geometry`.
+- **Baseline `scgsim.sgb.export` → current defining module `scgsim.geometry.construction.export`.** Declared names: `export_physical_group_records`. Preferred API: `scgsim.geometry.compiler`.
+- **Baseline `scgsim.sgb.geometry_plan` → current defining module `scgsim.geometry.source.plan`.** Declared names: `GeometryPlan`, `GeometryPlanSnapshot`. Preferred API: `scgsim.geometry`.
+- **Baseline `scgsim.sgb.models.common` → current defining module `scgsim.geometry.models.common`.** Declared names: `Coordinate`, `CurveKindLiteral`, `CurveOrientationLiteral`, `PathInput`, `PolygonRing`, `RouteLiteral`, `Vector3D`. Preferred API: `scgsim.geometry`.
+- **Baseline `scgsim.sgb.models.common` → current defining module `scgsim.geometry.models.common`.** Declared names: `DimensionLiteral`, `GmshDimTag`, `InterfaceKindLiteral`, `RUN_METADATA_DIR`, `SEMANTIC_GEOMETRY_METADATA_DIR`, `SolverUseLiteral`, `SurfaceLoopRoleLiteral`, `SurfaceOrientationLiteral`, `TagSourceKindLiteral`. Preferred API: `scgsim.geometry.compiler`.
+- **Baseline `scgsim.sgb.models.common` → current defining module `scgsim.geometry.models.common`.** Declared names: `ConductorPartRoleLiteral`, `ConductorRepresentationLiteral`, `DEFAULT_INTERFACE_SOLVER_USE`, `HIGH_COUNT_LOCAL_CONDUCTOR_PART_ROLES`, `ROUTE_ALLOWED_REPRESENTATIONS`. Preferred API: `scgsim.geometry.models`.
+- **Baseline `scgsim.sgb.models.construction` → current defining module `scgsim.geometry.models.construction`.** Declared names: `ConstructionBodyPlanRecord`, `ConstructionPlanRecord`, `CutHostOperationRecord`, `SurfacePartitionRecord`. Preferred API: `scgsim.geometry.compiler`.
+- **Baseline `scgsim.sgb.models.construction` → current defining module `scgsim.geometry.models.construction`.** Declared names: `RouteABConstructionPlanRecord`. Preferred API: `scgsim.geometry.models`.
+- **Baseline `scgsim.sgb.models.input` → current defining module `scgsim.geometry.models.input`.** Declared names: `BoundaryCurveChainSpec`, `GdsBoundaryReconstructionSpec`, `GeometryBuildInput`, `LayoutPolygonSpec`, `SemanticEntitySpec`, `SourceCurveSpec`, `VacuumRegionSpec`. Preferred API: `scgsim.geometry`.
+- **Baseline `scgsim.sgb.models.regions` → current defining module `scgsim.geometry.models.regions`.** Declared names: `PortSheetOverlapRecord`, `PortSheetRegionRecord`. Preferred API: `scgsim.geometry`.
+- **Baseline `scgsim.sgb.models.tags` → current defining module `scgsim.geometry.models.tags`.** Declared names: `BackendEntityTagRecord`, `FinalPhysicalGroupRecord`, `TagPlanRecord`. Preferred API: `scgsim.geometry.compiler`.
+- **Baseline `scgsim.sgb.models.tags` → current defining module `scgsim.geometry.models.tags`.** Declared names: `StructuredFinalPhysicalGroupRecord`. Preferred API: `scgsim.geometry.models`.
+- **Baseline `scgsim.sgb.models.topology` → current defining module `scgsim.geometry.models.topology`.** Declared names: `CurvePlanRecord`, `CurveRefRecord`, `InnerPecVoidShellRecord`, `InterfacePlanRecord`, `MMContactRecord`, `PointPlanRecord`, `SurfaceLoopRecord`, `SurfacePlanRecord`, `SurfaceRefRecord`, `VolumePlanRecord`. Preferred API: `scgsim.geometry.compiler`.
+- **Baseline `scgsim.sgb.models.topology` → current defining module `scgsim.geometry.models.topology`.** Declared names: `RouteABVolumePlanRecord`. Preferred API: `scgsim.geometry.models`.
+- **Baseline `scgsim.sgb.pipeline` → current defining module `scgsim.geometry.compiler.builder`.** Declared names: `SemanticGeometryBuilder`. Preferred API: `scgsim.geometry.compiler`.
+- **Baseline `scgsim.sgb.planning` → current defining module `scgsim.geometry.compiler.dispatch`.** Declared names: `build_route_construction_plan`. Preferred API: `scgsim.geometry.compiler`.
+- **Baseline `scgsim.sgb.planning` → current defining module `scgsim.geometry.planning.interfaces`.** Declared names: `plan_conductor_contact_patches`, `plan_mm_contact_records`, `recognize_route_interfaces`. Preferred API: `scgsim.geometry.compiler`.
+- **Baseline `scgsim.sgb.planning` → current defining module `scgsim.geometry.planning.surfaces`.** Declared names: `plan_route_surfaces`, `plan_surface_partitions`. Preferred API: `scgsim.geometry.compiler`.
+- **Baseline `scgsim.sgb.planning` → current defining module `scgsim.geometry.planning.tags`.** Declared names: `plan_route_tags`. Preferred API: `scgsim.geometry.compiler`.
+- **Baseline `scgsim.sgb.planning` → current defining module `scgsim.geometry.planning.volumes`.** Declared names: `plan_cut_host_operations`, `plan_route_construction_bodies`, `plan_route_volumes`. Preferred API: `scgsim.geometry.compiler`.
+- **Baseline `scgsim.sgb.source_curves` → current defining module `scgsim.geometry.source.curves`.** Declared names: `bind_source_curves`. Preferred API: `scgsim.geometry`.
+- **Baseline `scgsim.sgb.stack` → current defining module `scgsim.geometry.source.stack`.** Declared names: `build_component_stack`. Preferred API: `scgsim.geometry`.
+- **Baseline `scgsim.sgb.summary` → current defining module `scgsim.geometry.source.summary`.** Declared names: `InputSummary`, `summarize_geometry_input`. Preferred API: `scgsim.geometry`.
+- **Baseline `scgsim.sgb.vacuum` → current defining module `scgsim.geometry.source.vacuum`.** Declared names: `apply_vacuum_region_to_stack`. Preferred API: `scgsim.geometry`.
+- **Baseline `scgsim.sgb.validation` → current defining module `scgsim.geometry.compiler.validation`.** Declared names: `validate_backend_tag_ledger`, `validate_curve_plan_coverage`, `validate_interface_surface_source_of_truth`, `validate_no_surface_overlap`, `validate_route_operation_coverage`, `validate_route_volume_surface_refs`, `validate_selected_route`, `validate_surface_deduplication`, `validate_surface_partition_coverage`, `validate_surface_sheet_interface_coverage`, `validate_surface_use_counts`, `validate_tag_plan_coverage`, `validate_volume_surface_closure`. Preferred API: `scgsim.geometry.compiler`.
+- **Baseline `scgsim.sgb.validation` → current defining module `scgsim.geometry.source.validation`.** Declared names: `validate_geometry_input`. Preferred API: `scgsim.geometry.compiler`.
+
+
+`validate_geometry_input` is the one input-only validator: its definition
+moves to `scgsim.geometry.source.validation`, below compiler orchestration,
+and `scgsim.geometry.compiler.validate_geometry_input` re-exports it. Other
+stage validators remain in the compiler validation owner. Shared polygon,
+spatial and Entity primitives sit below source and compiler; source code does
+not import planning/compiler. Source identity, snapshot detachment, caller-owned
+final Net membership, native correspondence, stock CAD shell repair, curved
+arrangement and XAO/physical-group behavior remain owned by their current
+responsibilities.
+
+## AEDT API, transaction and state ownership
+
+The inventory below maps baseline package exports to their current source
+candidate owners, and also records direct-only entries such as `run.main`.
+Package root exports retain their existing symbols and semantics. Listing a
+private definition module here does not make it public.
+
+
+- **Baseline `scgsim.aedt.spec` → current canonical owner `scgsim.aedt.specs.common`.** Baseline names: `AedtResources`, `LayerImport`, `ObjectBinding`, `PdkMaterial`, `TerminalPort`, `ModalPort`, `MatrixRunControl`, `HfssDrivenMode`.
+- **Baseline `scgsim.aedt.spec` → current canonical owner `scgsim.aedt.specs.hfss`.** Baseline names: `FrequencySweepSpec`, `HfssRunControl`, `EigenmodeRunControl`, `HfssDrivenSpec`, `HfssSpec`, `HfssEigenmodeSpec`, `HfssEprSpec`, `HfssEprAnalysisSpec`, `LengthMeshSpec`.
+- **Baseline `scgsim.aedt.spec` → current canonical owner `scgsim.aedt.specs.q2d`.** Baseline names: `Q2dRectangleSpec`, `Q2dConductorSpec`, `Q2dSpec`.
+- **Baseline `scgsim.aedt.spec` → current canonical owner `scgsim.aedt.specs.q3d`.** Baseline names: `Q3dBodySpec`, `Q3dNetSpec`, `Q3dSpec`.
+- **Baseline `scgsim.aedt.spec` → current canonical owner `scgsim.aedt.specs.parse`.** Baseline names: `AedtSpec`, `parse_aedt_spec`.
+- **Baseline `scgsim.aedt._epr_models` → current canonical owner `scgsim.aedt.epr.models`.** Baseline names: `EprAnalysisRequest`, `EprResult`, `ExpressionCacheConvergence`, `NativeExpressionDefinition`, `NormalizedSurfaceEprTotal`, `PlanarJunction`, `PreparedPlanarGeometry`, `SavedSolution`, `SurfaceEprSpec`.
+- **Baseline `scgsim.aedt.handoff` → current canonical owner `scgsim.aedt.preparation.handoff`.** Baseline names: `HandoffPlan`, `prepare_handoff`.
+- **Baseline `scgsim.aedt.handoff` → current canonical owner `scgsim.aedt.preparation.geometry`.** Baseline names: `prepare_hfss_eigenmode_from_geometry`, `prepare_q3d_from_geometry`.
+- **Baseline `scgsim.aedt.handoff` → current canonical owner `scgsim.aedt.epr.workflow`.** Baseline names: `analyze_epr`.
+- **Baseline `scgsim.aedt.eigenmode` → current canonical owner `scgsim.aedt.eigenmode`.** Baseline names: `EigenmodeSim`.
+- **Baseline `scgsim.aedt.resolve` → current canonical owner `scgsim.aedt.results.resolve`.** Baseline names: `ResolvedRun`, `resolve_results`.
+- **Baseline `scgsim.aedt._epr_geometry` → current canonical owner `scgsim.aedt.epr.geometry`.** Baseline names: `planar_junction_from_port`, `prepare_planar_geometry_input`.
+- **Baseline `scgsim.aedt._epr_results` → current canonical owner `scgsim.aedt.epr.analysis`.** Baseline names: `combine_epr_mode`, `combine_surface_epr_mode`, `reanalyze_epr`.
+- **Baseline `scgsim.aedt._epr_results` → current canonical owner `scgsim.aedt.results.epr`.** Baseline names: `resolve_epr_result`, `resolve_saved_solution`.
+- **Baseline `scgsim.aedt._epr_results and _presentation` → current canonical owner `scgsim.aedt.presentation.epr`.** Baseline names: `plot_epr_result`, `show_epr`.
+- **Baseline `scgsim.aedt.run` → current canonical owner `scgsim.aedt.run`.** Baseline names: `main`.
+
+
+The package's complete current `__all__` roster is: `AedtResources`, `AedtSpec`, `EigenmodeRunControl`, `EigenmodeSim`, `EprAnalysisRequest`, `EprResult`, `ExpressionCacheConvergence`, `FrequencySweepSpec`, `HandoffPlan`, `HfssDrivenMode`, `HfssDrivenSpec`, `HfssEigenmodeSpec`, `HfssEprAnalysisSpec`, `HfssEprSpec`, `HfssRunControl`, `HfssSpec`, `LayerImport`, `LengthMeshSpec`, `MatrixRunControl`, `ModalPort`, `NativeExpressionDefinition`, `NormalizedSurfaceEprTotal`, `ObjectBinding`, `PdkMaterial`, `PlanarJunction`, `PreparedPlanarGeometry`, `Q2dConductorSpec`, `Q2dRectangleSpec`, `Q2dSpec`, `Q3dBodySpec`, `Q3dNetSpec`, `Q3dSpec`, `ResolvedRun`, `SavedSolution`, `SurfaceEprSpec`, `TerminalPort`, `analyze_epr`, `combine_epr_mode`, `combine_surface_epr_mode`, `parse_aedt_spec`, `planar_junction_from_port`, `plot_epr_result`, `prepare_handoff`, `prepare_hfss_eigenmode_from_geometry`, `prepare_planar_geometry_input`, `prepare_q3d_from_geometry`, `reanalyze_epr`, `resolve_epr_result`, `resolve_results`, `resolve_saved_solution`, `show_epr`.
+
+The new responsibility tree follows the existing boundaries:
+
+- `aedt.specs` owns common, HFSS, Q2D and Q3D-v3 request records plus explicit
+  family parsing. Q3D input-v1/v2 is not restored.
+- `aedt.preparation` owns portable handoff creation, source-backed geometry
+  preparation and canonical cohort membership.
+- `aedt.runtime.transaction` is the sole Desktop owner and receipt-state
+  coordinator. Family runtimes own their native prepare/solve/export/readback;
+  the narrow shared native helper owns neither a family nor Desktop.
+- `aedt.epr` owns EPR models, source geometry, fields/cache and workflow.
+  `aedt.results` owns strict handoff/result resolution, historical provenance,
+  convergence, matrices and sealed EPR readers. Results do not start a solve.
+- `aedt.presentation` owns display-only projections and plotting, with lazy
+  imports kept out of strict result resolution.
+
+`EigenmodeSim` stays the high-level mutable state owner for geometry/stack,
+EPR settings, preparation and handoff invalidation. Preparation helpers do not
+take over that state. Transaction ordering remains explicit: validate the
+request and input cohort, write the running receipt before PyAEDT/Desktop,
+perform one family transaction, persist returned facts before Desktop release,
+then seal any saved EPR result. A prior native/family error remains primary if
+release also fails; resolution validates returned artifacts without executing
+AEDT. No shared Simulation base or common physical-result model is introduced.
+
+The documented direct module surfaces migrate as follows: `spec` to
+`specs.common/hfss/q2d/q3d/parse`; `handoff` splits among
+`preparation.handoff`, `preparation.geometry` and `epr.workflow`;
+`eigenmode` remains the state-owning facade; `resolve` moves to
+`results.resolve`; and `run.main` remains at `scgsim.aedt.run` as a thin
+delegate. The importable but non-exported `aedt.util` moves to an internal
+I/O leaf and is not kept as a wrapper. EPR analysis, result readers, and
+presentation modules move to their named owners above and in the responsibility
+tree without expanding the package facade.
+
+Keep `python -m scgsim.aedt.run`, its `main(argv)` and `__main__` behavior.
+Generated handoff and EPR scripts continue to call that command with their
+existing arguments. Transaction implementation moves behind the CLI shim.
+Dynamic EPR workflow imports call the one transaction owner; EPR's HFSS
+export/readback dependency becomes an explicit internal service. Visualization
+imports current PyAEDT constants from the canonical spec owner without making
+them public exports.
+
+The current producer uses runtime-source v13; its declared inventory and
+content digest identify the measured modules for that source snapshot, without
+making the digest a permanent code value or claiming exhaustive transitive
+coverage. Historical v1–v12 readers retain their original path, hash, revision
+and schema meanings. Do not map old module strings onto new paths while
+resolving old receipts. Handoff and receipt histories remain separate from Q3D
+request versioning; Q3D remains v3 only. This map does not claim native Q3D
+completion.
+
+## Palace package symbols
+
+`scgsim.palace` retains its current 25 package-facade names. The inventory
+groups those exports by their v2 responsibility owner.
+
+
+- **Current owner and responsibility:** `scgsim.palace.preparation`; keep separate mutable preparation state owners. **Facade exports:** `ElectrostaticSim`, `EigenmodeSim`.
+- **Current owner and responsibility:** `scgsim.palace.results`; custody-aware result loading. **Facade exports:** `PalaceCost`, `PalacePerformance`, `PalaceProvenance`, `PalaceReturnedReceipt`, `ParsedTable`, `ResolvedPalaceResult`, `resolve_palace_result`.
+- **Current owner and responsibility:** `scgsim.palace.results`; detached EPR values and offline reanalysis. **Facade exports:** `PalaceEprResult`, `epr_result`, `reanalyze_epr`, `resolve_epr_result`.
+- **Current owner and responsibility:** `scgsim.palace.presentation`; solver-specific plot over detached EPR. **Facade exports:** `show_epr`.
+- **Current owner and responsibility:** `scgsim.palace.results.report_data`; detached data records consumed by Palace presentation. **Facade exports:** `PalaceFailureDiagnosis`, `PalaceResultSelection`, `PassCostRecord`, `SurfaceMaskEprRecord`, `SurfaceMaskEprSeriesSnapshot`.
+- **Current owner and responsibility:** `scgsim.palace.presentation.reports`; trust, physics and benchmark views over retained result evidence. **Facade exports:** `PalaceTrustReport`, `PhysicsQuantitiesReport`, `SimulationBenchmarkReport`, `inspect_run_trustworthiness`.
+- **Current owner and responsibility:** `scgsim.palace.mesh.quality`; offline file reader, separate from mesh construction and solver execution. **Facade exports:** `MeshQualityReport`, `check_mesh_quality`.
+
+
+## Palace direct submodule exports
+
+These non-underscored modules declare their own `__all__` and therefore need
+explicit migration entries in addition to the package facade.
+
+
+- **Baseline direct import `scgsim.palace.electrostatic` → current source candidate `scgsim.palace.preparation.electrostatic`.** Declared symbols: `ElectrostaticSim`.
+- **Baseline direct import `scgsim.palace.eigenmode` → current source candidate `scgsim.palace.preparation.eigenmode`.** Declared symbols: `EigenmodeSim`.
+- **Baseline direct import `scgsim.palace.handoff` → current source candidate `scgsim.palace.execution.handoff`.** Declared symbols: `HandoffPlan`, `HandoffProfile`, `prepare_handoff`.
+- **Baseline direct import `scgsim.palace.resolve` → current source candidate `scgsim.palace.results.resolve`.** Declared symbols: `PalaceCost`, `PalacePerformance`, `PalaceProvenance`, `PalaceReturnedReceipt`, `ParsedTable`, `ResolvedPalaceResult`, `resolve_palace_result`.
+- **Baseline direct import `scgsim.palace.report`.** Declared symbols: `AmrPassSnapshot`, `PalaceFailureDiagnosis`, `PalaceResultSelection`, `PalaceTrustReport`, `PassCostRecord`, `PhysicsQuantitiesReport`, `inspect_run_trustworthiness`. Current source candidate: `scgsim.palace.presentation.reports` retains this direct export list; data records are defined in `scgsim.palace.results.report_data`. The package facade retains the other report exports, including `SimulationBenchmarkReport` and surface-mask records.
+
+
+The current `scgsim.palace.results.report_data` direct module exports
+`AmrPassSnapshot`, `PalaceFailureDiagnosis`, `PalaceResultSelection`,
+`PassCostRecord`, `SurfaceEprRecord`, `SurfaceEprSeriesSnapshot`,
+`SurfaceMaskEprRecord`, and `SurfaceMaskEprSeriesSnapshot`. The
+`scgsim.palace.presentation.reports` module retains the seven direct exports
+listed above.
+
+`scgsim.palace._epr_results` and `scgsim._mesh_quality` are baseline private
+implementation paths whose supported names are re-exported by `scgsim.palace`.
+Their current owners are `scgsim.palace.results` and
+`scgsim.palace.mesh.quality`, respectively; the old private import paths are
+not compatibility surfaces.
+
+## Visualization symbols
+
+
+- **`GeometryPreview`, `GeometryPreviewArtifact` → `scgsim.visualization.preview`.** Responsibility: Source-bound preview object and returned artifact/unavailable mode.
+- **`inspect_palace_geometry` → `scgsim.visualization.loaders.palace`.** Responsibility: Read the Palace mesh, manifest, index map and config into semantic preview modes.
+- **`inspect_aedt_geometry` → `scgsim.visualization.loaders.aedt`.** Responsibility: Bind AEDT native/receipt identity and load solver-assigned geometry.
+- **Scene records and shared rendering → `scgsim.visualization.scene`, `scgsim.visualization.rendering`.** Responsibility: Keep scene construction and rendering reusable without taking solver physics or simulation status ownership.
+- **Shared loader file-identity helpers → `scgsim.visualization.loaders._common`.** Responsibility: One loader-level implementation for JSON, hash and confined-path observations.
+
+
+The `scgsim.visualization` package facade continues to export exactly
+`GeometryPreview`, `GeometryPreviewArtifact`, `inspect_aedt_geometry`, and
+`inspect_palace_geometry`. Preview files and their manifest remain separate
+from solver and handoff identity. Palace previews retain high-order cell
+connectivity and node coordinates; source curves and native curved-arrangement
+facts remain in the mesh manifest and detached mesh summary. These facts are
+not discarded during relocation.
+
+## Shared presentation
+
+The baseline `scgsim._notebook_presentation` module contains physics-neutral
+formatting helpers used by geometry and AEDT. Its current implementation is
+`scgsim.presentation.notebook`. The formatting helpers do not own Palace or
+AEDT projections, calculations, or result status; their presentation remains
+solver-specific. Moving this private helper does not make its function names a
+new public API.
+
+## Scope and evidence status
+
+The baseline facade exports and documented direct submodule surfaces for
+geometry/compiler, AEDT, Palace and visualization are mapped to their current
+source owners above. The relocated source remains a `CONVERGING` candidate and
+is not integrated; a bounded isolated candidate-wheel observation does not
+establish a user installation. No consumer pin, historical receipt, Q3D
+v1/v2 reader, native result or package version is changed by this document.
+The Q3D body-v3 native consumer endpoint remains unobserved.

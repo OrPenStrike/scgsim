@@ -12,7 +12,7 @@ A run or report binds, as applicable:
 
 - SCGSim distribution version and measured runtime-source module/content identity;
 - SCGSim Git revision observation when available, and backend revision;
-- SGB source and geometry/topology identity;
+- Geometry source, compiler and topology identity;
 - solver and schema version;
 - machine profile and run receipt;
 - config, mesh, handoff, result, and report artifact identities;
@@ -23,6 +23,12 @@ notes. A distribution version alone does not identify the runtime code bytes,
 layout, settings or native result of a particular study. The current
 runtime-source manifest and content digest identify the module bytes used for
 execution; a Git revision is recorded only when truthfully available.
+
+The current Palace geometry authority is `scgsim.geometry.compiler`. Palace
+continues to serialize the established `scgsim_sgb` field, whose current value
+names that authority. The field name does not request an import from the former
+package. Historical receipt values and runtime-source inventories retain the
+module identities they recorded and are not rewritten to the current paths.
 
 ## Publication boundary
 

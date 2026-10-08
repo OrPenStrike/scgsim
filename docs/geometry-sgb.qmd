@@ -9,9 +9,17 @@ scgsim-id: "docs/geometry-sgb"
 Learn the source sequence in [shared Xmon inputs](tutorial-xmon-input.qmd) and
 [source observations](course/source-observations.qmd). The [geometry concept](concepts/geometry.qmd) explains the identities; this page owns their exact contract.
 
-The in-tree `scgsim.sgb` package is SCGSim's current geometry and topology
+The in-tree `scgsim.geometry` API is SCGSim's current source-geometry
 authority. It consumes structured PDK and component semantics and must not
 reconstruct geometry meaning from solver-generated labels.
+
+`scgsim.geometry` is the source-facing facade: `GeometryPlan`, detached
+snapshots, normalized input models, adapters, stack/vacuum/curve preparation,
+and summaries. `scgsim.geometry.compiler` owns the advanced route builder,
+derived construction records, stage validators, and dispatch. The source
+validator is defined in `scgsim.geometry.source.validation` and re-exported by
+the compiler facade. Direct defining modules and model aliases are listed in
+the [API migration reference](api-migration.qmd#geometry-and-compiler-api).
 
 `build_component_stack()` composes two explicit authorities. PDK
 `LayerStack` records supply materials, process layers, Z/thickness,
@@ -126,7 +134,7 @@ not silently substitute the diagnostic polygon witness.
 ## Component-to-backend geometry contract
 
 The accepted contract makes local component geometry and hierarchy explicit
-before Palace or AEDT preparation. The public `scgsim.sgb.GeometryPlan` is the
+before Palace or AEDT preparation. The public `scgsim.geometry.GeometryPlan` is the
 mutable Notebook builder: it inventories expanded component entities and
 stores the final `Net -> Entity` assignment. Its `prepare()` method returns an
 immutable `GeometryPlanSnapshot`; `GeometryBuildInput` remains the normalized
@@ -325,8 +333,9 @@ A handoff preserves:
 - the mapping from solver entities back to semantic geometry.
 
 External SGB revisions remain derivation history only. The in-tree
-`scgsim.sgb` package is the current authority; no direct external consumer or
-fallback path is implied.
+`scgsim.geometry` API is the current authority; its source-facing plan and
+compiler stages remain separate. No direct external consumer or fallback path
+is implied.
 
 ## Shared source facts for AEDT
 
@@ -349,7 +358,7 @@ implementation that realizes them.
 
 ## Pre-solve input summary
 
-`scgsim.sgb.summarize_geometry_input(build_input, *, prepared_stack)` returns an
+`scgsim.geometry.summarize_geometry_input(build_input, *, prepared_stack)` returns an
 `InputSummary` with detached `.data` and an HTML representation for notebook
 display. Both Eigenmode facades expose `input_summary()` to combine this
 normalized source with their configured backend settings. AEDT summarizes its

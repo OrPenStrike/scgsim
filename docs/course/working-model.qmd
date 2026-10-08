@@ -21,7 +21,7 @@ to one electrical conductor Net without losing their individual lineage.
 For a semantic component assembly, `GeometryPlan` makes those choices explicit:
 
 ```python
-from scgsim.sgb import GeometryPlan
+from scgsim.geometry import GeometryPlan
 
 plan = GeometryPlan(
     component=component,
@@ -131,7 +131,7 @@ as an override. To reconstruct from polygon data, create a detached raw
 authored curve declaration, then pass it to the existing public
 `SemanticGeometryBuilder` API. `set_plan(snapshot)` continues to honor the
 snapshot's declarations. See the
-[GeometryPlan and SGB source-curve contract](../geometry-sgb.qmd#source-curves)
+[GeometryPlan and geometry source-curve contract](../geometry-sgb.qmd#source-curves)
 for curve record and boundary ownership. This does not mutate the component or
 its snapshot.
 :::
