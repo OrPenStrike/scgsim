@@ -146,6 +146,32 @@ def _benchmark_view(data: dict[str, Any], *, show_details: bool) -> dict[str, An
     }
 
 
+def _legend_label(name: str) -> str:
+    """Insert a visual break without changing the recorded benchmark label."""
+
+    return html.escape(name).replace(" / ", " /<br> ", 1)
+
+
+def _style_benchmark_figure(figure: Any, *, theme: str) -> Any:
+    """Keep each complete trace label visible below the native Plotly chart."""
+
+    legend_rows = len(figure.data)
+    legend_extra = 36 * legend_rows
+    style_figure(figure, theme=theme, height=460 + legend_extra)
+    figure.update_layout(
+        legend={
+            "orientation": "v",
+            "x": 0,
+            "xanchor": "left",
+            "y": -0.22,
+            "yanchor": "top",
+        },
+        margin={"b": 115 + legend_extra},
+        hoverlabel={"namelength": -1},
+    )
+    return figure
+
+
 def display_benchmark(
     data: dict[str, Any], *, show_details: bool, theme: str = "light"
 ) -> None:
@@ -237,28 +263,28 @@ def display_benchmark(
                     x=series["x"],
                     y=series["y"],
                     mode="lines+markers",
-                    name=html.escape(series["name"]),
+                    name=_legend_label(series["name"]),
                 )
             if figure.data:
                 figure.update_layout(
                     xaxis_title="Native adaptive pass",
                     yaxis_title="Native reported time (s; real/elapsed labelled)",
                 )
-                display(style_figure(figure, theme=theme))
+                display(_style_benchmark_figure(figure, theme=theme))
             sweep = go.Figure()
             for series in view["sweep_series"]:
                 sweep.add_scatter(
                     x=series["x"],
                     y=series["y"],
                     mode="lines+markers",
-                    name=html.escape(series["name"]),
+                    name=_legend_label(series["name"]),
                 )
             if sweep.data:
                 sweep.update_layout(
                     xaxis_title="Native sweep frequency",
                     yaxis_title="Native reported time (s; real/elapsed labelled)",
                 )
-                display(style_figure(sweep, theme=theme))
+                display(_style_benchmark_figure(sweep, theme=theme))
     if show_details:
         display(
             HTML(

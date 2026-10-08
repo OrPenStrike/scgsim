@@ -133,7 +133,8 @@ def table(headers: Sequence[str], rows: Sequence[Sequence[Any]]) -> str:
     )
     return (
         '<div style="overflow-x:auto"><table style="border-collapse:collapse;'
-        f'width:100%;font-size:14px"><thead><tr>{header}</tr></thead>'
+        'table-layout:auto;width:max-content;min-width:100%;font-size:14px">'
+        f"<thead><tr>{header}</tr></thead>"
         f"<tbody>{body}</tbody></table></div>"
     )
 
