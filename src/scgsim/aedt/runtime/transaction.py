@@ -48,7 +48,11 @@ from scgsim.aedt.runtime.families.hfss import run_hfss
 
 from scgsim.aedt.runtime.families.q2d import run_q2d
 
-from scgsim.aedt.runtime.families.q3d import run_q3d
+from scgsim.aedt.runtime.families.q3d import (
+    prepare_q3d,
+    prepared_q3d_result,
+    run_q3d,
+)
 
 from scgsim.aedt.runtime.native.common import (
     owned_application_constructor,
@@ -84,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--prepare-only",
         action="store_true",
-        help="Create and verify an EPR native model without solving it",
+        help="Create and verify an HFSS EPR or Q3D native model without solving it",
     )
     parser.add_argument(
         "--analyze-epr",
@@ -148,7 +152,7 @@ def _execute(
     ):
         raise RuntimeError("prepared spec must use geometry/design.gds")
     valid_flags = (
-        (isinstance(spec, HfssEprSpec) and not analyze_epr)
+        (isinstance(spec, (HfssEprSpec, Q3dSpec)) and not analyze_epr)
         or (isinstance(spec, HfssEprAnalysisSpec) and analyze_epr and not prepare_only)
         or (
             not isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec))
@@ -197,6 +201,8 @@ def _execute(
             else "not_started"
         ),
     }
+    if isinstance(spec, Q3dSpec) and prepare_only:
+        receipt["solver_invoked"] = False
     write_json(receipt_path, receipt)
 
     desktop: Any | None = None
@@ -261,13 +267,20 @@ def _execute(
                 result = solve_and_export_epr(prepared, resources, receipt["resources"])
                 status = "completed"
         elif isinstance(spec, Q3dSpec):
-            result = _solve_q3d(
-                owned_application_constructor(Q3d, desktop),
-                run_dir,
-                spec,
-                resources,
-                receipt["resources"],
-            )
+            if prepare_only:
+                prepared = prepare_q3d(
+                    owned_application_constructor(Q3d, desktop), run_dir, spec
+                )
+                result = prepared_q3d_result(prepared)
+                status = "native_preparation_only"
+            else:
+                result = _solve_q3d(
+                    owned_application_constructor(Q3d, desktop),
+                    run_dir,
+                    spec,
+                    resources,
+                    receipt["resources"],
+                )
         elif isinstance(spec, Q2dSpec):
             result = _solve_q2d(
                 owned_application_constructor(Q2d, desktop),
@@ -284,7 +297,10 @@ def _execute(
                 resources,
                 receipt["resources"],
             )
-        if not isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec)):
+        if (
+            not isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec))
+            and not prepare_only
+        ):
             status = "completed"
     except Exception as exc:  # noqa: BLE001 -- receipt must record any solver failure.
         failure = f"{type(exc).__name__}: {exc}"
@@ -321,7 +337,21 @@ def _execute(
             receipt["error"] = failure
         if isinstance(spec, HfssEprSpec):
             receipt["solver_invoked"] = epr_solver_attempted
-        if result is not None and isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec)):
+        if result is not None and isinstance(spec, Q3dSpec) and prepare_only:
+            try:
+                if not _record_epr_project_after_release(run_dir, receipt, result):
+                    raise RuntimeError(
+                        "Q3D project is missing after owned Desktop release"
+                    )
+            except Exception as exc:  # noqa: BLE001 -- retain the primary native failure.
+                receipt["save"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                status = "failed"
+                if failure is None:
+                    failure = receipt["save"]["error"]
+                    receipt["error"] = failure
+        elif result is not None and isinstance(
+            spec, (HfssEprAnalysisSpec, HfssEprSpec)
+        ):
             if not _record_epr_project_after_release(run_dir, receipt, result):
                 status = "failed"
                 if failure is None:
@@ -386,7 +416,20 @@ def _record_result_before_release(
 ) -> None:
     """Copy returned facts before releasing the one transaction-owned Desktop."""
 
-    if isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec)):
+    if isinstance(spec, Q3dSpec) and result.get("solver_invoked") is False:
+        for name in (
+            "outputs",
+            "connected",
+            "project",
+            "materials",
+            "region",
+            "nets",
+            "setup",
+            "save",
+            "solver_invoked",
+        ):
+            receipt[name] = result[name]
+    elif isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec)):
         receipt["outputs"] = result["outputs"]
         receipt["connected"] = result["connected"]
         receipt["project"] = result["project"]
@@ -416,7 +459,7 @@ def _record_result_before_release(
 def _record_epr_project_after_release(
     run_dir: Path, receipt: dict[str, Any], result: dict[str, Any]
 ) -> bool:
-    """Hash the released EPR project; return false only when it is missing."""
+    """Hash a released saved project; return false only when it is missing."""
 
     project_relative = result["project"]
     project_path = _contained(run_dir, project_relative)

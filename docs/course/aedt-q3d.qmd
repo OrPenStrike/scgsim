@@ -148,6 +148,16 @@ remains unchanged. The body/native lowering contract is **CONVERGING** and
 has not been demonstrated by a native import, solve or matrix readback.
 Source curves remain outside the current AEDT lowering contract.
 
+An optional native build-only source candidate uses the existing CLI with a
+prepared Q3D v3 handoff: `python -m scgsim.aedt.run --handoff <run-dir>/metadata/aedt_handoff_metadata.json --execute --prepare-only`
+(substitute the directory returned by `prepare_q3d_from_geometry`). It prepares
+and reads back the native model, saves the project and releases its owned
+Desktop without calling `Analyze` or exporting C/G matrices. This consumes the
+one-shot handoff; prepare a new handoff before a later solve. Native behavior is
+not yet observed, and the normal `--execute` path is unchanged. The
+[Q3D contract](../specs/aedt-runtime.qmd#q3d-body-input-v3) describes the
+receipt and strict-resolution boundary.
+
 Use the existing `aedt-epr` installation extra when preparing this structured
 GDSFactory/KLayout source. Source-free `Q3dSpec` bodies need no GDS import.
 Configured resource values are recorded run inputs; they do not by themselves

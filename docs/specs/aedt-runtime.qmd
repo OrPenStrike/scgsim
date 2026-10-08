@@ -49,13 +49,11 @@ family: prepare native model -> solve explicit setup -> export/read back
 run.py: release Desktop -> write final receipt
 ```
 
-The normal command and diagnostic instrumentation use the same private family
-preparation functions. The EPR path adds `--execute --prepare-only`
-through this same transaction and native builder. It saves and reads back the
-prepared model, releases the owned Desktop, and reports
-`native_preparation_only` with `solver_invoked=false`; it is a native
-preparation, not a mock solve. The ordinary one-shot families keep their
-existing solve/export behavior and do not acquire a second Desktop owner.
+The normal command and preparation-only paths use the same private family
+preparation functions and transaction owner. The EPR path already supports
+`--execute --prepare-only`; the Q3D body-v3 candidate is described below. The
+usual `--execute` family behavior remains unchanged, and neither path creates a
+second Desktop owner.
 
 Each family binds its request once before native preparation. The private bound
 request fixes the absolute run workspace and a detached immutable spec payload;
@@ -500,6 +498,22 @@ fails, its context is unavailable and cannot replace the primary failure.
 Warning presence alone does not reject a complete inventory. This source
 contract does not claim observed native geometry, validation, solver
 completion or returned matrices.
+
+#### Q3D native build-only execution candidate
+
+Q3D v3 also has an opt-in native build-only candidate using the existing
+`python -m scgsim.aedt.run --handoff <run-dir>/metadata/aedt_handoff_metadata.json --execute --prepare-only`
+entrypoint. It follows the same body construction, material and Net assignment,
+Region and setup creation/readback, project save, and owned Desktop release as
+the solver path. It does not call native `Analyze`, create a solver mesh, solve,
+or export matrices or convergence data. The receipt records
+`status="native_preparation_only"`, `solver_invoked=false`, and
+`resources.status="not_used_prepare_only"`; the saved AEDT project is the only
+native output. This execution consumes the one-shot handoff, so a later solve
+requires a newly prepared handoff. The strict `resolve_results` entrypoint
+continues to require a completed solver result; it does not resolve a
+preparation-only receipt as a result. This Q3D behavior is a source candidate
+with no native observation yet. Normal Q3D `--execute` behavior is unchanged.
 
 The v3 handoff keeps the five ordinary allowed paths in their established
 order. A source-backed cohort appends `geometry/source.gds`,

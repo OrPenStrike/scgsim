@@ -139,6 +139,26 @@ def prepare_q3d(Q3d: Any, run_dir: Path, spec: Q3dSpec) -> PreparedQ3d:
     )
 
 
+def prepared_q3d_result(prepared: PreparedQ3d) -> dict[str, Any]:
+    """Detach native preparation facts; the transaction seals the released project."""
+    return {
+        "outputs": {},
+        "connected": {
+            "aedt_version": prepared.app.desktop_class.aedt_version_id,
+            "pyaedt_version": _pyaedt_version(),
+        },
+        "project": prepared.project_path.relative_to(
+            prepared.request.workspace
+        ).as_posix(),
+        "materials": detached_data(prepared.materials),
+        "region": detached_data(prepared.region),
+        "nets": detached_data(prepared.nets),
+        "setup": detached_data(prepared.setup),
+        "save": {"ok": True},
+        "solver_invoked": False,
+    }
+
+
 def solve_q3d(
     prepared: PreparedQ3d,
     resources: AedtResources | None = None,
