@@ -1,16 +1,18 @@
 ---
 title: "AEDT branch: prepare the public CPW inputs"
-description: "Share one explicit GDS and PDK mapping across ordinary HFSS and Q3D lessons."
+description: "Prepare the explicit GDS and PDK mapping used by ordinary HFSS lessons."
 scgsim-kind: "course"
 scgsim-status: "STABILIZED"
 scgsim-id: "docs/course/aedt-inputs"
 ---
 
 Use this branch after [installation](installation.qmd) for ordinary HFSS
-Eigenmode, Driven Modal/Terminal and Q3D. These families use direct GDS imports
+Eigenmode and Driven Modal/Terminal. These families use direct GDS imports
 with explicit layer/object bindings. They do not automatically consume the
-Xmon GeometryPlan or its EPR catalogue. Q2D has its own explicit
-[cross-section lesson](aedt-q2d.qmd).
+Xmon GeometryPlan or its EPR catalogue. Current Q3D uses the v3 body inputs
+described in the [Q3D lesson](aedt-q3d.qmd), not this GDS import mapping;
+source-backed Q3D preparation is a separate GeometryPlan frontend. Q2D has
+its own explicit [cross-section lesson](aedt-q2d.qmd).
 
 The public specimen and executable notebook sources belong to
 [OrPen's pinned CPW group](../examples.qmd#public-inputs). Its CPW is 500 µm
@@ -67,10 +69,11 @@ ground_objects = ("D0_TOP_M1_2", "D0_TOP_M1_3")
 
 The declared imported object names follow this pinned specimen/import order;
 SCGSim requires exact native readback later, not a semantic guess from a similar
-name. Zero metal Z thickness here means HFSS sheets. Q3D replaces that interval
-with finite thickness in its lesson. Material identity remains Nb even though
-the superconducting approximation lowers to PEC. Si and vacuum reference the
-PDK's exact AEDT library names; SCGSim does not manufacture their properties.
+name. Zero metal Z thickness here means HFSS sheets. This mapping is not
+automatically converted into Q3D bodies. Material identity remains Nb even
+though the superconducting approximation lowers to PEC. Si and vacuum reference
+the PDK's exact AEDT library names; SCGSim does not manufacture their
+properties.
 
 Read `layer_imports` and `object_bindings` together. A binding's role tells the
 family which imported conductor is signal or ground, while `material_id` keeps
@@ -83,8 +86,9 @@ It differs from the Q2D four-value order. Use the spec's documented order rather
 than copying comments from a different family.
 
 Keep `source_gds`, `materials`, `layer_imports`, `object_bindings` and
-`ground_objects` in this preparation session. Continue to
+`ground_objects` for the HFSS branch. Continue to
 [ordinary Eigenmode](aedt-eigenmode.qmd), [Driven Modal](aedt-driven-modal.qmd),
-[Driven Terminal](aedt-driven-terminal.qmd), or [Q3D](aedt-q3d.qmd).
-This shared lesson authors no component notebook; the canonical OrPen notebooks
-remain the execution source for their complete consumer workflow.
+or [Driven Terminal](aedt-driven-terminal.qmd). For Q3D, use its separate
+body-backed input-v3 lesson. This shared lesson authors no component notebook;
+the canonical OrPen notebooks remain the source authority for their consumer
+workflow, with current Q3D migration status stated in that lesson.

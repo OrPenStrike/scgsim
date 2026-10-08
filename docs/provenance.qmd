@@ -10,7 +10,8 @@ scgsim-id: "docs/provenance"
 
 A run or report binds, as applicable:
 
-- SCGSim and backend revision;
+- SCGSim distribution version and measured runtime-source module/content identity;
+- SCGSim Git revision observation when available, and backend revision;
 - SGB source and geometry/topology identity;
 - solver and schema version;
 - machine profile and run receipt;
@@ -18,8 +19,10 @@ A run or report binds, as applicable:
 - validation and failure state.
 
 Use the returned package together with its preparation-side source and model
-notes. A package version alone does not identify the layout, settings or native
-result of a particular study.
+notes. A distribution version alone does not identify the runtime code bytes,
+layout, settings or native result of a particular study. The current
+runtime-source manifest and content digest identify the module bytes used for
+execution; a Git revision is recorded only when truthfully available.
 
 ## Publication boundary
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from numbers import Number
 from pathlib import Path
 from typing import Any, Literal
@@ -21,10 +21,8 @@ EPR_ANALYSIS_SCHEMA_VERSION = "scgsim.aedt.hfss-eigenmode-epr-analysis.v1"
 EPR_EIGENMODE_SCHEMA_VERSION_V2 = "scgsim.aedt.hfss-eigenmode-epr.v2"
 EPR_EIGENMODE_SCHEMA_VERSION_V3 = "scgsim.aedt.hfss-eigenmode-epr.v3"
 EPR_ANALYSIS_SCHEMA_VERSION_V2 = "scgsim.aedt.hfss-eigenmode-epr-analysis.v2"
-Q3D_SCHEMA_VERSION_V1 = "scgsim.aedt.q3d.v1"
-Q3D_SCHEMA_VERSION_V2 = "scgsim.aedt.q3d.v2"
-Q3D_SCHEMA_VERSION = Q3D_SCHEMA_VERSION_V2
-Q3D_GEOMETRY_SOURCE_SCHEMA_VERSION = "scgsim.aedt.q3d-geometry-source.v1"
+Q3D_SCHEMA_VERSION = "scgsim.aedt.q3d.v3"
+Q3D_GEOMETRY_SOURCE_SCHEMA_VERSION = "scgsim.aedt.q3d-geometry-source.v3"
 Q2D_SCHEMA_VERSION = "scgsim.aedt.q2d.v1"
 OFFICIAL_PYAEDT_SOURCE_URL = "https://github.com/ansys/pyaedt/tree/v1.3.0"
 LOCKED_PYAEDT = "1.3.0"
@@ -1283,24 +1281,103 @@ class Q3dNetSpec:
         }
 
 
+@dataclass(frozen=True)
+class Q3dBodySpec:
+    """One normalized connected planar body, including holes, swept along +Z.
+
+    Body identity is independent of final Net ownership. Optional source fields
+    are absent for explicitly authored source-free bodies, never inferred.
+    """
+
+    body_id: str
+    exterior_um: tuple[tuple[float, float], ...]
+    holes_um: tuple[tuple[tuple[float, float], ...], ...]
+    z_min_um: float
+    z_max_um: float
+    material_id: str
+    physical_role: LayerRole
+    net_id: str | None
+    source_entity_id: str | None = None
+    source_polygon_id: str | None = None
+    source_occurrence_path: str | None = None
+    source_local_entity_id: str | None = None
+    source_level: str | None = None
+    source_layer_datatype: tuple[int, int] | None = None
+
+    def __post_init__(self) -> None:
+        for field in ("body_id", "material_id"):
+            object.__setattr__(self, field, _text(getattr(self, field), field))
+        if self.physical_role not in {"signal", "ground", "substrate"}:
+            raise ValueError("Q3D body physical_role is invalid")
+        for field in (
+            "net_id",
+            "source_entity_id",
+            "source_polygon_id",
+            "source_occurrence_path",
+            "source_local_entity_id",
+            "source_level",
+        ):
+            value = getattr(self, field)
+            if value is not None:
+                object.__setattr__(self, field, _text(value, field))
+
+        def ring(value: Any) -> tuple[tuple[float, float], ...]:
+            points = tuple(tuple(point) for point in value)
+            if len(points) < 3 or any(len(point) != 2 for point in points):
+                raise ValueError("Q3D body rings require at least three XY points")
+            return tuple((float(x), float(y)) for x, y in points)
+
+        object.__setattr__(self, "exterior_um", ring(self.exterior_um))
+        object.__setattr__(
+            self, "holes_um", tuple(ring(hole) for hole in self.holes_um)
+        )
+        low, high = (
+            _number(self.z_min_um, "z_min_um"),
+            _number(self.z_max_um, "z_max_um"),
+        )
+        if high <= low:
+            raise ValueError("Q3D bodies require positive thickness")
+        object.__setattr__(self, "z_min_um", low)
+        object.__setattr__(self, "z_max_um", high)
+        pair = self.source_layer_datatype
+        if pair is not None:
+            if len(pair) != 2 or any(
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+                for value in pair
+            ):
+                raise ValueError(
+                    "source_layer_datatype must be a nonnegative integer pair"
+                )
+            object.__setattr__(self, "source_layer_datatype", tuple(pair))
+
+    def to_payload(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["exterior_um"] = [list(point) for point in self.exterior_um]
+        payload["holes_um"] = [
+            [list(point) for point in hole] for hole in self.holes_um
+        ]
+        if self.source_layer_datatype is not None:
+            payload["source_layer_datatype"] = list(self.source_layer_datatype)
+        return payload
+
+
 def _q3d_geometry_source(
     value: Mapping[str, Any],
     *,
-    layer_imports: tuple[LayerImport, ...],
-    object_bindings: tuple[ObjectBinding, ...],
+    bodies: tuple[Q3dBodySpec, ...],
     nets: tuple[Q3dNetSpec, ...],
 ) -> dict[str, Any]:
-    """Validate the declared geometry/source-to-object binding structure."""
+    """Bind canonical source attachments and normalized body declarations."""
     source = dict(value)
     expected_keys = {
         "schema_version",
         "source_gds_sha256",
         "source_geometry_sha256",
         "source_stack_sha256",
-        "export_gds_sha256",
+        "source_dbu_um",
         "files",
         "physical_ground_nets",
-        "pieces",
+        "bodies",
     }
     if set(source) != expected_keys:
         raise ValueError("Q3D geometry_source fields are invalid")
@@ -1310,7 +1387,6 @@ def _q3d_geometry_source(
         "source_gds_sha256",
         "source_geometry_sha256",
         "source_stack_sha256",
-        "export_gds_sha256",
     ):
         digest = source[field]
         if (
@@ -1356,143 +1432,32 @@ def _q3d_geometry_source(
     ):
         raise ValueError("Q3D geometry_source physical_ground_nets are invalid")
 
-    raw_pieces = source["pieces"]
-    if not isinstance(raw_pieces, list) or not raw_pieces:
-        raise ValueError("Q3D geometry_source pieces must be a nonempty array")
-    piece_keys = {
-        "piece_id",
-        "source_entity_id",
-        "source_polygon_id",
-        "source_layer_datatype",
-        "source_occurrence_path",
-        "source_local_entity_id",
-        "source_level",
-        "material_id",
-        "net_id",
-        "physical_role",
-        "z_min_um",
-        "z_max_um",
-        "export_layer",
-        "export_datatype",
-        "destination_layer_name",
-        "object_name",
-    }
-    layers = {item.layer: item for item in layer_imports}
-    bindings = {item.object_name: item for item in object_bindings}
-    net_owners = {
-        object_name: net.name
-        for net in nets
-        for object_name in net.object_names
-    }
-    piece_ids: set[str] = set()
-    object_names: set[str] = set()
-    copied_pieces: list[dict[str, Any]] = []
-    for raw_piece in raw_pieces:
-        if not isinstance(raw_piece, Mapping) or set(raw_piece) != piece_keys:
-            raise ValueError("Q3D geometry_source piece fields are invalid")
-        piece = dict(raw_piece)
-        for field in (
-            "piece_id",
-            "source_entity_id",
-            "material_id",
-            "destination_layer_name",
-            "object_name",
-        ):
-            _text(piece[field], f"geometry_source.pieces.{field}")
-        if piece["piece_id"] in piece_ids or piece["object_name"] in object_names:
-            raise ValueError("Q3D geometry_source piece identities must be unique")
-        piece_ids.add(piece["piece_id"])
-        object_names.add(piece["object_name"])
-        polygon_id = piece["source_polygon_id"]
-        if polygon_id is not None:
-            _text(polygon_id, "geometry_source.pieces.source_polygon_id")
-        pair = piece["source_layer_datatype"]
-        if pair is not None and (
-            not isinstance(pair, list)
-            or len(pair) != 2
-            or any(
-                not isinstance(item, int) or isinstance(item, bool) or item < 0
-                for item in pair
-            )
-        ):
-            raise ValueError("Q3D geometry_source source_layer_datatype is invalid")
-        for field in (
-            "source_occurrence_path",
-            "source_local_entity_id",
-            "source_level",
-        ):
-            if piece[field] is not None:
-                _text(piece[field], f"geometry_source.pieces.{field}")
-        if piece["physical_role"] not in {"signal", "ground", "substrate"}:
-            raise ValueError("Q3D geometry_source physical_role is invalid")
-        layer_number = _nonnegative_int(
-            piece["export_layer"], "geometry_source.pieces.export_layer"
-        )
-        datatype = _nonnegative_int(
-            piece["export_datatype"], "geometry_source.pieces.export_datatype"
-        )
-        low = _number(piece["z_min_um"], "geometry_source.pieces.z_min_um")
-        high = _number(piece["z_max_um"], "geometry_source.pieces.z_max_um")
-        layer = layers.get(layer_number)
-        binding = bindings.get(piece["object_name"])
-        if (
-            layer is None
-            or binding is None
-            or (
-                piece["physical_role"] == "substrate"
-                and piece["object_name"] in net_owners
-            )
-            or (
-                piece["physical_role"] != "substrate"
-                and piece["object_name"] not in net_owners
-            )
-            or piece["destination_layer_name"] != layer.layer_name
-            or datatype != layer.datatype
-            or low != layer.z_min_um
-            or high != layer.z_max_um
-            or binding.layer != layer_number
-            or binding.role != piece["physical_role"]
-            or binding.material_id != piece["material_id"]
-        ):
-            raise ValueError(
-                "Q3D geometry_source piece differs from its object binding"
-            )
-        net_id = piece["net_id"]
-        if piece["physical_role"] == "substrate":
-            if net_id is not None:
-                raise ValueError(
-                    "Q3D dielectric geometry_source pieces must not name a net"
-                )
-        elif not isinstance(net_id, str) or net_owners[piece["object_name"]] != net_id:
-            raise ValueError(
-                "Q3D conductor geometry_source net differs from its binding"
-            )
-        copied_pieces.append(piece)
-    if object_names != set(bindings):
-        raise ValueError("Q3D geometry_source pieces must cover every object binding")
-    for net_name in physical_ground_nets:
-        if any(
-            piece["net_id"] == net_name and piece["physical_role"] != "ground"
-            for piece in copied_pieces
-        ):
-            raise ValueError("Q3D physical ground pieces must retain the ground role")
-
+    dbu = _number(source["source_dbu_um"], "geometry_source.source_dbu_um")
+    if dbu <= 0:
+        raise ValueError("source_dbu_um must be positive")
+    if source["bodies"] != [body.to_payload() for body in bodies]:
+        raise ValueError("Q3D geometry_source bodies differ from the declared bodies")
+    if any(
+        body.physical_role != "ground"
+        for body in bodies
+        if body.net_id in physical_ground_nets
+    ):
+        raise ValueError("Q3D physical ground bodies must retain the ground role")
     source["files"] = copied_files
-    source["pieces"] = copied_pieces
+    source["bodies"] = [body.to_payload() for body in bodies]
+    source["physical_ground_nets"] = list(physical_ground_nets)
     return source
 
 
 @dataclass(frozen=True)
 class Q3dSpec:
-    """One Q3D capacitance and optional AC R/L extraction request."""
+    """One body-backed Q3D capacitance and optional AC R/L request (v3 only)."""
 
-    gds_path: Path | str
     project_name: str
     design_name: str
     materials: Mapping[str, PdkMaterial]
     vacuum_material_id: str
-    layer_imports: tuple[LayerImport, ...]
-    object_bindings: tuple[ObjectBinding, ...]
+    bodies: tuple[Q3dBodySpec, ...]
     nets: tuple[Q3dNetSpec, ...]
     run_control: MatrixRunControl
     region_padding_um: tuple[float, float, float, float, float, float]
@@ -1500,9 +1465,7 @@ class Q3dSpec:
     grounded_region_net: str | None = None
     aedt_version: str = REQUIRED_AEDT_VERSION
     pyaedt_version: str = LOCKED_PYAEDT
-    schema_version: Literal[
-        "scgsim.aedt.q3d.v1", "scgsim.aedt.q3d.v2"
-    ] = Q3D_SCHEMA_VERSION_V2
+    schema_version: Literal["scgsim.aedt.q3d.v3"] = Q3D_SCHEMA_VERSION
     geometry_source: Mapping[str, Any] | None = None
 
     @property
@@ -1510,71 +1473,63 @@ class Q3dSpec:
         return "q3d"
 
     def __post_init__(self) -> None:
-        if self.schema_version not in {Q3D_SCHEMA_VERSION_V1, Q3D_SCHEMA_VERSION_V2}:
+        if self.schema_version != Q3D_SCHEMA_VERSION:
             raise ValueError("unsupported Q3D schema")
-        if self.geometry_source is not None:
-            if self.schema_version != Q3D_SCHEMA_VERSION_V2:
-                raise ValueError("geometry_source is available only in Q3D schema v2")
-            if not isinstance(self.geometry_source, Mapping):
-                raise TypeError("geometry_source must be a JSON object")
-        grounds, signals = _normalize_gds_spec(self)
+        materials = _normalize_common_spec(self)
+        bodies = tuple(self.bodies)
+        if not bodies or any(not isinstance(body, Q3dBodySpec) for body in bodies):
+            raise TypeError("Q3D bodies must contain Q3dBodySpec records")
+        if len({body.body_id for body in bodies}) != len(bodies):
+            raise ValueError("Q3D body identities must be unique")
+        for body in bodies:
+            material = materials[body.material_id]
+            if body.physical_role == "substrate":
+                if material.kind != "dielectric" or body.net_id is not None:
+                    raise ValueError(
+                        "Q3D substrate bodies require dielectric material and no Net"
+                    )
+            elif not material.is_superconducting or body.net_id is None:
+                raise ValueError(
+                    "Q3D conductor bodies require a PDK superconductor and final Net"
+                )
+        object.__setattr__(self, "bodies", bodies)
         object.__setattr__(self, "region_padding_um", _padding(self.region_padding_um))
         nets = tuple(self.nets)
-        unique_names = len({net.name for net in nets}) == len(nets)
-        has_signal = any(net.net_type == "Signal" for net in nets)
-        has_ground = any(net.net_type == "Ground" for net in nets)
-        if self.schema_version == Q3D_SCHEMA_VERSION_V1:
-            if not nets or not unique_names or not has_signal or not has_ground:
-                raise ValueError("Q3D requires unique Signal and Ground nets")
-            if any(
-                net.net_type == "Signal" and net.source_object is None
-                for net in nets
-            ):
-                raise ValueError(
-                    "Q3D schema v1 Signal nets require source and sink terminals"
-                )
-        elif not nets or not unique_names or not has_signal:
-            raise ValueError("Q3D schema v2 requires at least one unique Signal net")
-        owners = {object_name: net for net in nets for object_name in net.object_names}
-        if len(owners) != sum(len(net.object_names) for net in nets):
-            raise ValueError("Q3D conductor objects must belong to exactly one net")
-        if set(owners) != grounds | signals:
-            raise ValueError("Q3D nets must cover every declared conductor exactly")
-        if self.schema_version == Q3D_SCHEMA_VERSION_V1 and any(
-            (name in signals) != (net.net_type == "Signal")
-            for name, net in owners.items()
+        if (
+            not nets
+            or len({net.name for net in nets}) != len(nets)
+            or not any(net.net_type == "Signal" for net in nets)
         ):
-            raise ValueError("Q3D net types must match structured conductor roles")
-        layers = {item.layer: item for item in self.layer_imports}
-        if any(
-            layers[binding.layer].z_max_um <= layers[binding.layer].z_min_um
-            for binding in self.object_bindings
-            if binding.role in {"signal", "ground"}
-        ):
-            raise ValueError("Q3D conductor imports require positive finite thickness")
+            raise ValueError("Q3D requires at least one unique Signal net")
+        owners = {name: net for net in nets for name in net.object_names}
+        conductors = {
+            body.body_id: body for body in bodies if body.physical_role != "substrate"
+        }
+        if len(owners) != sum(len(net.object_names) for net in nets) or set(
+            owners
+        ) != set(conductors):
+            raise ValueError("Q3D nets must cover every conductor body exactly once")
+        if any(owners[name].name != body.net_id for name, body in conductors.items()):
+            raise ValueError("Q3D body final Net differs from Net membership")
         if not isinstance(self.solve_ac_rl, bool):
             raise TypeError("solve_ac_rl must be boolean")
-        if self.schema_version == Q3D_SCHEMA_VERSION_V2 and self.solve_ac_rl and any(
+        if self.solve_ac_rl and any(
             net.net_type == "Signal" and net.source_object is None for net in nets
         ):
             raise ValueError(
                 "Q3D AC/RL requires complete terminals for every Signal net"
             )
         if self.geometry_source is not None:
+            if not isinstance(self.geometry_source, Mapping):
+                raise TypeError("geometry_source must be a JSON object")
             object.__setattr__(
                 self,
                 "geometry_source",
-                _q3d_geometry_source(
-                    self.geometry_source,
-                    layer_imports=self.layer_imports,
-                    object_bindings=self.object_bindings,
-                    nets=nets,
-                ),
+                _q3d_geometry_source(self.geometry_source, bodies=bodies, nets=nets),
             )
         grounded_region_net = self.grounded_region_net
         if grounded_region_net is not None:
-            if _text(grounded_region_net, "grounded_region_net") != grounded_region_net:
-                raise ValueError("grounded_region_net must be exact non-empty text")
+            _text(grounded_region_net, "grounded_region_net")
             if self.solve_ac_rl:
                 raise ValueError("grounded_region_net requires solve_ac_rl=False")
             if grounded_region_net in {net.name for net in nets}:
@@ -1594,23 +1549,17 @@ class Q3dSpec:
             },
             "project": {"name": self.project_name, "design": self.design_name},
             "materials": {
-                material_id: item.to_payload()
-                for material_id, item in self.materials.items()
+                key: item.to_payload() for key, item in self.materials.items()
             },
             "vacuum_material_id": self.vacuum_material_id,
-            "gds": {"path": self.gds_path.as_posix()},
-            "layer_imports": [item.to_payload() for item in self.layer_imports],
-            "object_bindings": [item.to_payload() for item in self.object_bindings],
-            "nets": [item.to_payload() for item in self.nets],
+            "bodies": [body.to_payload() for body in self.bodies],
+            "nets": [net.to_payload() for net in self.nets],
             "run_control": self.run_control.to_payload(),
             "region_padding_um": list(self.region_padding_um),
             "solve_ac_rl": self.solve_ac_rl,
             "grounded_region_net": self.grounded_region_net,
         }
-        if (
-            self.schema_version == Q3D_SCHEMA_VERSION_V2
-            and self.geometry_source is not None
-        ):
+        if self.geometry_source is not None:
             payload["geometry_source"] = dict(self.geometry_source)
         return payload
 
@@ -1618,55 +1567,29 @@ class Q3dSpec:
     def from_payload(
         cls, payload: dict[str, Any], *, base_dir: Path | None = None
     ) -> Q3dSpec:
-        schema_version = payload.get("schema_version")
-        if schema_version not in {Q3D_SCHEMA_VERSION_V1, Q3D_SCHEMA_VERSION_V2}:
+        if payload.get("schema_version") != Q3D_SCHEMA_VERSION:
             raise ValueError("unsupported Q3D schema")
-        if schema_version == Q3D_SCHEMA_VERSION_V1 and "geometry_source" in payload:
-            raise ValueError("geometry_source is not valid in Q3D schema v1")
-        gds = Path(_text(payload.get("gds", {}).get("path"), "gds.path"))
-        if base_dir is not None and not gds.is_absolute():
-            gds = base_dir / gds
-        raw_materials = payload.get("materials")
-        if not isinstance(raw_materials, dict):
-            raise TypeError("materials must be a JSON object")
-        materials = {
-            material_id: PdkMaterial(**item)
-            for material_id, item in raw_materials.items()
-        }
-        run = payload.get("run_control")
-        if not isinstance(run, dict):
-            raise TypeError("run_control must be a JSON object")
+        if {"gds", "layer_imports", "object_bindings"} & set(payload):
+            raise ValueError("Q3D v3 does not accept GDS-piece inputs")
         return cls(
-            gds_path=gds,
             project_name=_project_name_from_payload(
                 payload.get("project", {}).get("name")
             ),
             design_name=_text(
                 payload.get("project", {}).get("design"), "project.design"
             ),
-            materials=materials,
-            vacuum_material_id=_text(
-                payload.get("vacuum_material_id"), "vacuum_material_id"
-            ),
-            layer_imports=tuple(
-                LayerImport(**item) for item in payload.get("layer_imports", ())
-            ),
-            object_bindings=tuple(
-                ObjectBinding(**item) for item in payload.get("object_bindings", ())
-            ),
-            nets=tuple(Q3dNetSpec(**item) for item in payload.get("nets", ())),
-            run_control=MatrixRunControl(**run),
-            region_padding_um=tuple(payload.get("region_padding_um", ())),  # type: ignore[arg-type]
+            materials={
+                key: PdkMaterial(**item) for key, item in payload["materials"].items()
+            },
+            vacuum_material_id=payload["vacuum_material_id"],
+            bodies=tuple(Q3dBodySpec(**body) for body in payload["bodies"]),
+            nets=tuple(Q3dNetSpec(**net) for net in payload["nets"]),
+            run_control=MatrixRunControl(**payload["run_control"]),
+            region_padding_um=tuple(payload["region_padding_um"]),
             solve_ac_rl=payload.get("solve_ac_rl", True),
             grounded_region_net=payload.get("grounded_region_net"),
-            aedt_version=_text(
-                payload.get("aedt", {}).get("requested_version"),
-                "aedt.requested_version",
-            ),
-            pyaedt_version=_text(
-                payload.get("pyaedt", {}).get("locked_version"), "pyaedt.locked_version"
-            ),
-            schema_version=schema_version,
+            aedt_version=payload["aedt"]["requested_version"],
+            pyaedt_version=payload["pyaedt"]["locked_version"],
             geometry_source=payload.get("geometry_source"),
         )
 
@@ -1883,12 +1806,12 @@ def parse_aedt_spec(
         EPR_EIGENMODE_SCHEMA_VERSION_V3,
     }:
         return HfssEprSpec.from_payload(payload)
-    if payload.get("schema_version") in {EPR_ANALYSIS_SCHEMA_VERSION, EPR_ANALYSIS_SCHEMA_VERSION_V2}:
-        return HfssEprAnalysisSpec.from_payload(payload, base_dir=base_dir)
     if payload.get("schema_version") in {
-        Q3D_SCHEMA_VERSION_V1,
-        Q3D_SCHEMA_VERSION_V2,
+        EPR_ANALYSIS_SCHEMA_VERSION,
+        EPR_ANALYSIS_SCHEMA_VERSION_V2,
     }:
+        return HfssEprAnalysisSpec.from_payload(payload, base_dir=base_dir)
+    if payload.get("schema_version") == Q3D_SCHEMA_VERSION:
         return Q3dSpec.from_payload(payload, base_dir=base_dir)
     if payload.get("schema_version") == Q2D_SCHEMA_VERSION:
         return Q2dSpec.from_payload(payload)

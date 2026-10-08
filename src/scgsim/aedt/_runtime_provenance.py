@@ -26,7 +26,9 @@ SOURCE_SCHEMA_V7 = "scgsim.aedt.runtime-source.v7"
 SOURCE_SCHEMA_V8 = "scgsim.aedt.runtime-source.v8"
 SOURCE_SCHEMA_V9 = "scgsim.aedt.runtime-source.v9"
 SOURCE_SCHEMA_V10 = "scgsim.aedt.runtime-source.v10"
-SOURCE_SCHEMA = SOURCE_SCHEMA_V10
+SOURCE_SCHEMA_V11 = "scgsim.aedt.runtime-source.v11"
+SOURCE_SCHEMA_V12 = "scgsim.aedt.runtime-source.v12"
+SOURCE_SCHEMA = SOURCE_SCHEMA_V12
 
 # Frozen membership of the public runtime-source.v1 evidence format. Changing
 # producer structure must not silently change what historical readers mean.
@@ -125,6 +127,16 @@ _RUNTIME_SOURCE_V10_PATHS = tuple(
 )
 
 
+# Body construction is part of the current Q3D native execution authority.
+_RUNTIME_SOURCE_V11_PATHS = tuple(
+    sorted((*_RUNTIME_SOURCE_V10_PATHS, "scgsim/aedt/_q3d_bodies.py"))
+)
+
+
+# V12 changes actual Git observation, not the code inventory.
+_RUNTIME_SOURCE_V12_PATHS = _RUNTIME_SOURCE_V11_PATHS
+
+
 def _module_manifest() -> list[dict[str, str]]:
     package_root = Path(__file__).resolve().parents[1]
     return [
@@ -133,7 +145,7 @@ def _module_manifest() -> list[dict[str, str]]:
             "path": path,
             "sha256": file_sha256(package_root.parent / path),
         }
-        for path in _RUNTIME_SOURCE_V10_PATHS
+        for path in _RUNTIME_SOURCE_V12_PATHS
     ]
 
 
@@ -199,14 +211,16 @@ def prepared_runtime_source() -> dict[str, Any]:
 
 
 def runtime_source_identity() -> dict[str, Any]:
-    """Bind execution to complete module bytes and the legacy required revision."""
+    """Bind execution to measured module bytes and a truthful Git observation."""
     modules = _module_manifest()
     revision = _observed_revision()
-    if revision is None:
-        raise RuntimeError("SCGSim runtime source revision is unavailable")
     by_path = {item["path"]: item["sha256"] for item in modules}
     return {
-        "revision": revision,
+        "revision_observation": (
+            {"status": "available", "revision": revision}
+            if revision is not None
+            else {"status": "unavailable"}
+        ),
         "run_py_sha256": by_path["scgsim/aedt/run.py"],
         "spec_py_sha256": by_path["scgsim/aedt/spec.py"],
         "hfss_convergence_py_sha256": by_path["scgsim/aedt/_hfss_convergence.py"],
@@ -239,6 +253,8 @@ def validate_runtime_source(
         SOURCE_SCHEMA_V8: _RUNTIME_SOURCE_V8_PATHS,
         SOURCE_SCHEMA_V9: _RUNTIME_SOURCE_V9_PATHS,
         SOURCE_SCHEMA_V10: _RUNTIME_SOURCE_V10_PATHS,
+        SOURCE_SCHEMA_V11: _RUNTIME_SOURCE_V11_PATHS,
+        SOURCE_SCHEMA_V12: _RUNTIME_SOURCE_V12_PATHS,
     }.get(schema)
     if (
         expected_paths is None
@@ -278,24 +294,9 @@ def validate_runtime_source(
             "revision_observation",
         }:
             raise RuntimeError("prepared runtime source provenance is invalid")
-        observation = value.get("revision_observation")
-        if not isinstance(observation, dict):
-            raise RuntimeError(
-                "prepared runtime source revision observation is invalid"
-            )
-        if observation == {"status": "unavailable"}:
-            return
-        if (
-            set(observation) != {"status", "revision"}
-            or observation.get("status") != "available"
-            or not re.fullmatch(r"[0-9a-f]{40}", str(observation.get("revision", "")))
-        ):
-            raise RuntimeError(
-                "prepared runtime source revision observation is invalid"
-            )
+        _validate_revision_observation(value.get("revision_observation"), stage=stage)
     else:
-        required = {
-            "revision",
+        required_hashes = {
             "run_py_sha256",
             "spec_py_sha256",
             "hfss_convergence_py_sha256",
@@ -303,19 +304,25 @@ def validate_runtime_source(
             "q3d_convergence_py_sha256",
             "matrix_export_py_sha256",
         }
+        current = schema == SOURCE_SCHEMA_V12
+        revision_field = "revision_observation" if current else "revision"
         if set(value) != {
             "schema_version",
             "stage",
             "modules",
             "content_sha256",
-            *required,
+            revision_field,
+            *required_hashes,
         } or any(
-            not re.fullmatch(
-                r"[0-9a-f]{40}" if key == "revision" else r"[0-9a-f]{64}",
-                str(value.get(key, "")),
-            )
-            for key in required
+            not re.fullmatch(r"[0-9a-f]{64}", str(value.get(key, "")))
+            for key in required_hashes
         ):
+            raise RuntimeError("actual runtime source legacy identity is invalid")
+        if current:
+            _validate_revision_observation(
+                value.get("revision_observation"), stage=stage
+            )
+        elif not re.fullmatch(r"[0-9a-f]{40}", str(value.get("revision", ""))):
             raise RuntimeError("actual runtime source legacy identity is invalid")
         by_path = {item["path"]: item["sha256"] for item in modules}
         expected_legacy = {
@@ -329,6 +336,20 @@ def validate_runtime_source(
         }
         if any(value[key] != digest for key, digest in expected_legacy.items()):
             raise RuntimeError("actual runtime source legacy identity is invalid")
+
+
+def _validate_revision_observation(value: Any, *, stage: str) -> None:
+    """Unavailable VCS provenance is distinct from missing measured code bytes."""
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{stage} runtime source revision observation is invalid")
+    if value == {"status": "unavailable"}:
+        return
+    if (
+        set(value) != {"status", "revision"}
+        or value.get("status") != "available"
+        or not re.fullmatch(r"[0-9a-f]{40}", str(value.get("revision", "")))
+    ):
+        raise RuntimeError(f"{stage} runtime source revision observation is invalid")
 
 
 def initial_receipt_payload(

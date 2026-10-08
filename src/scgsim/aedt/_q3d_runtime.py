@@ -18,16 +18,15 @@ from ._native_common import (
     analyze_with_resources,
     create_region as _create_region,
     detached_data,
-    import_and_bind as _import_and_bind,
     native_object_property as _native_object_property,
     pyaedt_version as _pyaedt_version,
     q3d_region_bounds as _q3d_region_bounds,
     saved_setup_properties as _saved_setup_properties,
 )
+from ._q3d_bodies import construct_q3d_bodies
 from ._q2d_convergence import read_q3d_convergence
 from .spec import (
     AedtResources,
-    Q3D_SCHEMA_VERSION_V2,
     REQUIRED_AEDT_VERSION,
     Q3dSpec,
 )
@@ -95,7 +94,7 @@ def prepare_q3d(Q3d: Any, run_dir: Path, spec: Q3dSpec) -> PreparedQ3d:
     if app.desktop_class.aedt_version_id != REQUIRED_AEDT_VERSION:
         raise RuntimeError("Q3D did not bind the owned AEDT 2024.2 desktop")
     app.modeler.model_units = "um"
-    materials = _import_and_bind(app, spec)
+    materials = construct_q3d_bodies(app, spec)
     region = _create_region(app, spec)
     nets = _assign_q3d_nets(app, spec)
     if spec.grounded_region_net is not None:
@@ -806,7 +805,7 @@ def _export_q3d(
                     net.name for net in spec.nets if net.net_type == "Signal"
                 }
             }
-            if problem == "C" and spec.schema_version == Q3D_SCHEMA_VERSION_V2
+            if problem == "C"
             else {}
         )
         rows, summary = parse_matrix_export(

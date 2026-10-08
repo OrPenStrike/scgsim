@@ -2,7 +2,7 @@
 title: "AEDT Runtime Families"
 description: "AEDT family specifications, native readback, receipt cohorts and saved-field analysis."
 scgsim-kind: "contract"
-scgsim-status: "STABILIZED"
+scgsim-status: "CONVERGING"
 scgsim-id: "docs/specs/aedt-runtime"
 ---
 
@@ -82,11 +82,11 @@ New handoffs retain `scgsim.aedt.handoff.v1` and
 `scgsim.aedt.handoff-manifest.v1`. Both records add
 `expected_receipt_schema: scgsim.aedt.receipt.v3`, and the initial receipt is
 V3. It contains `prepared_runtime_source`: a deterministic, sorted
-`runtime-source.v10` manifest of the SCGSim transaction, family, common, spec,
-persistence, native-readback, and AEDT presentation modules, a content digest
-over that manifest, and a truthful preparation Git observation when one is
-available. Git observation may be explicitly unavailable; module hashes and
-the content digest are mandatory.
+`runtime-source.v12` manifest with the same declared module membership as V11,
+a content digest over that manifest, and `revision_observation`. The Git
+observation is either available with the actual 40-hex commit or explicitly
+unavailable; module hashes and the content digest are mandatory. A source
+checkout or fabricated revision is not required for byte-bound identity.
 
 Before writing `running`, execution accepts exactly one of three cohorts:
 
@@ -108,13 +108,16 @@ V2 handoff retains its prepared V2 provenance cohort when execution emits V3;
 it is not relabeled as new V3 preparation.
 
 Every new completed V3 receipt has a separate `runtime_source` manifest using
-`runtime-source.v10` and a content digest for the code that actually executed
-it, while retaining the historical `revision`, `run_py_sha256`,
-`spec_py_sha256`, convergence, and matrix-helper keys. Execution provenance
-failure therefore produces a failed receipt, never a strict-resolvable
-completed one. Preparation and execution hashes are evidence with different
-timing, not an equality requirement, and historical hashes are not compared to
-the currently installed package.
+`runtime-source.v12` and a content digest for the code that actually executed
+it, while retaining `run_py_sha256`, `spec_py_sha256`, convergence, and
+matrix-helper hash keys. Current V12 records Git provenance only through
+`revision_observation`; it does not require a top-level revision. `available`
+carries the actual 40-hex commit, and `unavailable` is truthful for an
+immutable wheel without VCS metadata. A Git revision is not required for
+current V12 byte identity. Missing or corrupt mandatory module/helper bytes,
+digest, schema, or cohort still fails closed. Preparation and execution
+hashes are evidence with different timing, not an equality requirement, and
+historical hashes are not compared to the currently installed package.
 
 `resolve_results()` preserves the existing rules for genuine historical
 completed V1 and V2 receipts. A receipt relabeled below its preparation markers
@@ -127,29 +130,34 @@ These unsigned consistency checks do not authenticate an artifact set against
 an actor able to rewrite every member.
 
 `runtime-source.v1` is a frozen thirteen-module reader contract, not a live
-enumeration rule. The V2–V9 inventories are also frozen. V4 added
+enumeration rule. The V2–V11 inventories are frozen as well. V4 added
 `scgsim/aedt/_presentation.py`; V5 added `scgsim/sgb/geometry_plan.py` and
 `scgsim/sgb/__init__.py`. V7 added
-`scgsim/_notebook_presentation.py` to V6. Current preparation and execution
-receipts use V10. V8 added
+`scgsim/_notebook_presentation.py` to V6. V8 added
 `scgsim/aedt/_junction_partition.py` to V7. V9 added
 `scgsim/aedt/__init__.py`, `scgsim/aedt/_q3d_geometry.py`,
 `scgsim/sgb/adapter.py`, and `scgsim/sgb/stack.py` to V8. V10 added the shared
-`scgsim/aedt/_handoff_cohort.py` to V9. The V1–V9 module membership and hashes
-retain their historical meaning. These manifests bind their exact declared
-file inventory, not an exhaustive transitive dependency attestation; for
-example, the current frozen inventory does not separately hash
-`scgsim/sgb/engine_gates.py`. They do not change the V3 receipt schema. A pure
-initial-receipt codec owns exact V1/V2/V3 member order,
-two-space JSON indentation, and the trailing newline. V1 omits prepared
+`scgsim/aedt/_handoff_cohort.py` to V9; V11 added
+`scgsim/aedt/_q3d_bodies.py` to V10. Current preparation and execution use V12
+with V11's exact module membership. V12 represents Git provenance with the
+truthful optional `revision_observation`; V1–V11 retain their frozen module
+membership and historical actual-stage revision-required validation. These
+manifests bind their exact declared file inventory, not an exhaustive
+transitive dependency attestation; for example, the current frozen inventory
+does not separately hash `scgsim/sgb/engine_gates.py`. They do not change the
+V3 receipt schema. A pure initial-receipt codec owns exact V1/V2/V3 member
+order, two-space JSON indentation, and the trailing newline. V1 omits prepared
 provenance; V2 and V3 insert it between `source` and `outputs`. Reading
 historical evidence uses the declared frozen schema and does not compare
 historical hashes with the installed package.
 
 Execution computes mandatory runtime-source provenance inside the receipt-bound
-failure transaction, before importing PyAEDT or constructing Desktop. Missing
-revision or module evidence therefore yields a failed V3 receipt without a
-Desktop launch rather than escaping receipt finalization.
+failure transaction, before importing PyAEDT or constructing Desktop. Current
+V12 may record `revision_observation` as unavailable; that alone does not fail
+byte-bound identity or prevent execution. Missing or corrupt module/helper
+bytes, digest, schema, or cohort still yield a failed V3 receipt without a
+Desktop launch rather than escaping receipt finalization. Historical V1–V11
+actual-source validation continues to require its declared revision evidence.
 
 The family save contract remains fail-closed. `save_project()` returning false
 before solve aborts before native execution; returning false after export aborts
@@ -360,6 +368,24 @@ This Q2D contract is accepted V1 behavior; the broader implemented AEDT surface 
 
 ## Q3D extraction and Region-ground contract {#q3d-extraction-and-region-ground-candidate}
 
+The current Q3D request uses only `scgsim.aedt.q3d.v3`. A `Q3dSpec` contains
+explicit `Q3dBodySpec` records in `bodies`; it has no GDS import or per-piece
+binding fields. Each body declares an XY `exterior_um` ring, zero or more
+`holes_um`, its `z_min_um` and `z_max_um`, `material_id`, `physical_role`, and
+final `net_id`. Source-free callers author these normalized body facts
+directly. Optional source identity fields are present only when supplied by a
+source-backed preparation; SCGSim does not infer them for source-free bodies.
+The remaining project, material, Net, run-control, Region and extraction
+controls described below retain their existing meanings.
+
+`Q3dNetSpec.object_names` names body IDs, so one Net may own several distinct
+conductor bodies and every conductor body belongs to exactly one final Net.
+Substrate bodies use dielectric material and no Net. A C/G request may leave
+Signal terminals absent; an AC/RL request requires each Signal Net's complete
+source/sink object and side pair. The Q3D body and native-lowering behavior is
+**CONVERGING**; this contract does not report a completed native body import or
+solve.
+
 `Q3dSpec.solve_ac_rl` is a strict boolean and defaults to `true`. The default
 therefore preserves the existing combined capacitance/conductance plus AC
 resistance/inductance extraction: it seals and resolves
@@ -408,71 +434,76 @@ the requested padding and this zero-offset finalization explicitly.
 
 The prior failed `_01` project remains immutable diagnostic evidence. There is
 no compatibility fallback, physical bridge, or unite path. This replacement
-contract is `STABILIZED`; historical diagnostic evidence is not relabeled.
+Region-ground contract is `STABILIZED`; historical diagnostic evidence is not
+relabeled.
 
-### GeometryPlan-backed Q3D C/G preparation candidate {#q3d-geometry-input-v2}
+### Q3D body-backed input v3 {#q3d-body-input-v3}
 
-This is a separate Q3D input-v2 candidate and is **CONVERGING**. It does not
-change the accepted `Q3dSpec` input or its AC/RL, Region-ground, receipt, or
-historical-reader behavior. The candidate public frontend is
+Q3D has one current input contract, `scgsim.aedt.q3d.v3`; v1/v2 Q3D
+deserialization, GDS imports and per-piece binding are not current input
+paths. There is no automatic conversion from an earlier Q3D request. A
+source-free caller authors `Q3dBodySpec` records directly in the same v3
+`Q3dSpec`. Each body supplies its complete normalized exterior and hole rings,
+Z interval in micrometres, material ID, physical role (`signal`, `ground`, or
+`substrate`), and final Net ID for conductors. A substrate body uses a
+dielectric material and no Net. Optional source fields such as
+`source_entity_id`, `source_polygon_id`, `source_occurrence_path`,
+`source_local_entity_id`, `source_level`, and `source_layer_datatype` remain
+absent for a source-free body.
+
+The structured frontend is
 `prepare_q3d_from_geometry(snapshot: GeometryPlanSnapshot, *, output_dir,
 project_name, design_name, materials: Mapping[str, PdkMaterial],
 net_types: Mapping[str, Literal["Signal", "Ground"]],
 physical_ground_nets: Sequence[str], run_control: MatrixRunControl,
-region_padding_um, resources: AedtResources | None = None) -> HandoffPlan`.
-It consumes an immutable snapshot and returns a portable handoff. This
-frontend requests C/G only (`solve_ac_rl=False`); the explicit `Q3dSpec` path
-continues to own combined AC/RL extraction.
+region_padding_um: Sequence[float], resources: AedtResources | None = None)
+-> HandoffPlan`. It consumes the immutable GeometryPlan snapshot and returns a
+portable v3 handoff for C/G only (`solve_ac_rl=False`). The snapshot owns
+source geometry and final Net membership. `net_types` must cover exactly its
+conductor Net IDs; `physical_ground_nets` explicitly identifies a subset of
+those IDs independently of their requested native type. Materials, run
+control, Region padding and optional resources remain caller inputs. The
+frontend does not infer connectivity, rewrite Net membership or create
+terminals. A C/G Signal Net may have no terminals; AC/RL requires a complete
+source/sink pair for each Signal Net. Source curves are not silently
+linearized; the existing AEDT curve-intent exclusion remains in force.
 
-The snapshot is the source and final `Net -> Entity` authority. `net_types`
-must cover exactly its conductor Net IDs; each value is the native `Signal` or
-`Ground` type. `physical_ground_nets` is an explicit subset of those IDs and
-marks physical roles independently of native type. The caller supplies
-materials, run control, `region_padding_um`, and optional resources explicitly.
-The frontend does not infer connectivity, rewrite Net membership, or derive
-native types from Net names. It generates no terminals or locator sheets. A
-C/G Signal net may omit terminal members entirely, but partial terminal
-authoring is invalid. AC/RL remains on the explicit `Q3dSpec` path and requires
-complete Signal source/sink terminal pairs.
-Original-Maxwell C/G matrices retain every declared native Signal row,
-including a physical-ground net classified as Signal; resolution and reports
-preserve those rows. A native Ground definition is not required for this C/G
-candidate.
+For source-backed requests, `geometry_source` uses
+`scgsim.aedt.q3d-geometry-source.v3`. It binds the canonical GDS, detached
+stack and source trace by path and SHA-256 and records the declared bodies and
+their normalized source lineage. Source attachment files are relocated into
+the portable handoff. The source-backed candidate preserves complete outer
+and inner rings as one body footprint; its selected native construction is a
+covered outer sheet, subtraction of the hole regions, and a +Z sweep through
+the declared interval. This describes the current lowering candidate, not an
+observed native topology or successful solve. No triangulation, GDS-piece
+import, Net Unite, coordinate repair, or generic feature-size policy is part
+of this input-v3 contract. Source- and lowered-geometry width/sliver DRC is
+deferred outside this package and is not a blocker to the body correction. No
+DRC coverage or Layout-validation claim is made, and no universal
+minimum-feature rule is applied.
 
-The finite Q3D import is an analysis export separate from canonical source
-geometry. Deterministic positive polygon records use unique numeric import
-layers and remain traced to source polygon, Entity and conductor level,
-layer/datatype, occurrence and transform, material, Z interval, and final Net,
-with source and export hashes sealed in new input-v2 handoff serialization.
-The `Q3dSpec.geometry_source` attachment uses schema
-`scgsim.aedt.q3d-geometry-source.v1`; it binds the canonical GDS, detached
-stack, and source trace by path and SHA-256, then records each exported piece's
-source Entity/polygon, occurrence/local Entity, conductor level, material,
-final Net and physical role, Z interval, numeric export layer/datatype, and
-destination object identity. The trace carries the per-piece mapping without
-self-referencing file paths. The handoff relocates the three declared files
-before sealing the portable payload. Hole regions remain empty by exporting
-positive holeless pieces; bridge-encoded fill is not used. Explicit PDK
-material IDs bind to matching explicit AEDT material records; the selected
-record's ID and kind must match the source material, and its explicit AEDT
-library name is used without guessed names or claimed numeric property
-transfer. Source curves are not silently linearized;
-the existing AEDT curve-intent exclusion remains in force. This C/G-only
-frontend does not claim native geometry validation, a completed solve, or
-returned matrices.
+Source-backed Q3D constructs each normalized whole body directly, without a
+GDS import or object rename. It then reads the complete raw native object
+inventory and attributes the required native body identities before material
+or Net assignment, setup, or solve. A successful body-construction call alone
+does not establish that every required body arrived. Missing or ambiguous
+required bodies, or extra unattributed objects, fail at the body inventory
+and readback phase. The original exception stays primary in receipt `error`;
+phase detail retains body attribution, raw inventory and native IDs when
+readable, plus available native warning/error context. If a diagnostic read
+fails, its context is unavailable and cannot replace the primary failure.
+Warning presence alone does not reject a complete inventory. This source
+contract does not claim observed native geometry, validation, solver
+completion or returned matrices.
 
-New Q3D input-v2 serialization has its own reader contract. Historical
-input-v1 decoding retains its existing constraints and serialization identity;
-the new frontend does not permissively reinterpret historical handoffs.
-When Q3D input-v2 carries `geometry_source`, its declared cohort keeps the
-existing six ordinary allowed paths in their established order, followed by
-`geometry/source.gds`, `metadata/geometry_stack.json`, and
-`metadata/geometry_trace.json`. The manifest's `members` sequence omits the
-manifest's own path wherever it occurs in `allowed_paths`; it preserves the
-order of all other declared members and their hash and declaration checks.
-The source-backed cohort therefore has nine allowed paths and eight member
-records; source-free Q3D retains six allowed paths and five member records.
-Historical input-v1 reader semantics remain unchanged.
+The v3 handoff keeps the five ordinary allowed paths in their established
+order. A source-backed cohort appends `geometry/source.gds`,
+`metadata/geometry_stack.json`, and `metadata/geometry_trace.json`; the
+manifest's `members` sequence omits its own path wherever it appears in
+`allowed_paths` and preserves the order, hashes and declaration checks of the
+other files. Thus a source-free handoff has five allowed paths and four member
+records, while source-backed v3 has eight allowed paths and seven records.
 
 ## Eigenmode saved fields and Surface-EPR direction
 

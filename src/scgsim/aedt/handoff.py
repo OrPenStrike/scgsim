@@ -66,7 +66,7 @@ def prepare_handoff(
         raise TypeError("resources must be AedtResources or None")
     source_gds: Path | None = None
     preflight: dict[str, int | set[tuple[int, int]]] | None = None
-    if not isinstance(spec, Q2dSpec):
+    if not isinstance(spec, (Q2dSpec, Q3dSpec)):
         source_gds = spec.gds_path.resolve()
         if not source_gds.is_file():
             raise FileNotFoundError(f"gds_path must be an existing file: {source_gds}")
@@ -104,7 +104,7 @@ def prepare_handoff(
 
     _write_script(script_path)
     payload = spec.to_payload()
-    if not isinstance(spec, Q2dSpec):
+    if not isinstance(spec, (Q2dSpec, Q3dSpec)):
         payload["gds"]["path"] = "geometry/design.gds"
     if isinstance(spec, Q3dSpec) and spec.geometry_source is not None:
         geometry_source = detached(spec.geometry_source)
@@ -114,6 +114,7 @@ def prepare_handoff(
             if file_sha256(source_path) != reference["sha256"]:
                 raise ValueError(f"Q3D source attachment identity differs: {key}")
             target = run_dir / destination
+            target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_path, target)
             reference["path"] = destination
         payload["geometry_source"] = geometry_source

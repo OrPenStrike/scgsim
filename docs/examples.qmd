@@ -15,7 +15,8 @@ follow it to the returned quantity before expanding the model.
 1. [Install SCGSim](course/installation.qmd) and the Python tools for your chosen
    backend. Native Palace or AEDT is installed separately on the solver host.
 2. [Extract a pad capacitance](tutorials/capacitance.qmd): a square pad and
-   surrounding ground, using Palace Electrostatic or Q3D.
+   surrounding ground, using Palace Electrostatic and comparing the historical
+   Q3D observation with the current body-v3 input contract.
 3. [Find a resonance and read EPR](tutorials/resonance-epr.qmd): add an explicit
    inductive branch and use Palace or HFSS Eigenmode to read mode and
    participation quantities.
@@ -23,18 +24,21 @@ follow it to the returned quantity before expanding the model.
 ::: {.callout-tip title="Choose the backend where its procedure differs"}
 The beginner lessons share source/model explanations and use tabs for the
 backend-specific API steps. You can work in Python scripts or the public
-OrPen notebooks; the notebook is a convenient execution interface.
+OrPen notebooks; the notebook is a convenient execution interface. The linked
+Q3D GDS-input notebooks remain historical source references and need a
+consumer-owned migration before execution with the current body-v3 runtime.
 :::
 
 The starter setup and didactic controls now follow the owner's four canonical
-SimplePad preparations: Palace Electrostatic, Q3D, Palace Eigenmode and HFSS
-Eigenmode/EPR. Their [published source at `51985d9`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/51985d9507025e8241205712e866c0b804de29b9/notebooks/src/ComponentSimulation/SimplePad)
+SimplePad preparations: Palace Electrostatic, historical Q3D, Palace
+Eigenmode and HFSS Eigenmode/EPR. Their [published source at `51985d9`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/51985d9507025e8241205712e866c0b804de29b9/notebooks/src/ComponentSimulation/SimplePad)
 and [downloadable notebooks](https://github.com/OrPenStrike/orpen-sc-pdk/tree/51985d9507025e8241205712e866c0b804de29b9/notebooks/ComponentSimulation/SimplePad)
 are linked by the lessons, with the shared layout picture and observed result
 figures. The [public output context and data](https://github.com/OrPenStrike/orpen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/ComponentSimulation/SimplePad/evidence/README.md) accompany the
 reference runs; the resonance lesson distinguishes the original HFSS return
-from separately derived EPR. The Python blocks explain current SCGSim APIs;
-the canonical notebooks remain OrPen's authority.
+from separately derived EPR. The Python blocks explain current SCGSim APIs.
+The SimplePad Q3D notebook remains OrPen's source authority for its historical
+GDS-input run; it is not a current body-v3 execution example.
 
 ## Working with Your Model
 
@@ -77,7 +81,7 @@ the current SCGSim API reference.
 | Canonical public notebook group | Use |
 |---|---|
 | [Kosen2024_Xmon](https://github.com/OrPenStrike/orpen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/src/ComponentSimulation/Kosen2024_Xmon) | Palace Route A/B Electrostatic/Eigenmode and source-first Xmon studies |
-| [ComponentSimulation/CpwFiniteGround](https://github.com/OrPenStrike/orpen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/src/ComponentSimulation/CpwFiniteGround) | Ordinary HFSS Eigenmode, Driven Modal/Terminal and Q3D |
+| [ComponentSimulation/CpwFiniteGround](https://github.com/OrPenStrike/orpen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/src/ComponentSimulation/CpwFiniteGround) | Ordinary HFSS Eigenmode/Driven; historical pre-v3 Q3D GDS-input source |
 | [CrossSectionSimulation/CpwFiniteGround](https://github.com/OrPenStrike/orpen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/src/CrossSectionSimulation/CpwFiniteGround) | Q2D rectangles and conductor groups |
 
 The specimen dimensions and presets are public model inputs, not measured

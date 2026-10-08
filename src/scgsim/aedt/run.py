@@ -125,7 +125,7 @@ def _execute(
     spec = parse_aedt_spec(_object(read_json(spec_path), "spec"), base_dir=run_dir)
     resources = _execution_resources(metadata, spec, cores, ram_limit_percent)
     if (
-        not isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec, Q2dSpec))
+        not isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec, Q2dSpec, Q3dSpec))
         and spec.gds_path.resolve() != (run_dir / "geometry/design.gds").resolve()
     ):
         raise RuntimeError("prepared spec must use geometry/design.gds")
@@ -267,6 +267,12 @@ def _execute(
             status = "completed"
     except Exception as exc:  # noqa: BLE001 -- receipt must record any solver failure.
         failure = f"{type(exc).__name__}: {exc}"
+        if isinstance(spec, Q3dSpec):
+            # Body notes retain source attribution/native context in the existing
+            # failed-receipt error, after the primary exception.
+            notes = getattr(exc, "__notes__", ())
+            if notes:
+                failure += "\n" + "\n".join(notes)
     finally:
         if result is not None:
             _record_result_before_release(receipt, result, spec)
@@ -473,7 +479,10 @@ def _canonical_metadata_files(
     files = _object(metadata.get("files"), "files")
     expected = {"spec": "aedt_spec.json", "receipt": "metadata/aedt_run_receipt.json"}
     workflow = metadata.get("workflow")
-    if schema == "scgsim.aedt.handoff.v1" and metadata.get("mode") != "q2d":
+    if schema == "scgsim.aedt.handoff.v1" and metadata.get("mode") not in {
+        "q2d",
+        "q3d",
+    }:
         expected["gds"] = "geometry/design.gds"
     elif schema == "scgsim.aedt.handoff.v2" and workflow == "epr_analysis":
         for key in ("saved_project", "saved_results"):
@@ -527,9 +536,13 @@ def _verify_prepared_hashes(
         ) != spec.saved_solution.content_sha256:
             raise RuntimeError("prepared saved solution hash mismatch")
         return
-    if isinstance(spec, Q2dSpec):
+    if isinstance(spec, (Q2dSpec, Q3dSpec)):
         if set(source) != {"spec", "spec_sha256"} or "gds_sha256" in metadata:
-            raise RuntimeError("Q2D handoff must not contain a GDS source")
+            raise RuntimeError(
+                "Q2D handoff must not contain a GDS source"
+                if isinstance(spec, Q2dSpec)
+                else "Q3D body handoff must not contain an imported GDS source"
+            )
         return
     gds_path = spec.gds_path
     if source.get("gds") != "geometry/design.gds":

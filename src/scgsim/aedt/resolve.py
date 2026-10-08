@@ -32,7 +32,6 @@ from .spec import (
     HfssEigenmodeSpec,
     ModalPort,
     Q2dSpec,
-    Q3D_SCHEMA_VERSION_V2,
     Q3dSpec,
     parse_aedt_spec,
 )
@@ -278,15 +277,19 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
             or source["planar_model_sha256"] != spec.geometry.model_sha256
         ):
             raise RuntimeError("body-first Eigenmode source identity differs")
-    elif mode == "q2d":
+    elif isinstance(spec, (Q2dSpec, Q3dSpec)):
         if set(source) != {"spec", "spec_sha256"}:
-            raise RuntimeError("Q2D receipt must not contain a GDS source")
+            raise RuntimeError(
+                "Q2D receipt must not contain a GDS source"
+                if isinstance(spec, Q2dSpec)
+                else "Q3D body receipt must not contain an imported GDS source"
+            )
+        if isinstance(spec, Q3dSpec):
+            validate_geometry_source(root, source, spec)
     else:
         if source.get("gds") != "geometry/design.gds":
             raise RuntimeError("receipt GDS path is not canonical")
         _verified(root, "geometry/design.gds", source, "gds_sha256")
-        if isinstance(spec, Q3dSpec) and spec.geometry_source is not None:
-            validate_geometry_source(root, source, spec)
     if (
         mode not in {"terminal", "modal", "eigenmode", "q3d", "q2d"}
         or spec.mode != mode
@@ -541,9 +544,7 @@ def _reject_legacy_v2_markers(root: Path, receipt: dict[str, Any]) -> None:
             raise RuntimeError("legacy receipt conflicts with v2 expectation markers")
 
 
-def _validate_completion_cohort(
-    root: Path, receipt: dict[str, Any], spec: Any
-) -> None:
+def _validate_completion_cohort(root: Path, receipt: dict[str, Any], spec: Any) -> None:
     """Verify the immutable preparation cohort and complete execution provenance."""
     receipt_schema = receipt.get("schema_version")
     if receipt_schema not in {RECEIPT_V2, RECEIPT_V3}:
@@ -584,7 +585,7 @@ def _validate_completion_cohort(
         "spec": "aedt_spec.json",
         "receipt": "metadata/aedt_run_receipt.json",
     }
-    if mode != "q2d" and not epr:
+    if mode not in {"q2d", "q3d"} and not epr:
         expected_files["gds"] = "geometry/design.gds"
     if epr and metadata.get("workflow") not in {"body_first_eigenmode", "epr"}:
         raise RuntimeError("body-first Eigenmode preparation workflow is invalid")
@@ -1125,8 +1126,7 @@ def _validate_q3d_readback(root: Path, receipt: dict[str, Any], spec: Q3dSpec) -
     ]
     if len(set(net_object_ids)) != len(net_object_ids):
         raise RuntimeError("Q3D native object IDs must be unique across nets")
-    if spec.geometry_source is not None:
-        _validate_q3d_source_bindings(receipt, spec, nets)
+    _validate_q3d_body_bindings(receipt, spec, nets)
     _validate_q3d_region_ground(receipt, spec, nets)
     expected_setup = {
         "name": spec.run_control.setup_name,
@@ -1174,8 +1174,7 @@ def _validate_q3d_readback(root: Path, receipt: dict[str, Any], spec: Q3dSpec) -
             matrices["normalized_rows"],
             {"C", "AC RL"},
         )
-        if spec.schema_version == Q3D_SCHEMA_VERSION_V2:
-            _read_q3d_original_cg(root, spec)
+        _read_q3d_original_cg(root, spec)
         return
     rows, summary = _read_q3d_original_cg(root, spec)
     expected_matrices = {
@@ -1191,15 +1190,11 @@ def _validate_q3d_readback(root: Path, receipt: dict[str, Any], spec: Q3dSpec) -
 def _read_q3d_original_cg(
     root: Path, spec: Q3dSpec
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    options = (
-        {
-            "expected_label_set": {
-                net.name for net in spec.nets if net.net_type == "Signal"
-            }
+    options = {
+        "expected_label_set": {
+            net.name for net in spec.nets if net.net_type == "Signal"
         }
-        if spec.schema_version == Q3D_SCHEMA_VERSION_V2
-        else {}
-    )
+    }
     return parse_matrix_export(
         _contained(root, "results/q3d/c_matrix.csv"),
         "Q3D",
@@ -1210,17 +1205,17 @@ def _read_q3d_original_cg(
     )
 
 
-def _validate_q3d_source_bindings(
+def _validate_q3d_body_bindings(
     receipt: dict[str, Any], spec: Q3dSpec, nets: list[dict[str, Any]]
 ) -> None:
-    geometry_source = spec.geometry_source
-    if geometry_source is None:
-        return
+    """Bind every created body to its declared geometry and final native identity.
+
+    Native incidence may be unavailable; source declarations never substitute
+    for native topology. The receipt must state which readback actually exists.
+    """
     materials = receipt.get("materials")
-    if not isinstance(materials, list) or len(materials) != len(spec.object_bindings):
-        raise RuntimeError("Q3D geometry source object readback is invalid")
-    layers = {layer.layer: layer for layer in spec.layer_imports}
-    pieces = {piece["object_name"]: piece for piece in geometry_source["pieces"]}
+    if not isinstance(materials, list) or len(materials) != len(spec.bodies):
+        raise RuntimeError("Q3D body material readback is invalid")
     net_object_ids = {
         name: native_id
         for net_record, net_spec in zip(nets, spec.nets, strict=True)
@@ -1233,47 +1228,71 @@ def _validate_q3d_source_bindings(
         for record in materials
         if isinstance(record, dict)
     }
-    if len(records) != len(materials) or set(records) != set(pieces):
-        raise RuntimeError("Q3D geometry source object names are invalid")
-    binding_fields = {
-        "piece_id",
-        "source_entity_id",
-        "source_polygon_id",
-        "destination_layer_name",
-        "imported_object_name",
-        "native_object_id",
-        "object_name",
-    }
-    seen_native_ids: set[int] = set()
-    for object_binding in spec.object_bindings:
-        piece = pieces[object_binding.object_name]
-        record = records[object_binding.object_name]
-        layer = layers[object_binding.layer]
-        evidence = record.get("geometry_source_binding")
-        if not isinstance(evidence, dict) or set(evidence) != binding_fields:
-            raise RuntimeError("Q3D geometry source binding evidence is invalid")
-        imported_name = evidence.get("imported_object_name")
-        native_id = evidence.get("native_object_id")
+    if len(records) != len(materials) or set(records) != {
+        body.body_id for body in spec.bodies
+    }:
+        raise RuntimeError("Q3D native body inventory differs from the spec")
+    seen_native_ids = set()
+    for body in spec.bodies:
+        record = records[body.body_id]
+        material = spec.materials[body.material_id]
+        observed = record.get("observed")
+        expected_native_material = (
+            "pec" if material.is_superconducting else material.library_name
+        )
         if (
-            evidence.get("piece_id") != piece["piece_id"]
-            or evidence.get("source_entity_id") != piece["source_entity_id"]
-            or evidence.get("source_polygon_id") != piece["source_polygon_id"]
-            or evidence.get("destination_layer_name") != layer.layer_name
-            or not isinstance(imported_name, str)
-            or not imported_name.startswith(f"{layer.layer_name}_")
-            or evidence.get("object_name") != object_binding.object_name
-            or record.get("object_name") != object_binding.object_name
+            record.get("material_id") != body.material_id
+            or record.get("role") != body.physical_role
+            or record.get("kind") != material.kind
+            or record.get("is_superconducting") is not material.is_superconducting
+            or record.get("requested_library_name") != material.library_name
+            or not isinstance(observed, dict)
+            or not isinstance(observed.get("native_material_name"), str)
+            or observed["native_material_name"].casefold()
+            != expected_native_material.casefold()
+        ):
+            raise RuntimeError("Q3D body material binding differs from the spec")
+        evidence = record.get("body_binding")
+        if not isinstance(evidence, dict):
+            raise RuntimeError("Q3D native body binding is absent")
+        native_id = evidence.get("native_object_id")
+        faces = evidence.get("native_face_ids")
+        if (
+            evidence.get("body") != body.to_payload()
+            or evidence.get("object_name") != body.body_id
+            or evidence.get("native_object_type") != "Solid"
             or not _positive_unique_ids([native_id], 1)
             or native_id in seen_native_ids
+            or not isinstance(faces, list)
+            or not faces
+            or not _positive_unique_ids(faces, len(faces))
             or (
-                piece["physical_role"] != "substrate"
-                and net_object_ids.get(object_binding.object_name) != native_id
+                body.net_id is not None
+                and net_object_ids.get(body.body_id) != native_id
             )
         ):
             raise RuntimeError(
-                "Q3D geometry source binding differs from native readback"
+                "Q3D body binding differs from the native identity/source declaration"
             )
         seen_native_ids.add(native_id)
+        incidence = evidence.get("incidence")
+        if not isinstance(incidence, dict):
+            raise RuntimeError("Q3D body incidence availability is not recorded")
+        if incidence.get("status") == "unavailable":
+            if (
+                not isinstance(incidence.get("unavailable_reason"), str)
+                or not incidence["unavailable_reason"]
+            ):
+                raise RuntimeError("Q3D unavailable incidence lacks a reason")
+        elif incidence.get("status") == "observed":
+            if (
+                incidence.get("face_ids") != faces
+                or not isinstance(incidence.get("face_edge_ids"), dict)
+                or not isinstance(incidence.get("edge_vertex_ids"), dict)
+            ):
+                raise RuntimeError("Q3D observed native incidence is malformed")
+        else:
+            raise RuntimeError("Q3D native incidence status is invalid")
 
 
 def _validate_q3d_region_ground(

@@ -1,8 +1,7 @@
-"""Finite Q3D import geometry lowered from an immutable source snapshot.
+"""Body-backed Q3D geometry from an immutable normalized source snapshot.
 
-The source retains component/PDK geometry and caller-owned final Nets. Export
-layers and object names belong only to this import representation; holeless
-positive pieces preserve source holes rather than bridging or filling them.
+Each source polygon-with-holes remains one body. No union, lattice conversion,
+fragmentation, or native geometry operation belongs to this lowering step.
 """
 
 from __future__ import annotations
@@ -18,31 +17,13 @@ from scgsim.sgb import GeometryPlanSnapshot
 
 from ._epr_models import canonical_sha256, detached
 from .spec import (
-    LayerImport,
     MatrixRunControl,
-    ObjectBinding,
     PdkMaterial,
+    Q3dBodySpec,
     Q3dNetSpec,
     Q3dSpec,
 )
 from .util import file_sha256, write_json
-
-
-def _positive_pieces(exterior, holes, *, dbu_um, k):
-    polygon = k.Polygon([k.DPoint(*point).to_itype(dbu_um) for point in exterior])
-    for hole in holes:
-        polygon.insert_hole([k.DPoint(*point).to_itype(dbu_um) for point in hole])
-    region = k.Region(polygon).merged()
-    pieces = []
-    for positive in region.each():
-        for simple in positive.decompose_trapezoids():
-            points = [(point.x, point.y) for point in simple.each_point()]
-            # Canonical cyclic start makes export ordering independent of the
-            # native decomposition iterator's choice of first vertex.
-            start = min(range(len(points)), key=points.__getitem__)
-            points = points[start:] + points[:start]
-            pieces.append(points)
-    return sorted(pieces)
 
 
 def _entity_polygons(entity, polygons):
@@ -74,7 +55,7 @@ def lower_q3d_geometry(
     run_control: MatrixRunControl,
     region_padding_um: Sequence[float],
 ) -> Q3dSpec:
-    """Write finite import/source files in scratch; never open AEDT."""
+    """Write canonical source provenance and body declarations; never open AEDT."""
     if not isinstance(snapshot, GeometryPlanSnapshot):
         raise TypeError("snapshot must be GeometryPlanSnapshot")
     source = snapshot.geometry_input
@@ -136,16 +117,9 @@ def lower_q3d_geometry(
     ):
         raise ValueError("Q3D vacuum binding differs from source")
 
-    # The snapshot's GDS DBU is also the normalized polygon lattice. No
-    # independent snapping precision or hidden geometric approximation is used.
     dbu_um = source.metadata["source_dbu_um"]
-    import klayout.db as k
-
-    layout = k.Layout()
-    layout.dbu = dbu_um
-    cell = layout.create_cell("SCGSIM_Q3D")
     polygons = {polygon.polygon_id: polygon for polygon in source.polygons}
-    imports, bindings, pieces = [], [], []
+    bodies = []
     members = {net_id: [] for net_id in sorted(net_ids)}
     for entity in sorted(imported, key=lambda value: value.semantic_id):
         zmin, zmax = geometry_z_range(entity.geometry, entity.semantic_id)
@@ -161,54 +135,41 @@ def lower_q3d_geometry(
             else "signal"
         )
         for polygon_id, exterior, holes in _entity_polygons(entity, polygons):
-            for points in _positive_pieces(exterior, holes, dbu_um=dbu_um, k=k):
-                number = len(pieces) + 1
-                piece_id = f"Q3D_PIECE_{number:06d}"
-                layer_name = f"Q3D_LAYER_{number:06d}"
-                layer_index = layout.layer(number, 0)
-                cell.shapes(layer_index).insert(
-                    k.Polygon([k.Point(*point) for point in points])
+            body_id = f"Q3D_BODY_{len(bodies) + 1:06d}"
+            source_pair = (
+                (entity.geometry["gds_layer"], entity.geometry["gds_datatype"])
+                if "gds_layer" in entity.geometry
+                else None
+            )
+            bodies.append(
+                Q3dBodySpec(
+                    body_id=body_id,
+                    exterior_um=exterior,
+                    holes_um=holes,
+                    z_min_um=zmin,
+                    z_max_um=zmax,
+                    material_id=entity.material_id,
+                    physical_role=role,
+                    net_id=entity.net_id
+                    if entity.material_kind == "conductor"
+                    else None,
+                    source_entity_id=entity.semantic_id,
+                    source_polygon_id=polygon_id,
+                    source_occurrence_path=entity.metadata.get(
+                        "source_occurrence_path"
+                    ),
+                    source_local_entity_id=entity.metadata.get(
+                        "source_local_entity_id"
+                    ),
+                    source_level=entity.metadata.get(
+                        "logical_layer_id", entity.metadata.get("pdk_level_id")
+                    ),
+                    source_layer_datatype=source_pair,
                 )
-                imports.append(LayerImport(number, 0, layer_name, zmin, zmax))
-                bindings.append(
-                    ObjectBinding(piece_id, number, role, entity.material_id)
-                )
-                if entity.material_kind == "conductor":
-                    members[entity.net_id].append(piece_id)
-                source_pair = (
-                    [entity.geometry["gds_layer"], entity.geometry["gds_datatype"]]
-                    if "gds_layer" in entity.geometry
-                    else None
-                )
-                pieces.append(
-                    {
-                        "piece_id": piece_id,
-                        "source_entity_id": entity.semantic_id,
-                        "source_polygon_id": polygon_id,
-                        "source_layer_datatype": source_pair,
-                        "source_occurrence_path": entity.metadata.get(
-                            "source_occurrence_path"
-                        ),
-                        "source_local_entity_id": entity.metadata.get(
-                            "source_local_entity_id"
-                        ),
-                        "source_level": entity.metadata.get(
-                            "logical_layer_id", entity.metadata.get("pdk_level_id")
-                        ),
-                        "material_id": entity.material_id,
-                        "net_id": entity.net_id,
-                        "physical_role": role,
-                        "z_min_um": zmin,
-                        "z_max_um": zmax,
-                        "export_layer": number,
-                        "export_datatype": 0,
-                        "destination_layer_name": layer_name,
-                        "object_name": piece_id,
-                    }
-                )
+            )
+            if entity.material_kind == "conductor":
+                members[entity.net_id].append(body_id)
     directory.mkdir(parents=True, exist_ok=True)
-    export_path = directory / "design.gds"
-    layout.write(str(export_path))
     original_path = directory / "source.gds"
     original_path.write_bytes(snapshot.gds_bytes)
     stack_path = directory / "geometry_stack.json"
@@ -219,13 +180,13 @@ def lower_q3d_geometry(
     source_payload["metadata"]["gds_file"] = "geometry/source.gds"
     source_payload["metadata"]["stack_file"] = "metadata/geometry_stack.json"
     geometry_source = {
-        "schema_version": "scgsim.aedt.q3d-geometry-source.v1",
+        "schema_version": "scgsim.aedt.q3d-geometry-source.v3",
         "source_gds_sha256": hashlib.sha256(snapshot.gds_bytes).hexdigest(),
         "source_geometry_sha256": canonical_sha256(source_payload),
         "source_stack_sha256": file_sha256(stack_path),
-        "export_gds_sha256": file_sha256(export_path),
+        "source_dbu_um": dbu_um,
         "physical_ground_nets": list(ground_nets),
-        "pieces": pieces,
+        "bodies": [body.to_payload() for body in bodies],
     }
     trace_path = directory / "geometry_trace.json"
     write_json(
@@ -234,8 +195,7 @@ def lower_q3d_geometry(
             "geometry_source": geometry_source,
             "source_geometry": source_payload,
             "source_occurrences": detached(snapshot.source_occurrences),
-            "export_dbu_um": dbu_um,
-            "export_piece_geometry": "positive holeless primary source polygons; no locator sheets",
+            "body_geometry": "normalized source exterior/holes without fragmentation; no locator sheets",
         },
     )
     geometry_source["files"] = {
@@ -247,13 +207,11 @@ def lower_q3d_geometry(
         )
     }
     return Q3dSpec(
-        gds_path=export_path,
         project_name=project_name,
         design_name=design_name,
         materials=materials,
         vacuum_material_id=vacuum_id,
-        layer_imports=tuple(imports),
-        object_bindings=tuple(bindings),
+        bodies=tuple(bodies),
         nets=tuple(
             Q3dNetSpec(net_id, net_types[net_id], tuple(members[net_id]))
             for net_id in sorted(net_ids)

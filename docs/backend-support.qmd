@@ -19,10 +19,13 @@ you need, then choose the appropriate source and boundary model.
 | Eigenmode | HFSS | GDS mapping or source-first GeometryPlan | Mode frequency/native Q; requested EPR |
 | Driven Modal | HFSS | GDS mapping and integration-line ports | Complex S-parameters, CSV and Touchstone |
 | Driven Terminal | HFSS | GDS mapping and explicit reference conductors | Complex S-parameters, CSV and Touchstone |
-| Finite 3D extraction | Q3D | Finite-thickness GDS imports and named nets | Native C/G and RL extraction matrices |
+| Finite 3D extraction | Q3D | `Q3dSpec` v3 bodies or GeometryPlan-backed C/G preparation | C/G and optional AC/RL extraction matrices |
 | Cross-section extraction | Q2D | Explicit rectangles and conductor groups | Per-unit-length C/G/L/R blocks |
 
 :::
+
+Q3D body-v3 native lowering remains **CONVERGING**; the table describes the
+request families and returned quantities, not an observed v3 native run.
 
 Palace Driven and Magnetostatic are not implemented; Meep is outside SCGSim's
 scope. Palace's [native problem types](https://awslabs.github.io/palace/stable/guide/problem/)
@@ -44,11 +47,12 @@ assumptions on a recorded EPR result without native evaluation.
 
 ## Source and result differences
 
-GeometryPlan is shared by Palace and source-first HFSS Eigenmode. Q3D uses its
-own explicit imports/bindings; Q2D takes cross-section facts, not an inferred
-slice. Shared source geometry does not equalize boundary conditions or make
-lumped capacitance, resonance, S-parameters and per-length matrices interchangeable.
-Use each result's units and native conductor/port/mode order.
+GeometryPlan is shared by Palace, source-first HFSS Eigenmode and the Q3D C/G
+preparation frontend. Q3D also supports source-free v3 body authoring; Q2D
+takes cross-section facts, not an inferred slice. Shared source geometry does
+not equalize boundary conditions or make lumped capacitance, resonance,
+S-parameters and per-length matrices interchangeable. Use each result's units
+and native conductor/port/mode order.
 
 The 1.1.0 Palace source path supports explicitly authored
 curves and caller-selected GDS boundary reconstruction. These inputs retain

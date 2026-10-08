@@ -2,36 +2,62 @@
 title: "AEDT: Q3D extraction"
 description: "Assign exact finite-thickness nets and choose combined extraction or a capacitance-only enclosure."
 scgsim-kind: "course"
-scgsim-status: "STABILIZED"
+scgsim-status: "CONVERGING"
 scgsim-id: "docs/course/aedt-q3d"
 ---
 
-Continue from [CPW inputs](aedt-inputs.qmd). Q3D extracts conductor matrices
-from a finite three-dimensional model. Unlike the HFSS sheet example, the
-public Q3D CPW uses **0.2 µm** metal thickness. Keep the same GDS polygons and
-PDK mapping, but declare the finite import interval for this branch:
+Continue from [CPW inputs](aedt-inputs.qmd) for the public dimensions and PDK
+materials. That lesson's GDS mapping is for ordinary HFSS; current Q3D accepts
+explicit body geometry under `scgsim.aedt.q3d.v3`. This source-free example
+declares the CPW outlines and their finite Z intervals directly. It does not
+import or convert the shared GDS.
 
 ```python
 from pathlib import Path
 from scgsim.aedt import (
-    LayerImport, MatrixRunControl, Q3dNetSpec, Q3dSpec, prepare_handoff,
+    MatrixRunControl, Q3dBodySpec, Q3dNetSpec, Q3dSpec, prepare_handoff,
 )
 
-q3d_layers = (
-    LayerImport(1, 0, "D0_TOP_M1", 0.0, 0.2),
-    LayerImport(201, 0, "D0_SUBSTRATE", -500.0, 0.0),
+bodies = (
+    Q3dBodySpec(
+        body_id="signal",
+        exterior_um=((-250.0, -5.0), (250.0, -5.0),
+                     (250.0, 5.0), (-250.0, 5.0)),
+        holes_um=(), z_min_um=0.0, z_max_um=0.2,
+        material_id="Nb", physical_role="signal", net_id="Signal",
+    ),
+    Q3dBodySpec(
+        body_id="ground_upper",
+        exterior_um=((-250.0, 11.0), (250.0, 11.0),
+                     (250.0, 91.0), (-250.0, 91.0)),
+        holes_um=(), z_min_um=0.0, z_max_um=0.2,
+        material_id="Nb", physical_role="ground", net_id="Ground",
+    ),
+    Q3dBodySpec(
+        body_id="ground_lower",
+        exterior_um=((-250.0, -91.0), (250.0, -91.0),
+                     (250.0, -11.0), (-250.0, -11.0)),
+        holes_um=(), z_min_um=0.0, z_max_um=0.2,
+        material_id="Nb", physical_role="ground", net_id="Ground",
+    ),
+    Q3dBodySpec(
+        body_id="substrate",
+        exterior_um=((-250.0, -91.0), (250.0, -91.0),
+                     (250.0, 91.0), (-250.0, 91.0)),
+        holes_um=(), z_min_um=-500.0, z_max_um=0.0,
+        material_id="Si", physical_role="substrate", net_id=None,
+    ),
 )
 nets = (
-    Q3dNetSpec("Signal", "Signal", ("D0_TOP_M1_1",),
-                "D0_TOP_M1_1", "-X", "D0_TOP_M1_1", "+X"),
-    Q3dNetSpec("GroundLeft", "Ground", ("D0_TOP_M1_2",)),
-    Q3dNetSpec("GroundRight", "Ground", ("D0_TOP_M1_3",)),
+    Q3dNetSpec("Signal", "Signal", ("signal",),
+                "signal", "-X", "signal", "+X"),
+    Q3dNetSpec("Ground", "Ground", ("ground_upper", "ground_lower")),
 )
 spec = Q3dSpec(
-    gds_path=source_gds, project_name="public_cpw_q3d",
+    project_name="public_cpw_q3d",
     design_name="CpwFiniteGroundQ3d",
     materials=materials, vacuum_material_id="vacuum",
-    layer_imports=q3d_layers, object_bindings=object_bindings, nets=nets,
+    bodies=bodies, nets=nets,
     run_control=MatrixRunControl("Setup1", frequency_ghz=6.0, maximum_passes=3),
     region_padding_um=(0.0, 0.0, 100.0, 100.0, 1000.0, 1000.0),
     solve_ac_rl=True,
@@ -40,12 +66,13 @@ handoff = prepare_handoff(spec=spec, output_dir=Path(".artifacts/public-cpw-q3d"
 print(handoff.spec_path, handoff.archive_path)
 ```
 
-In this combined AC/RL example, each Signal net explicitly names its source/sink
-object and sides. Ground nets have no source/sink. Together the nets cover every
-declared conductor exactly; net names are not reconstructed from object labels.
-The public example's 6 GHz frequency and three-pass limit are study inputs.
-Preserve the actual extraction criteria, any changes and native
-completion/convergence status in your study notes.
+The Signal net names the signal body and its `-X` and `+X` terminal faces;
+the Ground net owns both separate ground bodies without terminals. Together
+the nets cover every conductor body exactly. For a C/G-only request, set
+`solve_ac_rl=False` and omit the Signal terminal pair. The public example's
+6 GHz frequency and three-pass limit are study inputs. Preserve actual
+extraction criteria, any changes and native completion/convergence status in
+your study notes.
 The [result-reading lesson](returned-results.qmd#interpret-for-scq-use) relates
 the selected matrix quantity and its available history to the intended SCQ use;
 the native stopping flag alone does not decide its adequacy.
@@ -72,21 +99,24 @@ AC/DC return path. The [contract](../specs/aedt-runtime.qmd#q3d-extraction-and-r
 owns native validation/readback and the distinction between enclosure and
 physical ground.
 
-Review the layer thickness, exact net membership and extraction choice, then
-[execute](execute.qmd) and [resolve the complete return](returned-results.qmd).
-Read matrices with their native units and conductor order. Changing enclosure
-or extraction formulation creates a different experiment, not an offline loss
+Review body outlines, Z intervals, exact Net membership and extraction choice
+as request inputs. This example prepares the portable v3 request; it does not
+demonstrate native body import, solve or matrix readback. The body-v3 native
+lowering remains **CONVERGING**. The
+[matrix observation contract](../specs/aedt-runtime.qmd#q2d-q3d-convergence-observations)
+describes retained output for a complete return. Changing enclosure or
+extraction formulation creates a different experiment, not an offline loss
 update to old results.
 
-## GeometryPlan-backed C/G candidate
+## GeometryPlan-backed C/G preparation
 
 The shared [Xmon input lesson](../tutorial-xmon-input.qmd) prepares an
-immutable `snapshot` with its final Net assignments. The following candidate
-uses that exact source snapshot for a separate capacitance/conductance-only
-handoff. Supply one `PdkMaterial` per source material ID in `materials`; this
-explicit mapping preserves source material identity and selects each declared
-AEDT library record. This new path does not change the direct-GDS CPW workflow
-above.
+immutable `snapshot` with its final Net assignments. The structured v3
+frontend consumes that snapshot for a C/G-only handoff. Supply one
+`PdkMaterial` per source material ID in `materials`; this explicit mapping
+preserves source material identity and selects each declared AEDT library
+record. The frontend creates v3 body records; it does not use the source-free
+body declarations in the CPW example above.
 
 ```python
 from pathlib import Path
@@ -110,19 +140,16 @@ print(handoff.spec_path, handoff.archive_path)
 
 The example keeps the caller's final Net IDs and explicitly classifies the
 physical `Ground` role while requesting native `Signal` matrix rows for both
-Nets. The frontend creates no terminal or locator-sheet geometry and performs
-no connectivity inference. It emits positive, source-traced finite pieces for
-the Q3D import while the canonical snapshot GDS remains unchanged; source
-holes remain holes. GeometryPlan source IDs, material and occurrence lineage,
-piece transforms and Z intervals, final Net and physical role, and hashes are
-retained in the input-v2 handoff. A mapped Q3D object must later be bound by
-the exact destination import layer and requested object name, then checked
-against observed native object identity; this preparation example does not
-demonstrate native import, solve, or matrix readback. Source curves remain
-outside the current AEDT lowering contract.
+Nets. It creates no terminals or locator-sheet geometry and performs no
+connectivity inference. Source coordinates, complete outer and inner rings,
+Z intervals, materials, final Nets and available source lineage are retained
+in the v3 bodies and `geometry_source` attachment; the canonical snapshot GDS
+remains unchanged. The body/native lowering contract is **CONVERGING** and
+has not been demonstrated by a native import, solve or matrix readback.
+Source curves remain outside the current AEDT lowering contract.
 
 Use the existing `aedt-epr` installation extra when preparing this structured
-GDSFactory/KLayout source. Direct-GDS `Q3dSpec` preparation above continues to
-use the `aedt` extra. Configured resource values are recorded run inputs; they
-do not by themselves guarantee a hard process-memory cap or report an
-independently observed effective solver allocation.
+GDSFactory/KLayout source. Source-free `Q3dSpec` bodies need no GDS import.
+Configured resource values are recorded run inputs; they do not by themselves
+guarantee a hard process-memory cap or report an independently observed
+effective solver allocation.

@@ -350,7 +350,8 @@ def _resolve_native_assignment(
     return resolved, covered_faces, covered_objects
 
 
-def import_and_bind(hfss: Any, spec: HfssSpec | Q3dSpec) -> list[dict[str, Any]]:
+def import_and_bind(hfss: Any, spec: HfssSpec) -> list[dict[str, Any]]:
+    """Import and bind the HFSS GDS pieces owned by its numeric-layer schema."""
     mapping = {
         item.layer: [
             (item.z_min_um, item.z_max_um - item.z_min_um),
@@ -361,40 +362,6 @@ def import_and_bind(hfss: Any, spec: HfssSpec | Q3dSpec) -> list[dict[str, Any]]
     if not hfss.import_gds_3d(str(spec.gds_path), mapping, units="um", import_method=1):
         raise RuntimeError("HFSS import_gds_3d failed")
     hfss.modeler.refresh_all_ids()
-    source_bindings: dict[str, dict[str, Any]] = {}
-    if isinstance(spec, Q3dSpec) and spec.geometry_source is not None:
-        # This source-bound representation exports exactly one positive piece
-        # per destination layer. Native importer numbering is not source identity.
-        pieces = {piece["object_name"]: piece for piece in spec.geometry_source["pieces"]}
-        if set(pieces) != {item.object_name for item in spec.object_bindings}:
-            raise RuntimeError("Q3D source pieces differ from declared object bindings")
-        imported_names = tuple(hfss.modeler.object_names)
-        for binding in spec.object_bindings:
-            piece = pieces[binding.object_name]
-            destination = piece["destination_layer_name"]
-            matches = [name for name in imported_names if name.startswith(f"{destination}_")]
-            if len(matches) != 1:
-                raise RuntimeError(
-                    f"Q3D source piece {piece['piece_id']!r} destination {destination!r} "
-                    f"requires one imported object, got {matches!r}"
-                )
-            imported_name = matches[0]
-            obj = hfss.modeler.get_object_from_name(imported_name)
-            native_id = obj.id
-            obj.name = binding.object_name
-            final = hfss.modeler.get_object_from_name(binding.object_name)
-            if final is None or final.id != native_id or final.name != binding.object_name:
-                raise RuntimeError(f"Q3D source piece rename failed for {piece['piece_id']!r}")
-            source_bindings[binding.object_name] = {
-                "piece_id": piece["piece_id"],
-                "source_entity_id": piece["source_entity_id"],
-                "source_polygon_id": piece["source_polygon_id"],
-                "destination_layer_name": destination,
-                "imported_object_name": imported_name,
-                "native_object_id": native_id,
-                "object_name": binding.object_name,
-            }
-        hfss.modeler.refresh_all_ids()
     actual = set(hfss.modeler.object_names)
     expected = {item.object_name for item in spec.object_bindings}
     if actual != expected:
@@ -414,9 +381,7 @@ def import_and_bind(hfss: Any, spec: HfssSpec | Q3dSpec) -> list[dict[str, Any]]
         # AEDT's Geometry3D ``Group`` remains ``Model`` after GDS import. PyAEDT
         # 1.3.0 exposes the explicit destination layer through the imported
         # object-name prefix, so bind every declared object to that exact prefix.
-        destination_name = source_bindings.get(binding.object_name, {}).get(
-            "imported_object_name", obj.name
-        )
+        destination_name = obj.name
         matches = [
             candidate
             for candidate in spec.layer_imports
@@ -440,77 +405,61 @@ def import_and_bind(hfss: Any, spec: HfssSpec | Q3dSpec) -> list[dict[str, Any]]
             "requested_library_name": material.library_name,
             "native_destination_layer_prefix": layer.layer_name,
         }
-        if binding.object_name in source_bindings:
-            record["geometry_source_binding"] = source_bindings[binding.object_name]
         if material.is_superconducting:
-            if isinstance(spec, Q3dSpec):
+            native = _native_object_evidence(hfss, binding.object_name)
+            if native["native_object_type"] == "Solid":
+                pec_solids.append(binding.object_name)
                 obj.material_name = "pec"
-                observed_material = native_object_property(obj, "Material").strip('"')
-                if observed_material.casefold() != "pec":
+                obj.solve_inside = False
+                fresh = _native_object_evidence(hfss, binding.object_name)
+                if (
+                    fresh["native_object_id"] != native["native_object_id"]
+                    or fresh["native_object_type"] != native["native_object_type"]
+                    or set(fresh["native_face_ids"]) != set(native["native_face_ids"])
+                ):
                     raise RuntimeError(
-                        f"Q3D PEC material readback mismatch for {binding.object_name!r}"
+                        f"HFSS PEC native object identity changed for {binding.object_name!r}"
                     )
-                record["observed"] = {
-                    "native_material_name": observed_material,
-                }
-            else:
-                native = _native_object_evidence(hfss, binding.object_name)
-                if native["native_object_type"] == "Solid":
-                    pec_solids.append(binding.object_name)
-                    obj.material_name = "pec"
-                    obj.solve_inside = False
-                    fresh = _native_object_evidence(hfss, binding.object_name)
-                    if (
-                        fresh["native_object_id"] != native["native_object_id"]
-                        or fresh["native_object_type"] != native["native_object_type"]
-                        or set(fresh["native_face_ids"])
-                        != set(native["native_face_ids"])
-                    ):
-                        raise RuntimeError(
-                            f"HFSS PEC native object identity changed for {binding.object_name!r}"
-                        )
-                    observed_material = native_object_property(obj, "Material").strip(
-                        '"'
+                observed_material = native_object_property(obj, "Material").strip('"')
+                observed_solve_inside = _native_object_boolean_property(
+                    obj, "Solve Inside"
+                )
+                if observed_material.casefold() != "pec" or observed_solve_inside:
+                    raise RuntimeError(
+                        f"HFSS solid PEC readback mismatch for {binding.object_name!r}"
                     )
-                    observed_solve_inside = _native_object_boolean_property(
-                        obj, "Solve Inside"
-                    )
-                    if observed_material.casefold() != "pec" or observed_solve_inside:
-                        raise RuntimeError(
-                            f"HFSS solid PEC readback mismatch for {binding.object_name!r}"
-                        )
-                    record["hfss_pec_binding"] = {
-                        "source_object": binding.object_name,
-                        "source_material_id": material.material_id,
-                        "source_material_kind": material.kind,
-                        "source_library_name": material.library_name,
-                        **fresh,
-                        "implementation": "pec_material_solve_inside_false",
-                        "verified_evidence": {
-                            "native_material_name": observed_material,
-                            "native_solve_inside": False,
-                        },
-                    }
-                    record["observed"] = {
+                record["hfss_pec_binding"] = {
+                    "source_object": binding.object_name,
+                    "source_material_id": material.material_id,
+                    "source_material_kind": material.kind,
+                    "source_library_name": material.library_name,
+                    **fresh,
+                    "implementation": "pec_material_solve_inside_false",
+                    "verified_evidence": {
                         "native_material_name": observed_material,
                         "native_solve_inside": False,
-                    }
-                elif native["native_object_type"] == "Sheet":
-                    pec_sheets.append(binding.object_name)
-                    record["requested_pec_boundary"] = "SCGSimPEC"
-                    record["hfss_pec_binding"] = {
-                        "source_object": binding.object_name,
-                        "source_material_id": material.material_id,
-                        "source_material_kind": material.kind,
-                        "source_library_name": material.library_name,
-                        **native,
-                        "implementation": "perfect_e_sheet",
-                    }
-                else:
-                    raise RuntimeError(
-                        f"unsupported HFSS PEC native object type for "
-                        f"{binding.object_name!r}: {native['native_object_type']!r}"
-                    )
+                    },
+                }
+                record["observed"] = {
+                    "native_material_name": observed_material,
+                    "native_solve_inside": False,
+                }
+            elif native["native_object_type"] == "Sheet":
+                pec_sheets.append(binding.object_name)
+                record["requested_pec_boundary"] = "SCGSimPEC"
+                record["hfss_pec_binding"] = {
+                    "source_object": binding.object_name,
+                    "source_material_id": material.material_id,
+                    "source_material_kind": material.kind,
+                    "source_library_name": material.library_name,
+                    **native,
+                    "implementation": "perfect_e_sheet",
+                }
+            else:
+                raise RuntimeError(
+                    f"unsupported HFSS PEC native object type for "
+                    f"{binding.object_name!r}: {native['native_object_type']!r}"
+                )
         else:
             existing = hfss.materials.exists_material(material.library_name)
             if not existing:

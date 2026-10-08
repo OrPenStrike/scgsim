@@ -64,10 +64,12 @@ boundaries retain their Entity and occurrence identities.
 ## A shared source has a specific reach
 
 Palace Electrostatic/Eigenmode and source-first HFSS Eigenmode consume a
-GeometryPlan snapshot. Ordinary GDS-based AEDT workflows use explicit layer and
-object bindings. Q3D needs finite 3D imports and net membership; Q2D needs
-cross-section rectangles and conductor groups. There is no implicit GeometryPlan
-to Q2D slice.
+GeometryPlan snapshot. Ordinary GDS-based HFSS workflows use explicit layer
+and object bindings. Q3D v3 uses explicit body rings, Z intervals, materials
+and final Net membership; its source-first C/G frontend can consume a
+GeometryPlan snapshot. Native Q3D body lowering remains **CONVERGING**. Q2D
+uses cross-section rectangles and conductor groups; there is no implicit
+GeometryPlan-to-Q2D slice.
 
 Read [model approximations](model-and-numerics.qmd) next, or use the
 [GeometryPlan contract](../geometry-sgb.qmd#component-to-backend-geometry-contract)

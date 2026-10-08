@@ -24,7 +24,7 @@ def canonical_handoff_paths(spec: AedtSpec) -> list[str]:
     paths = ["run_aedt.sh", "aedt_spec.json"]
     if isinstance(spec, HfssEprAnalysisSpec):
         paths.extend(f"saved/{item['path']}" for item in spec.saved_solution.members)
-    elif not isinstance(spec, (HfssEprSpec, Q2dSpec)):
+    elif not isinstance(spec, (HfssEprSpec, Q2dSpec, Q3dSpec)):
         paths.append("geometry/design.gds")
     paths.extend(
         (
@@ -49,8 +49,6 @@ def validate_geometry_source(
     geometry_source = spec.geometry_source
     if geometry_source is None:
         return
-    if receipt_source.get("gds_sha256") != geometry_source["export_gds_sha256"]:
-        raise RuntimeError("Q3D imported GDS digest differs from geometry_source")
     verified = {}
     for key, expected_path in GEOMETRY_SOURCE_PATHS.items():
         reference = geometry_source["files"][key]

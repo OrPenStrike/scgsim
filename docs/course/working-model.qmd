@@ -146,17 +146,19 @@ Use [Concept](../concepts/problems.qmd) to separate those physical choices from
 their backend API representation.
 
 ::: {.callout-note title="Q3D and Q2D have their own inputs"}
-Q3D uses GDS imports with explicit finite-thickness layers, object/material
-bindings and net/source/sink definitions. Q2D uses explicit cross-section
-rectangles and conductor groups. Neither reads your GeometryPlan through a
-`set_plan` method, and Q2D does not generate a slice of it.
+Q3D v3 uses explicit finite-thickness bodies with rings, materials, physical
+roles and final Net membership. A separate source-first frontend can prepare
+those bodies from a GeometryPlan snapshot; source-free callers author the
+bodies directly. AC/RL requests also provide complete Signal source/sink
+terminals. Q2D uses explicit cross-section rectangles and conductor groups; it
+does not generate a slice of the GeometryPlan.
 :::
 
 For another network question, continue to [Driven Modal](aedt-driven-modal.qmd)
 or [Driven Terminal](aedt-driven-terminal.qmd). For finite conductor extraction,
 use [Q3D](aedt-q3d.qmd); for per-unit-length line matrices, use [Q2D](aedt-q2d.qmd).
-Their shared [CPW source example](aedt-inputs.qmd) preserves the explicit import
-mapping rather than repeating it in every solver lesson.
+The [CPW inputs](aedt-inputs.qmd) lesson supplies direct-GDS mappings for HFSS;
+Q3D has a separate body-backed input contract.
 
 ## Change a solver request
 
