@@ -116,10 +116,11 @@ def inspect_aedt_geometry(
         if missing:
             raise ValueError(f"AEDT OBJ export omitted native objects: {missing!r}")
 
+        native_boundaries: Mapping[str, Mapping[str, Any]] = {}
         if receipt is not None:
-            _validate_native_receipt(app, receipt)
+            native_boundaries = _validate_native_receipt(app, receipt)
         materials = _materials(app, datasets, receipt)
-        boundaries = _boundaries(app, datasets, receipt, pv)
+        boundaries = _boundaries(app, datasets, receipt, pv, native_boundaries)
     finally:
         if desktop is not None:
             released = desktop.release_desktop(close_projects=True, close_on_exit=True)
@@ -160,9 +161,12 @@ def inspect_aedt_geometry(
     )
 
 
-def _validate_native_receipt(app: Any, receipt: Mapping[str, Any]) -> None:
+def _validate_native_receipt(
+    app: Any, receipt: Mapping[str, Any]
+) -> dict[str, dict[str, Any]]:
     mode = receipt.get("mode")
     object_ids = {name: int(app.modeler[name].id) for name in app.modeler.object_names}
+    native_boundaries: dict[str, dict[str, Any]] = {}
     if mode in {"terminal", "modal", "eigenmode"}:
         native_boundaries = {
             str(boundary.name): dict(boundary.props) for boundary in app.boundaries
@@ -243,6 +247,7 @@ def _validate_native_receipt(app: Any, receipt: Mapping[str, Any]) -> None:
                 raise ValueError("native AEDT Q2D conductor assignment changed")
     else:
         raise ValueError(f"unsupported AEDT receipt mode: {mode!r}")
+    return native_boundaries
 
 
 def _materials(
@@ -305,6 +310,7 @@ def _boundaries(
     datasets: Mapping[str, Any],
     receipt: dict[str, Any] | None,
     pv: Any,
+    native_boundaries: Mapping[str, Mapping[str, Any]],
 ) -> list[_Part]:
     assigned: set[str] = set()
     parts: list[_Part] = []
@@ -334,13 +340,14 @@ def _boundaries(
                     raise ValueError(f"AEDT native port face {face_id} is degenerate")
                 dataset = pv.PolyData(points, faces=[len(points), *range(len(points))])
                 label = _text(port.get("boundary"), "receipt port boundary")
+                boundary_type = str(native_boundaries[label]["BoundType"])
                 parts.append(
                     _Part(
                         dataset,
                         f"port:{label}",
                         label,
-                        "LumpedPort",
-                        _FIXED_COLORS["LumpedPort"],
+                        boundary_type,
+                        _color(boundary_type),
                         1.0,
                         1,
                     )
@@ -386,7 +393,7 @@ def _boundaries(
                 raise ValueError(
                     f"unsupported native AEDT boundary type: {boundary_type!r}"
                 )
-            role = "PEC" if boundary_type == "Perfect E" else "LumpedPort"
+            role = "PEC" if boundary_type == "Perfect E" else boundary_type
             for object_name in _native_object_names(app, props.get("Objects", ())):
                 _append_object(parts, datasets, assigned, object_name, name, role)
             for face_id in props.get("Faces", ()):
