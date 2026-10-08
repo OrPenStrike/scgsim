@@ -1,19 +1,20 @@
 ---
 title: "SCGSim 2.0 API Migration Map"
-description: "Current public geometry, AEDT, Palace and visualization symbols mapped to the converging SCGSim 2.0 module structure."
+description: "Current public geometry, AEDT, Palace and visualization symbols mapped to the accepted SCGSim 2.0 module structure."
 scgsim-kind: "contract"
-scgsim-status: "CONVERGING"
+scgsim-status: "ACCEPTED"
 scgsim-id: "docs/api-migration"
 ---
 
-This reference maps the frozen v1 API surfaces to the v2 source candidate.
-The baseline is `develop@3a52fb1`, tree
-`96adcf8672b497a29dd0a6b43043cca11efc3043`. Geometry, Palace, visualization,
-and AEDT responsibility relocations are implemented in the current source
-tree. The candidate remains `CONVERGING`, is not integrated,
-and has not received Human API acceptance. A candidate wheel was installed
-in an isolated environment for bounded package/API and documentation
-observations; this does not establish a user installation or native behavior.
+This reference maps the frozen v1 API surfaces to the accepted SCGSim 2.0
+implementation. Human accepted candidate
+`a932a173edb5c56ae14740ff5177190996255bdd` (tree
+`2745321736e53e2a4fe8d150f2e9d8bd176669db`) on 2026-10-09. Its semantic
+state is `ACCEPTED`, not `STABILIZED`; delivery remains separate. The migration
+baseline is `develop@3a52fb1`, tree
+`96adcf8672b497a29dd0a6b43043cca11efc3043`. Isolated wheel observations are
+specific to their frozen package and runtime-source identities; they do not
+establish a user installation or transfer native results to another wheel.
 
 Package-level facades remain the supported high-level entrypoints. The move
 does not add compatibility wrappers for old internal paths. Existing consumer
@@ -30,9 +31,10 @@ the v2 package and the corresponding old-to-new map.
 - Move each supported symbol to its single responsibility owner and re-export
   the approved high-level symbols from the package facade. Do not leave a
   second old implementation or compatibility wrapper reachable.
-- Do not revive Q3D input-v1 or input-v2. The body-backed v3 input is the
-  current Q3D candidate; its native consumer endpoint remains unobserved and
-  this map makes no native-completion claim.
+- Do not revive Q3D input-v1 or input-v2. Body-backed input-v3 is the accepted
+  Q3D contract. The accepted candidate has an observed native build-only
+  operation; that observation does not constitute a completed C/G solve or
+  matrix result.
 - Preserve the formal `python -m scgsim.aedt.run` command as the AEDT
   transaction entrypoint. It is a supported CLI, not a legacy wrapper.
 - The v2 AEDT producer emits `scgsim.aedt.runtime-source.v13`. Its manifest
@@ -259,12 +261,25 @@ AEDT projections, calculations, or result status; their presentation remains
 solver-specific. Moving this private helper does not make its function names a
 new public API.
 
-## Scope and evidence status
+## Accepted scope and evidence status
 
 The baseline facade exports and documented direct submodule surfaces for
-geometry/compiler, AEDT, Palace and visualization are mapped to their current
-source owners above. The relocated source remains a `CONVERGING` candidate and
-is not integrated; a bounded isolated candidate-wheel observation does not
-establish a user installation. No consumer pin, historical receipt, Q3D
-v1/v2 reader, native result or package version is changed by this document.
-The Q3D body-v3 native consumer endpoint remains unobserved.
+geometry/compiler, AEDT, Palace and visualization are mapped to their accepted
+source owners above. Six earlier full native-to-Resolve-to-Report observations
+are bound to the earlier wheel with SHA256
+`48963671d4f854c185b8f95f3cd8000960355a7c48550b9ccf19b739b49f8df3` and
+runtime-source v13 content digest
+`42b48f3d5946fadb1e93e92a1d3eb2a55f72ff00fc41aeccf71c0fded5919fa1`; those
+observations cover CPW Modal and Terminal, Q2D, Q3D AC/RL, SimplePad Q3D C/G,
+and Palace ES, and are not current-wheel execution evidence. The accepted
+frozen `2.0.0.dev1` candidate wheel with SHA256
+`e0ab1117aad4e5578ec98251732d33f6faa2fe7524dd70dcbc44891ed024824d` has a
+separate Q3D build-only/readback/save/release observation and geometry preview,
+without `Analyze`, solve, or C/G matrices.
+
+The deferred full endpoints are Xmon Palace Eigenmode Route A, CircularPad
+Palace Eigenmode Route B, and HFSS Eigenmode saved-field EPR/offline loss.
+Their earlier preparation or partial-native evidence remains incomplete for
+those full operations; deferral does not describe them as failed. The accepted
+candidate is not yet integrated, and existing consumer pins remain unchanged.
+Q3D input-v1/v2 readers remain absent.

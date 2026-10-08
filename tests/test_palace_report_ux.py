@@ -28,14 +28,14 @@ from scgsim.palace import (
     SimulationBenchmarkReport,
     inspect_run_trustworthiness,
 )
-from scgsim.palace.report import (
+from scgsim.palace.results.report_data import (
     AmrPassSnapshot,
     SurfaceEprRecord,
     SurfaceEprSeriesSnapshot,
     _read_surface_epr,
-    _surface_ranking_figure,
 )
-from scgsim.palace.returned_receipt import _iteration_output_paths
+from scgsim.palace.presentation.reports import _surface_ranking_figure
+from scgsim.palace.execution.returned_receipt import _iteration_output_paths
 
 
 class _Html:
@@ -339,7 +339,7 @@ class PalaceReportUxTests(unittest.TestCase):
         )
         with (
             patch(
-                "scgsim.palace.report._show_run_trustworthiness",
+                "scgsim.palace.presentation.reports._show_run_trustworthiness",
                 return_value=trust,
             ) as show_trust,
             _captured_notebook_display() as displayed,
@@ -467,7 +467,7 @@ class PalaceReportUxTests(unittest.TestCase):
         self.assertIsInstance(benchmark, SimulationBenchmarkReport)
         self.assertIn("performance_metadata", benchmark.data)
         with (
-            patch("scgsim.palace.report._show_figure"),
+            patch("scgsim.palace.presentation.reports._show_figure"),
             _captured_notebook_display() as displayed,
         ):
             benchmark._ipython_display_()
@@ -478,7 +478,7 @@ class PalaceReportUxTests(unittest.TestCase):
         self.assertNotIn("Benchmark metadata", html_output)
 
         with (
-            patch("scgsim.palace.report._show_figure"),
+            patch("scgsim.palace.presentation.reports._show_figure"),
             _captured_notebook_display() as displayed,
         ):
             trust.show_simulation_benchmark(show_details=True)._ipython_display_()
@@ -533,16 +533,16 @@ class PalaceReportUxTests(unittest.TestCase):
                 "_convergence_items",
                 return_value=["numerical"],
             ),
-            patch("scgsim.palace.report._surface_total_figure", return_value=total),
+            patch("scgsim.palace.presentation.reports._surface_total_figure", return_value=total),
             patch(
-                "scgsim.palace.report._surface_percentage_figure",
+                "scgsim.palace.presentation.reports._surface_percentage_figure",
                 return_value=percentage,
             ),
             patch(
-                "scgsim.palace.report._surface_ranking_figure",
+                "scgsim.palace.presentation.reports._surface_ranking_figure",
                 side_effect=AssertionError("trust must not render physics ranking"),
             ),
-            patch("scgsim.palace.report._show_figure", trust_figures.append),
+            patch("scgsim.palace.presentation.reports._show_figure", trust_figures.append),
             _captured_notebook_display(),
         ):
             trust._ipython_display_()
@@ -552,18 +552,18 @@ class PalaceReportUxTests(unittest.TestCase):
         physics = trust.show_physics_quantities(ranking_limit=1)
         with (
             patch(
-                "scgsim.palace.report._surface_total_figure",
+                "scgsim.palace.presentation.reports._surface_total_figure",
                 side_effect=AssertionError("physics must not redraw convergence"),
             ),
             patch(
-                "scgsim.palace.report._surface_percentage_figure",
+                "scgsim.palace.presentation.reports._surface_percentage_figure",
                 side_effect=AssertionError("physics must not redraw convergence"),
             ),
             patch(
-                "scgsim.palace.report._surface_ranking_figure",
+                "scgsim.palace.presentation.reports._surface_ranking_figure",
                 return_value=ranking,
             ),
-            patch("scgsim.palace.report._show_figure", physics_figures.append),
+            patch("scgsim.palace.presentation.reports._show_figure", physics_figures.append),
             _captured_notebook_display() as displayed,
         ):
             physics._ipython_display_()

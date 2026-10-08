@@ -2,7 +2,7 @@
 title: "AEDT: Q3D extraction"
 description: "Assign exact finite-thickness nets and choose combined extraction or a capacitance-only enclosure."
 scgsim-kind: "course"
-scgsim-status: "CONVERGING"
+scgsim-status: "ACCEPTED"
 scgsim-id: "docs/course/aedt-q3d"
 ---
 
@@ -101,12 +101,13 @@ physical ground.
 
 Review body outlines, Z intervals, exact Net membership and extraction choice
 as request inputs. This example prepares the portable v3 request; it does not
-demonstrate native body import, solve or matrix readback. The body-v3 native
-lowering remains **CONVERGING**. The
+itself run the native build-only operation or a solve. The body-v3 API and
+build-only behavior are accepted; the observed build-only operation and its
+limits are described in the
 [matrix observation contract](../specs/aedt-runtime.qmd#q2d-q3d-convergence-observations)
-describes retained output for a complete return. Changing enclosure or
-extraction formulation creates a different experiment, not an offline loss
-update to old results.
+and [Q3D contract](../specs/aedt-runtime.qmd#q3d-body-input-v3). Changing
+enclosure or extraction formulation creates a different experiment, not an
+offline loss update to old results.
 
 ## GeometryPlan-backed C/G preparation
 
@@ -144,17 +145,20 @@ Nets. It creates no terminals or locator-sheet geometry and performs no
 connectivity inference. Source coordinates, complete outer and inner rings,
 Z intervals, materials, final Nets and available source lineage are retained
 in the v3 bodies and `geometry_source` attachment; the canonical snapshot GDS
-remains unchanged. The body/native lowering contract is **CONVERGING** and
-has not been demonstrated by a native import, solve or matrix readback.
-Source curves remain outside the current AEDT lowering contract.
+remains unchanged. The accepted build-only observation read back the tested
+native bodies, holes, Z intervals, materials, Net assignments, Region and
+setup, then saved and released the project; a separate geometry preview was
+also inspected. It did not call `Analyze` or return C/G matrices. Source curves
+remain outside the current AEDT lowering contract.
 
-An optional native build-only source candidate uses the existing CLI with a
+The accepted native build-only operation uses the existing CLI with a
 prepared Q3D v3 handoff: `python -m scgsim.aedt.run --handoff <run-dir>/metadata/aedt_handoff_metadata.json --execute --prepare-only`
 (substitute the directory returned by `prepare_q3d_from_geometry`). It prepares
 and reads back the native model, saves the project and releases its owned
 Desktop without calling `Analyze` or exporting C/G matrices. This consumes the
-one-shot handoff; prepare a new handoff before a later solve. Native behavior is
-not yet observed, and the normal `--execute` path is unchanged. The
+one-shot handoff; prepare a new handoff before a later solve. The separate
+build-only observation does not replace a completed solve; the normal
+`--execute` path is unchanged. The
 [Q3D contract](../specs/aedt-runtime.qmd#q3d-body-input-v3) describes the
 receipt and strict-resolution boundary.
 

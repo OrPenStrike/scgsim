@@ -2,16 +2,28 @@
 title: "AEDT Runtime Families"
 description: "AEDT family specifications, native readback, receipt cohorts and saved-field analysis."
 scgsim-kind: "contract"
-scgsim-status: "CONVERGING"
+scgsim-status: "ACCEPTED"
 scgsim-id: "docs/specs/aedt-runtime"
 ---
 
 The [course map](../examples.qmd) links every implemented AEDT family lesson. This page owns exact specifications, failure rules and historical reader contracts.
 
-::: {.callout-note title="Stabilized V1 contract"}
-HFSS Driven Terminal/Modal, HFSS Eigenmode, Q3D, and Q2D have live run and
-strict resolve evidence. These semantics are Human-accepted; stabilization and release delivery
-remain separate.
+::: {.callout-note title="Accepted implementation/API scope and evidence"}
+Human accepted the v2 implementation/API on 2026-10-09 at candidate
+`a932a173edb5c56ae14740ff5177190996255bdd` (tree
+`2745321736e53e2a4fe8d150f2e9d8bd176669db`). The semantic state is `ACCEPTED`,
+not `STABILIZED`. Six earlier full native-to-Resolve-to-Report observations
+belong to the earlier wheel SHA256
+`48963671d4f854c185b8f95f3cd8000960355a7c48550b9ccf19b739b49f8df3` and
+runtime-source v13 content digest
+`42b48f3d5946fadb1e93e92a1d3eb2a55f72ff00fc41aeccf71c0fded5919fa1`; those
+observations do not establish execution from the accepted candidate wheel.
+The accepted frozen `2.0.0.dev1` candidate wheel SHA256
+`e0ab1117aad4e5578ec98251732d33f6faa2fe7524dd70dcbc44891ed024824d` has a
+separate Q3D build-only/readback/save/release observation and geometry preview,
+without `Analyze`, solve, or C/G matrix export. The full Xmon Palace Eigenmode
+Route A, CircularPad Palace Eigenmode Route B, and HFSS Eigenmode/saved-field
+EPR/offline-loss endpoints remain deferred.
 :::
 
 ## One shared lifecycle
@@ -384,9 +396,10 @@ controls described below retain their existing meanings.
 conductor bodies and every conductor body belongs to exactly one final Net.
 Substrate bodies use dielectric material and no Net. A C/G request may leave
 Signal terminals absent; an AC/RL request requires each Signal Net's complete
-source/sink object and side pair. The Q3D body and native-lowering behavior is
-**CONVERGING**; this contract does not report a completed native body import or
-solve.
+source/sink object and side pair. This body-v3 request and lowering behavior is
+part of the accepted v2 implementation/API. Its native observation is limited
+to the build-only operation below; no completed C/G solve or matrix result is
+claimed for the accepted candidate.
 
 `Q3dSpec.solve_ac_rl` is a strict boolean and defaults to `true`. The default
 therefore preserves the existing combined capacitance/conductance plus AC
@@ -474,13 +487,14 @@ For source-backed requests, `geometry_source` uses
 `scgsim.aedt.q3d-geometry-source.v3`. It binds the canonical GDS, detached
 stack and source trace by path and SHA-256 and records the declared bodies and
 their normalized source lineage. Source attachment files are relocated into
-the portable handoff. The source-backed candidate preserves complete outer
-and inner rings as one body footprint; its selected native construction is a
-covered outer sheet, subtraction of the hole regions, and a +Z sweep through
-the declared interval. This describes the current lowering candidate, not an
-observed native topology or successful solve. No triangulation, GDS-piece
-import, Net Unite, coordinate repair, or generic feature-size policy is part
-of this input-v3 contract. Source- and lowered-geometry width/sliver DRC is
+the portable handoff. The accepted source-backed representation preserves
+complete outer and inner rings as one body footprint; its native construction
+uses a covered outer sheet, subtraction of the hole regions, and a +Z sweep
+through the declared interval. The build-only observation below includes
+native body, holes, and Z readback plus a geometry preview for its tested case;
+it is not a general topology claim or a successful solve. No triangulation or
+GDS-piece import, Net Unite, coordinate repair, or generic feature-size policy
+is part of this input-v3 contract. Source- and lowered-geometry width/sliver DRC is
 deferred outside this package and is not a blocker to the body correction. No
 DRC coverage or Layout-validation claim is made, and no universal
 minimum-feature rule is applied.
@@ -495,13 +509,14 @@ and readback phase. The original exception stays primary in receipt `error`;
 phase detail retains body attribution, raw inventory and native IDs when
 readable, plus available native warning/error context. If a diagnostic read
 fails, its context is unavailable and cannot replace the primary failure.
-Warning presence alone does not reject a complete inventory. This source
-contract does not claim observed native geometry, validation, solver
-completion or returned matrices.
+Warning presence alone does not reject a complete inventory. The source
+contract defines body attribution and failure behavior; the scoped build-only
+observation below confirms readback for its tested candidate operation, not a
+solver completion or returned matrices.
 
-#### Q3D native build-only execution candidate
+#### Q3D native build-only execution
 
-Q3D v3 also has an opt-in native build-only candidate using the existing
+Q3D v3 has an opt-in native build-only operation using the existing
 `python -m scgsim.aedt.run --handoff <run-dir>/metadata/aedt_handoff_metadata.json --execute --prepare-only`
 entrypoint. It follows the same body construction, material and Net assignment,
 Region and setup creation/readback, project save, and owned Desktop release as
@@ -512,8 +527,12 @@ or export matrices or convergence data. The receipt records
 native output. This execution consumes the one-shot handoff, so a later solve
 requires a newly prepared handoff. The strict `resolve_results` entrypoint
 continues to require a completed solver result; it does not resolve a
-preparation-only receipt as a result. This Q3D behavior is a source candidate
-with no native observation yet. Normal Q3D `--execute` behavior is unchanged.
+preparation-only receipt as a result. On the accepted frozen candidate wheel,
+the observed build-only operation read back body and hole geometry, Z intervals,
+materials, all-Signal net assignments, Region and setup; it saved the project,
+released its owned Desktop, and had a separate top/isometric geometry preview.
+It did not call `Analyze`, solve, or export C/G matrices. Normal Q3D
+`--execute` behavior is unchanged.
 
 The v3 handoff keeps the five ordinary allowed paths in their established
 order. A source-backed cohort appends `geometry/source.gds`,

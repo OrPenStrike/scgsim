@@ -2,7 +2,7 @@
 title: "Maintainer guide"
 description: "Secondary implementation, project and documentation-build references for contributors."
 scgsim-kind: "project"
-scgsim-status: "CONVERGING"
+scgsim-status: "ACCEPTED"
 scgsim-id: "docs/ownership"
 ---
 
@@ -19,13 +19,16 @@ Repository layout, implementation responsibilities, documentation builds and
 release procedures belong to the secondary
 [maintainer entry](https://github.com/OrPenStrike/scgsim/blob/develop/MAINTAINING.md).
 
-## SCGSim 2.0 ownership candidate — CONVERGING
+## Accepted SCGSim 2.0 ownership
 
-The v2 module and API structure is implemented as a current source candidate
-and remains `CONVERGING`; source review, installed-package observations and
-native behavior are separate from this layout. The intake baseline is
-`develop@3a52fb1`, tree `96adcf8672b497a29dd0a6b43043cca11efc3043`. Existing
-consumers remain on their recorded pins until they choose a migration.
+Human accepted the v2 module and API structure on 2026-10-09 as candidate
+`a932a173edb5c56ae14740ff5177190996255bdd` (tree
+`2745321736e53e2a4fe8d150f2e9d8bd176669db`). Its semantic state is `ACCEPTED`,
+not `STABILIZED` or integrated. The intake baseline is `develop@3a52fb1`, tree
+`96adcf8672b497a29dd0a6b43043cca11efc3043`. Existing consumers remain on their
+recorded pins until they choose a migration. Accepted API scope does not imply
+completion of the three deferred full native endpoints described in the
+[migration reference](api-migration.qmd#accepted-scope-and-evidence-status).
 
 | Target area | Owns | Must not take ownership of |
 |---|---|---|
@@ -48,7 +51,7 @@ consumers remain on their recorded pins until they choose a migration.
 | `scgsim.presentation` | Shared, solver-physics-neutral notebook formatting | Domain projections or scientific calculations |
 
 The baseline facade and direct-submodule symbol maps for geometry, AEDT, Palace
-and visualization, with their implemented destinations, are in the
+and visualization, with their accepted destinations, are in the
 [API migration reference](api-migration.qmd).
 Publicness comes from documented facades/contracts and declared exports, not
 from whether a Python module happens to be importable. The v2 change
@@ -68,7 +71,7 @@ authority. Relocation must preserve these ownership and failure contracts.
 The SCGSim Development Lead owns tracked source. A fixed worker may write only
 its assigned paths under a bounded lease; shared facade, receipt and package
 metadata paths have one writer at a time. The architecture and complete
-submodule migration contract are recorded alongside the source candidate.
+submodule migration contract are recorded alongside the accepted source tree.
 Native observations and solver-specific result interpretation remain
 separately owned and must not be implied by a directory reorganization.
 

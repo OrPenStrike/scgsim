@@ -2,7 +2,7 @@
 title: "Architecture and Data Flow"
 description: "Module ownership, native transaction phases and staged persistence boundaries."
 scgsim-kind: "implementation"
-scgsim-status: "CONVERGING"
+scgsim-status: "ACCEPTED"
 scgsim-id: "docs/architecture"
 ---
 
@@ -16,18 +16,20 @@ execution, result loading, and presentation distinguishable. A solver backend
 may implement its own physics, but it must not redefine geometry identity, run
 identity, or common provenance.
 
-## SCGSim 2.0 structure candidate — CONVERGING
+## Accepted SCGSim 2.0 structure
 
-The v2 structural/API candidate is being implemented in the current source
-tree and remains `CONVERGING`; its changes are not yet integrated. Its frozen
-intake baseline is `develop@3a52fb1`, tree
-`96adcf8672b497a29dd0a6b43043cca11efc3043`. The ownership tree below describes
-the current source candidate, not a release or Human-accepted API. Existing
-consumer pins remain unchanged. The Q3D body-v3 native consumer endpoint
-remains unobserved, so this structure does not claim completed native behavior
-or numerical equivalence.
+Human accepted the current v2 structural/API implementation on 2026-10-09:
+candidate `a932a173edb5c56ae14740ff5177190996255bdd`, tree
+`2745321736e53e2a4fe8d150f2e9d8bd176669db`. Its semantic state is `ACCEPTED`,
+not `STABILIZED` or integrated. The migration baseline is
+`develop@3a52fb1`, tree `96adcf8672b497a29dd0a6b43043cca11efc3043`; existing
+consumer pins remain unchanged. The accepted Q3D body-v3 scope includes a
+native build-only/readback/save/release operation, not a completed C/G solve.
+The full Xmon Route A, CircularPad Route B, and HFSS Eigenmode/saved-field
+EPR/offline-loss endpoints remain deferred; their partial observations are not
+reported as full completion.
 
-The current candidate responsibility tree is:
+The accepted responsibility tree is:
 
 ```text
 scgsim/
@@ -73,7 +75,7 @@ calculation. Visualization reads solver-authoritative metadata and artifacts;
 it does not start a solve or determine run status.
 
 Publicness follows explicit package facades, declared submodule exports and
-documented contracts—not mere importability. The v2 source candidate keeps the
+documented contracts—not mere importability. The accepted v2 source keeps the
 high-level `scgsim.geometry`, `scgsim.palace`, `scgsim.aedt`, and
 `scgsim.visualization` entrypoints, and supplies an old-to-new submodule and
 symbol map in the [API migration reference](api-migration.qmd). Moved private
@@ -121,7 +123,7 @@ does not claim exhaustive transitive-source coverage. Historical runtime-source
 v1–v12 continue to interpret their original module paths and identities; V13
 does not rewrite or reinterpret historical receipts.
 
-The flow below shows the current source candidate. Geometry source preparation
+The flow below shows the accepted source structure. Geometry source preparation
 and compiler planning have separate owners, and neither backend defines source
 identity.
 
