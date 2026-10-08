@@ -15,9 +15,9 @@ from scgsim.aedt import (
     Q2dSpec,
     resolve_results,
 )
-from scgsim.aedt._matrix_export import parse_matrix_export, read_q2d_rlgc_matrix
-from scgsim.aedt.run import _export_q2d
-from scgsim.aedt.util import file_sha256, write_json
+from scgsim.aedt.results.matrices import parse_matrix_export, read_q2d_rlgc_matrix
+from scgsim.aedt.runtime.families.q2d import _export_q2d
+from scgsim.aedt._io import file_sha256, write_json
 
 
 def _spec(project_name: str = "PublicQ2dRun") -> Q2dSpec:
@@ -226,7 +226,7 @@ Signal,2.0
                     },
                 },
             )
-            with patch("scgsim.aedt.resolve._validate_readback"):
+            with patch("scgsim.aedt.results.resolve._validate_readback"):
                 result = resolve_results(root)
                 self.assertEqual(result.primary_csv, matrix_path)
                 before = sorted(path.relative_to(root) for path in root.rglob("*"))

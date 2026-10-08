@@ -2,7 +2,7 @@
 title: "Architecture and Data Flow"
 description: "Module ownership, native transaction phases and staged persistence boundaries."
 scgsim-kind: "implementation"
-scgsim-status: "CONVERGING"
+scgsim-status: "ACCEPTED"
 scgsim-id: "docs/architecture"
 ---
 
@@ -16,6 +16,117 @@ execution, result loading, and presentation distinguishable. A solver backend
 may implement its own physics, but it must not redefine geometry identity, run
 identity, or common provenance.
 
+## Accepted SCGSim 2.0 structure
+
+Human accepted the current v2 structural/API implementation on 2026-10-09:
+candidate `a932a173edb5c56ae14740ff5177190996255bdd`, tree
+`2745321736e53e2a4fe8d150f2e9d8bd176669db`. Its semantic state is `ACCEPTED`,
+not `STABILIZED` or integrated. The migration baseline is
+`develop@3a52fb1`, tree `96adcf8672b497a29dd0a6b43043cca11efc3043`; existing
+consumer pins remain unchanged. The accepted Q3D body-v3 scope includes a
+native build-only/readback/save/release operation, not a completed C/G solve.
+The full Xmon Route A, CircularPad Route B, and HFSS Eigenmode/saved-field
+EPR/offline-loss endpoints remain deferred; their partial observations are not
+reported as full completion.
+
+The accepted responsibility tree is:
+
+```text
+scgsim/
+├── geometry/
+│   ├── source/       # component input, occurrence, stack and normalization
+│   ├── models/       # source and construction records
+│   ├── compiler/     # advanced build API, derived records and validators
+│   ├── planning/     # domain, interface, surface, volume and tag planning
+│   ├── construction/ # native OCC construction, correspondence and export
+│   └── _primitives/  # shared lower source/compiler operations
+├── semantics/        # immutable solver-independent facts
+├── palace/
+│   ├── preparation/  # distinct Electrostatic and Eigenmode input state owners
+│   ├── mesh/         # route build, Gmsh worker, summaries and offline quality
+│   │   └── quality/  # detached offline MSH reader and report
+│   ├── execution/    # manual handoff and host receipt recorder
+│   ├── results/      # custody-aware result and EPR reading
+│   └── presentation/ # Palace-specific reports and figures
+├── aedt/
+│   ├── eigenmode.py  # retained mutable high-level state facade
+│   ├── specs/        # common and HFSS/Q2D/Q3D request records and parsing
+│   ├── preparation/ # portable handoff, geometry and cohort membership
+│   ├── runtime/     # sole transaction and family-native owners
+│   ├── epr/         # EPR source geometry, fields/cache and workflow
+│   ├── results/     # strict readers and convergence observations
+│   ├── presentation/
+│   └── run.py       # supported CLI, delegates to transaction owner
+├── visualization/
+│   ├── loaders/
+│   ├── scene.py
+│   ├── preview.py
+│   └── rendering.py
+└── presentation/     # shared physics-neutral notebook formatting
+```
+
+Only create a leaf when it owns real implementation. Geometry planning and
+construction primitives have one shared lower-level owner; backend families
+consume that geometry without importing one another. `semantics` remains a
+stdlib-only immutable fact boundary. Palace and AEDT keep separate mutable
+simulation state, transaction lifetime, and physical result meaning. Shared
+presentation formats detached values; it does not own solver physics or
+calculation. Visualization reads solver-authoritative metadata and artifacts;
+it does not start a solve or determine run status.
+
+Publicness follows explicit package facades, declared submodule exports and
+documented contracts—not mere importability. The accepted v2 source keeps the
+high-level `scgsim.geometry`, `scgsim.palace`, `scgsim.aedt`, and
+`scgsim.visualization` entrypoints, and supplies an old-to-new submodule and
+symbol map in the [API migration reference](api-migration.qmd). Moved private
+implementations do not gain public status by relocation. There will be one
+current implementation, without old `scgsim.sgb` compatibility wrappers or
+revived Q3D input-v1/v2 paths. The formal `python -m scgsim.aedt.run` entrypoint
+remains supported; it is the AEDT transaction CLI, not a legacy wrapper.
+
+The geometry facade is source-facing: it owns component/occurrence and stack
+adaptation, `GeometryPlan` and detached snapshots, normalized input records,
+vacuum/curve declarations and input summaries. `scgsim.geometry.compiler` is
+the advanced builder, derived-record and stage-validation surface. Input-only
+`validate_geometry_input` is defined below the compiler in
+`scgsim.geometry.source.validation` and re-exported by the compiler facade. Shared
+loop, spatial and Entity primitives sit below both source and compiler, so
+source preparation does not depend on planning. The compiler/construction
+boundary retains native correspondence, stock CAD shell repair, curved
+arrangement and XAO/physical-group behavior. The full source-facing and
+advanced symbol paths, including direct model aliases and pipeline validators,
+are listed in the [API migration reference](api-migration.qmd).
+
+Palace keeps two distinct mutable preparation owners: Electrostatic and
+Eigenmode setup state, invalidation, and failure ordering remain specific to
+each facade. Mesh construction retains its dynamic Gmsh worker boundary and
+native observation; offline mesh-quality reading stays separate. Manual
+handoff and its standalone host recorder remain execution-owned, while strict
+result/EPR resolution remains offline and Palace reports remain
+solver-specific. AEDT likewise keeps its `EigenmodeSim` state facade, but one
+runtime transaction owns receipt transitions and the sole Desktop lifecycle;
+family runtimes own native prepare/solve/export/readback. EPR preparation and
+saved-field analysis stay in their EPR workflow, strict resolution does not
+execute a solver, and presentation consumes detached results. These are
+separate ownership boundaries, not shared solver base classes.
+
+Within Palace, `results.report_data` owns detached report records and snapshot
+readers; `presentation.reports` owns trust/physics views and figures. The
+package facade retains the existing public result and report names.
+
+The current v2 AEDT producer emits `scgsim.aedt.runtime-source.v13` with 61
+canonical declared module paths, including 41 AEDT modules. Its records carry
+`schema_version`, `stage`, `modules`, `content_sha256`, and
+`revision_observation`; module bytes and their digest are mandatory, while the
+truthful Git observation may be unavailable. V13 has no helper-hash map and
+does not claim exhaustive transitive-source coverage. Historical runtime-source
+v1–v12 continue to interpret their original module paths and identities; V13
+does not rewrite or reinterpret historical receipts.
+
+The flow below shows the accepted source structure. Geometry source preparation
+and compiler planning have separate owners, and neither backend defines source
+identity.
+
 ```{mermaid}
 flowchart LR
   PDK["PDK material, layer, fabrication, and host semantics"] --> PLAN["Notebook GeometryPlan"]
@@ -23,9 +134,10 @@ flowchart LR
   NOTEBOOK["Named occurrences and final Net → Entity map"] --> PLAN
   PLAN --> SNAPSHOT["Immutable source snapshot"]
   SNAPSHOT --> INPUT["Normalized GeometryBuildInput"]
-  INPUT --> SGB["SGB geometry and topology"]
+  INPUT --> SOURCE["scgsim.geometry source API"]
+  SOURCE --> COMPILER["scgsim.geometry.compiler"]
   INPUT --> AEDT["AEDT native geometry and bindings"]
-  SGB --> PALACE["Palace backend preparation"]
+  COMPILER --> PALACE["Palace backend preparation"]
   PALACE --> HANDOFF["Run-and-handoff contracts"]
   AEDT --> HANDOFF
   HANDOFF --> PROFILE["Selected machine profile"]
@@ -40,14 +152,17 @@ the Notebook's final `Net -> Entity` map, then prepares one immutable source
 snapshot for the normalized `GeometryBuildInput` boundary. The accepted 1.1.0
 source model includes authored curve declarations and explicit GDS
 reconstruction records in that snapshot while preserving Entity/Net ownership.
-Palace consumes curve intent through SGB; AEDT curve lowering is unsupported. The
+`scgsim.geometry` owns the source-facing plan and snapshot; the
+`scgsim.geometry.compiler` surface owns route planning and derived construction
+records. Palace consumes curve intent through this compiler; AEDT curve
+lowering is unsupported. The
 [GeometryPlan contract](geometry-sgb.qmd) owns exact curve identity and
 arrangement semantics. Native observations do not replace source identity or
 establish connectivity. AEDT binding evidence retains source members and
 coverage through native aggregation.
 
 On the Palace OCC path, stock shell AutoFix may replace native face tags while
-correcting shell orientation. SGB maps repaired faces to source surfaces by
+correcting shell orientation. Geometry construction maps repaired faces to source surfaces by
 complete native wire/edge correspondence and carries that mapping through
 export and backend construction. Source `SurfaceID`s remain authoritative;
 numeric Gmsh tags may change. In the observed Circle Route B construction,
@@ -65,14 +180,14 @@ owns the exact behavior and failure boundary.
 | Named occurrences and the final `Net -> Entity` assignment | Notebook `GeometryPlan` |
 | Immutable normalized source geometry | `GeometryPlan` and `GeometryBuildInput` |
 | Revision-bound material, interface, owner, side, and evidence facts | `scgsim.semantics` internal stdlib core |
-| Geometry names, topology, Route A/B surfaces | SGB |
+| Geometry names, topology, Route A/B surfaces | `scgsim.geometry.compiler` |
 | Palace and AEDT implementation | `scgsim.palace` and `scgsim.aedt` |
 | Native geometry bindings and derived aggregates | Backend adapters, with source members and coverage retained |
 | Solver-bound geometry inspection and preview evidence | `scgsim.visualization` |
 | Run identity, handoff, profiles, receipts | One common SCGSim contract |
 | Physical result meaning | Solver-specific, never flattened into a false common quantity |
 | Report navigation, provenance, cost presentation | SCGSim report/resolver surfaces |
-| Offline tetrahedral mesh diagnostics | `scgsim._mesh_quality`, exposed through `scgsim.palace` |
+| Offline tetrahedral mesh diagnostics | `scgsim.palace.mesh.quality`, exposed through `scgsim.palace` |
 | Public component-simulation notebook source | OrPen SC PDK |
 
 ## Internal semantic facts
@@ -83,7 +198,7 @@ serialization. Evidence patches retain the snapshot that classified them;
 missing/different revision identity fails rather than silently rebinding facts.
 Native tags remain opaque observations, not sources of guessed contact.
 
-SGB reuses one source/model projection while planning instead of deep-copying
+The geometry compiler reuses one source/model projection while planning instead of deep-copying
 stacks at every adjacency call. Domain ordering, sheet owners and aggregate
 physical-group owners remain separate projections. Contribution multiplicity
 is retained by the semantic ledger even when native geometry aggregates a
@@ -94,9 +209,9 @@ meaning; this page explains which modules implement it.
 AEDT's native construction does not consume Gmsh tags or construction plans.
 Its binding sidecar retains source members and coverage through native bodies,
 sheets, faces and calculator selections. The [AEDT contract](specs/aedt-runtime.qmd)
-owns exact side-selection and result rules. Private result presentation lives
-in backend `_presentation` modules, with public methods delegating to them;
-presentation adds no solver execution or shared physics schema.
+owns exact side-selection and result rules. Display-only helpers live under
+`scgsim.aedt.presentation`, with public methods delegating to them; presentation
+adds no solver execution or shared physics schema.
 
 ## Notebook and implementation boundaries
 
@@ -106,7 +221,8 @@ directly. SCGSim owns the reusable package APIs, not a duplicate notebook source
 The per-family supported calculations and current limits
 are maintained in the [Backend Support Matrix](backend-support.qmd).
 
-Palace mesh-quality inspection is an offline reader over the emitted MSH file.
+Palace mesh-quality inspection is an offline reader under
+`scgsim.palace.mesh.quality` over the emitted MSH file.
 It neither owns mesh construction nor starts a native backend. The reader binds
 one immutable parsed snapshot to the file bytes and leaves mesh acceptance and
 scientific convergence outside the report contract. See
@@ -139,11 +255,12 @@ not remove an older config file from disk, and this per-file behavior is not a
 whole-workflow transaction guarantee.
 
 The shared stack loader, non-negative-number validator, and stack-material-kind
-validator live in one private Palace input module. Electrostatic and eigenmode
-call that module directly while retaining their public methods, invalidation
-timing, shallow top-level stack copy, nested aliases, and problem-specific
-orchestration. The older problem-module names are private aliases, not duplicate
-implementations.
+validator live in `scgsim.palace.preparation.inputs`. Electrostatic and
+Eigenmode call that module directly while retaining their public methods,
+invalidation timing, shallow top-level stack copy, nested aliases, and
+problem-specific orchestration. The old direct problem-module paths were
+removed; their current defining modules are `preparation.electrostatic` and
+`preparation.eigenmode`.
 
 The accepted 1.1.0 Palace mesh behavior separates Gmsh geometric order from FEM
 order and keeps the Delaunay/HXT choice, thread settings and high-order
@@ -156,11 +273,13 @@ and summary additions are ACCEPTED.
 
 ## AEDT execution lifecycle
 
-`scgsim.aedt.run` is the sole command-line and AEDT Desktop transaction owner.
-It validates one prepared handoff before changing its receipt, imports PyAEDT
-only after that transition, opens and releases the owned Desktop, dispatches one
-solver family, and gives the original family failure precedence over a later
-release failure. Private HFSS, Q3D, and Q2D modules each own their native model
+`scgsim.aedt.run` remains the supported command-line entrypoint and delegates
+to `scgsim.aedt.runtime.transaction.main`, the owner of the AEDT transaction,
+receipt transitions, and Desktop lifecycle. The transaction validates one
+prepared handoff before changing its receipt, imports PyAEDT only after that
+transition, opens and releases the owned Desktop, dispatches one solver family,
+and gives the original family failure precedence over a later release failure.
+Private HFSS, Q3D, and Q2D modules each own their native model
 preparation, explicit solve, and export/readback stages. Families do not import
 the transaction module, and their narrow shared native helpers do not import a
 family or start a Desktop.
@@ -175,18 +294,18 @@ carrier and cannot reinterpret a caller spec or workspace.
 
 New preparation keeps the handoff and handoff-manifest schemas at V1 while both
 declare that the mutable run receipt uses `scgsim.aedt.receipt.v3`. The initial
-V3 receipt records a declared `runtime-source.v8` preparation-time SCGSim module
+V3 receipt records a declared `runtime-source.v13` preparation-time SCGSim module
 manifest and content digest. Before mutation, execution verifies the canonical
 manifest and binds the initial-receipt and prepared-manifest hashes. A canonical historical
 V1 `not_run` handoff with neither marker remains executable, but its resulting
 V3 receipt records preparation provenance as `legacy_v1_not_recorded`; it does
 not fabricate history.
 
-Every new completed V3 receipt records a separate declared `runtime-source.v8`
-execution-time module manifest and digest while retaining the former
-runtime-source keys. Preparation and execution identities are not required to
-match: their separation records what prepared and what actually executed the
-handoff. Historical completed V1
+Every new completed V3 receipt records a separate declared `runtime-source.v13`
+execution-time module manifest and digest. Its measured module bytes and
+content digest are mandatory; it has no helper-hash map. Preparation and
+execution identities are not required to match: their separation records what
+prepared and what actually executed the handoff. Historical completed V1
 receipts remain subject to their old resolution rules, except that a V1 receipt
 combined with either later-version expectation marker is rejected as an
 inconsistent cohort. Historical completed V2 receipts retain their existing
@@ -195,8 +314,9 @@ consistency contract is not source authenticity for an actor able
 to rewrite the entire unsigned artifact set.
 
 The [AEDT receipt/provenance contract](specs/aedt-runtime.qmd#receipt-cohorts-and-source-provenance)
-is the unique authority for the exact current V8 inventory and frozen historical
-reader evolution. The manifests bind their declared file sets, not every
+is the unique authority for the exact current V13 inventory and frozen
+historical reader evolution. V1–V12 retain their exact prior path assignments
+and reader interpretations; V13 binds its declared file set, not every
 transitive dependency. One pure, versioned initial-receipt codec owns historical
 V1/V2 and current V3 JSON member order, indentation and final newline; handoff
 writing and initial-receipt reconstruction use that codec. Historical receipt

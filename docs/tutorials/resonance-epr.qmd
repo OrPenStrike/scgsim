@@ -237,7 +237,7 @@ your preparation session. It defines `component`, `layer_stack`,
 same named GeometryPlan snapshot:
 
 ```python
-from scgsim.sgb import GeometryPlan
+from scgsim.geometry import GeometryPlan
 
 plan = GeometryPlan(
     component=component, root_id="chip", layer_stack=layer_stack,

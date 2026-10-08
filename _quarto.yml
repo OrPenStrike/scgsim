@@ -99,6 +99,7 @@ website:
             - docs/specs/palace-electrostatic-sgb.qmd
             - docs/specs/palace-eigenmode.qmd
             - docs/specs/aedt-runtime.qmd
+            - docs/api-migration.qmd
             - docs/execution-profiles.qmd
             - docs/geometry-preview.qmd
             - docs/mesh-quality.qmd

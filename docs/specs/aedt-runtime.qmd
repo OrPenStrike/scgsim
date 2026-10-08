@@ -2,16 +2,28 @@
 title: "AEDT Runtime Families"
 description: "AEDT family specifications, native readback, receipt cohorts and saved-field analysis."
 scgsim-kind: "contract"
-scgsim-status: "CONVERGING"
+scgsim-status: "ACCEPTED"
 scgsim-id: "docs/specs/aedt-runtime"
 ---
 
 The [course map](../examples.qmd) links every implemented AEDT family lesson. This page owns exact specifications, failure rules and historical reader contracts.
 
-::: {.callout-note title="Stabilized V1 contract"}
-HFSS Driven Terminal/Modal, HFSS Eigenmode, Q3D, and Q2D have live run and
-strict resolve evidence. These semantics are Human-accepted; stabilization and release delivery
-remain separate.
+::: {.callout-note title="Accepted implementation/API scope and evidence"}
+Human accepted the v2 implementation/API on 2026-10-09 at candidate
+`a932a173edb5c56ae14740ff5177190996255bdd` (tree
+`2745321736e53e2a4fe8d150f2e9d8bd176669db`). The semantic state is `ACCEPTED`,
+not `STABILIZED`. Six earlier full native-to-Resolve-to-Report observations
+belong to the earlier wheel SHA256
+`48963671d4f854c185b8f95f3cd8000960355a7c48550b9ccf19b739b49f8df3` and
+runtime-source v13 content digest
+`42b48f3d5946fadb1e93e92a1d3eb2a55f72ff00fc41aeccf71c0fded5919fa1`; those
+observations do not establish execution from the accepted candidate wheel.
+The accepted frozen `2.0.0.dev1` candidate wheel SHA256
+`e0ab1117aad4e5578ec98251732d33f6faa2fe7524dd70dcbc44891ed024824d` has a
+separate Q3D build-only/readback/save/release observation and geometry preview,
+without `Analyze`, solve, or C/G matrix export. The full Xmon Palace Eigenmode
+Route A, CircularPad Palace Eigenmode Route B, and HFSS Eigenmode/saved-field
+EPR/offline-loss endpoints remain deferred.
 :::
 
 ## One shared lifecycle
@@ -49,13 +61,11 @@ family: prepare native model -> solve explicit setup -> export/read back
 run.py: release Desktop -> write final receipt
 ```
 
-The normal command and diagnostic instrumentation use the same private family
-preparation functions. The EPR path adds `--execute --prepare-only`
-through this same transaction and native builder. It saves and reads back the
-prepared model, releases the owned Desktop, and reports
-`native_preparation_only` with `solver_invoked=false`; it is a native
-preparation, not a mock solve. The ordinary one-shot families keep their
-existing solve/export behavior and do not acquire a second Desktop owner.
+The normal command and preparation-only paths use the same private family
+preparation functions and transaction owner. The EPR path already supports
+`--execute --prepare-only`; the Q3D body-v3 candidate is described below. The
+usual `--execute` family behavior remains unchanged, and neither path creates a
+second Desktop owner.
 
 Each family binds its request once before native preparation. The private bound
 request fixes the absolute run workspace and a detached immutable spec payload;
@@ -82,11 +92,13 @@ New handoffs retain `scgsim.aedt.handoff.v1` and
 `scgsim.aedt.handoff-manifest.v1`. Both records add
 `expected_receipt_schema: scgsim.aedt.receipt.v3`, and the initial receipt is
 V3. It contains `prepared_runtime_source`: a deterministic, sorted
-`runtime-source.v12` manifest with the same declared module membership as V11,
-a content digest over that manifest, and `revision_observation`. The Git
-observation is either available with the actual 40-hex commit or explicitly
-unavailable; module hashes and the content digest are mandatory. A source
-checkout or fabricated revision is not required for byte-bound identity.
+`runtime-source.v13` manifest with 61 canonical declared module paths,
+including 41 AEDT modules. The record fields are `schema_version`, `stage`,
+`modules`, `content_sha256`, and `revision_observation`; there is no helper-hash
+map. Each declared module has measured bytes and the content digest binds that
+inventory. The Git observation is either available with the actual 40-hex
+commit or explicitly unavailable. A source checkout or fabricated revision
+is not required for byte-bound identity.
 
 Before writing `running`, execution accepts exactly one of three cohorts:
 
@@ -108,16 +120,15 @@ V2 handoff retains its prepared V2 provenance cohort when execution emits V3;
 it is not relabeled as new V3 preparation.
 
 Every new completed V3 receipt has a separate `runtime_source` manifest using
-`runtime-source.v12` and a content digest for the code that actually executed
-it, while retaining `run_py_sha256`, `spec_py_sha256`, convergence, and
-matrix-helper hash keys. Current V12 records Git provenance only through
-`revision_observation`; it does not require a top-level revision. `available`
-carries the actual 40-hex commit, and `unavailable` is truthful for an
-immutable wheel without VCS metadata. A Git revision is not required for
-current V12 byte identity. Missing or corrupt mandatory module/helper bytes,
-digest, schema, or cohort still fails closed. Preparation and execution
-hashes are evidence with different timing, not an equality requirement, and
-historical hashes are not compared to the currently installed package.
+`runtime-source.v13` and a content digest for the code that actually executed
+it. Declared module bytes and the digest are mandatory; V13 has no redundant
+helper-hash fields. `revision_observation` carries the actual 40-hex commit
+when available and records `unavailable` truthfully for an immutable wheel
+without VCS metadata. A Git revision is not required for current V13
+byte-bound identity. Missing or corrupt declared module bytes, digest, schema,
+or cohort still fails closed. Preparation and execution hashes are evidence
+with different timing, not an equality requirement, and historical hashes are
+not compared to the currently installed package.
 
 `resolve_results()` preserves the existing rules for genuine historical
 completed V1 and V2 receipts. A receipt relabeled below its preparation markers
@@ -138,14 +149,16 @@ enumeration rule. The V2–V11 inventories are frozen as well. V4 added
 `scgsim/aedt/__init__.py`, `scgsim/aedt/_q3d_geometry.py`,
 `scgsim/sgb/adapter.py`, and `scgsim/sgb/stack.py` to V8. V10 added the shared
 `scgsim/aedt/_handoff_cohort.py` to V9; V11 added
-`scgsim/aedt/_q3d_bodies.py` to V10. Current preparation and execution use V12
-with V11's exact module membership. V12 represents Git provenance with the
-truthful optional `revision_observation`; V1–V11 retain their frozen module
-membership and historical actual-stage revision-required validation. These
-manifests bind their exact declared file inventory, not an exhaustive
-transitive dependency attestation; for example, the current frozen inventory
-does not separately hash `scgsim/sgb/engine_gates.py`. They do not change the
-V3 receipt schema. A pure initial-receipt codec owns exact V1/V2/V3 member
+`scgsim/aedt/_q3d_bodies.py` to V10. V12 is frozen with V11's exact path
+membership. Current preparation and execution use V13 with a declared
+61-path inventory, including 41 AEDT modules, the five fields described above,
+and no helper-hash map. V13 uses the truthful optional
+`revision_observation`; V1–V12 retain their frozen path membership, field
+meanings, and version-specific reader rules. These manifests bind their
+declared file inventories, not an exhaustive transitive dependency
+attestation. The frozen V12 inventory, for example, does not separately hash
+`scgsim/sgb/engine_gates.py`. They do not change the V3 receipt schema. A pure
+initial-receipt codec owns exact V1/V2/V3 member
 order, two-space JSON indentation, and the trailing newline. V1 omits prepared
 provenance; V2 and V3 insert it between `source` and `outputs`. Reading
 historical evidence uses the declared frozen schema and does not compare
@@ -153,11 +166,12 @@ historical hashes with the installed package.
 
 Execution computes mandatory runtime-source provenance inside the receipt-bound
 failure transaction, before importing PyAEDT or constructing Desktop. Current
-V12 may record `revision_observation` as unavailable; that alone does not fail
-byte-bound identity or prevent execution. Missing or corrupt module/helper
+V13 may record `revision_observation` as unavailable; that alone does not fail
+byte-bound identity or prevent execution. Missing or corrupt declared module
 bytes, digest, schema, or cohort still yield a failed V3 receipt without a
-Desktop launch rather than escaping receipt finalization. Historical V1–V11
-actual-source validation continues to require its declared revision evidence.
+Desktop launch rather than escaping receipt finalization. V1–V12 retain their
+version-specific historical validation rules, including revision requirements
+where declared.
 
 The family save contract remains fail-closed. `save_project()` returning false
 before solve aborts before native execution; returning false after export aborts
@@ -382,9 +396,10 @@ controls described below retain their existing meanings.
 conductor bodies and every conductor body belongs to exactly one final Net.
 Substrate bodies use dielectric material and no Net. A C/G request may leave
 Signal terminals absent; an AC/RL request requires each Signal Net's complete
-source/sink object and side pair. The Q3D body and native-lowering behavior is
-**CONVERGING**; this contract does not report a completed native body import or
-solve.
+source/sink object and side pair. This body-v3 request and lowering behavior is
+part of the accepted v2 implementation/API. Its native observation is limited
+to the build-only operation below; no completed C/G solve or matrix result is
+claimed for the accepted candidate.
 
 `Q3dSpec.solve_ac_rl` is a strict boolean and defaults to `true`. The default
 therefore preserves the existing combined capacitance/conductance plus AC
@@ -472,13 +487,14 @@ For source-backed requests, `geometry_source` uses
 `scgsim.aedt.q3d-geometry-source.v3`. It binds the canonical GDS, detached
 stack and source trace by path and SHA-256 and records the declared bodies and
 their normalized source lineage. Source attachment files are relocated into
-the portable handoff. The source-backed candidate preserves complete outer
-and inner rings as one body footprint; its selected native construction is a
-covered outer sheet, subtraction of the hole regions, and a +Z sweep through
-the declared interval. This describes the current lowering candidate, not an
-observed native topology or successful solve. No triangulation, GDS-piece
-import, Net Unite, coordinate repair, or generic feature-size policy is part
-of this input-v3 contract. Source- and lowered-geometry width/sliver DRC is
+the portable handoff. The accepted source-backed representation preserves
+complete outer and inner rings as one body footprint; its native construction
+uses a covered outer sheet, subtraction of the hole regions, and a +Z sweep
+through the declared interval. The build-only observation below includes
+native body, holes, and Z readback plus a geometry preview for its tested case;
+it is not a general topology claim or a successful solve. No triangulation or
+GDS-piece import, Net Unite, coordinate repair, or generic feature-size policy
+is part of this input-v3 contract. Source- and lowered-geometry width/sliver DRC is
 deferred outside this package and is not a blocker to the body correction. No
 DRC coverage or Layout-validation claim is made, and no universal
 minimum-feature rule is applied.
@@ -493,9 +509,30 @@ and readback phase. The original exception stays primary in receipt `error`;
 phase detail retains body attribution, raw inventory and native IDs when
 readable, plus available native warning/error context. If a diagnostic read
 fails, its context is unavailable and cannot replace the primary failure.
-Warning presence alone does not reject a complete inventory. This source
-contract does not claim observed native geometry, validation, solver
-completion or returned matrices.
+Warning presence alone does not reject a complete inventory. The source
+contract defines body attribution and failure behavior; the scoped build-only
+observation below confirms readback for its tested candidate operation, not a
+solver completion or returned matrices.
+
+#### Q3D native build-only execution
+
+Q3D v3 has an opt-in native build-only operation using the existing
+`python -m scgsim.aedt.run --handoff <run-dir>/metadata/aedt_handoff_metadata.json --execute --prepare-only`
+entrypoint. It follows the same body construction, material and Net assignment,
+Region and setup creation/readback, project save, and owned Desktop release as
+the solver path. It does not call native `Analyze`, create a solver mesh, solve,
+or export matrices or convergence data. The receipt records
+`status="native_preparation_only"`, `solver_invoked=false`, and
+`resources.status="not_used_prepare_only"`; the saved AEDT project is the only
+native output. This execution consumes the one-shot handoff, so a later solve
+requires a newly prepared handoff. The strict `resolve_results` entrypoint
+continues to require a completed solver result; it does not resolve a
+preparation-only receipt as a result. On the accepted frozen candidate wheel,
+the observed build-only operation read back body and hole geometry, Z intervals,
+materials, all-Signal net assignments, Region and setup; it saved the project,
+released its owned Desktop, and had a separate top/isometric geometry preview.
+It did not call `Analyze`, solve, or export C/G matrices. Normal Q3D
+`--execute` behavior is unchanged.
 
 The v3 handoff keeps the five ordinary allowed paths in their established
 order. A source-backed cohort appends `geometry/source.gds`,
@@ -683,7 +720,7 @@ the old GDS authoring API remains available and unchanged.
 
 For AEDT EPR, the preparation order is source geometry, any requested Route A
 profile, declared junction partition into local PEC ends and the central RLC
-rectangle, then SGB surface planning and the contribution catalogue. Route A
+rectangle, then geometry-compiler surface planning and the contribution catalogue. Route A
 adapter-generated sheet footprints are refreshed from that final conductor
 geometry; caller-authored declarations remain present. The catalogue carries
 only physically planned ledger evidence, so generic declarations without a
@@ -703,7 +740,7 @@ flowchart TB
   INPUT["GeometryBuildInput<br/>normalized polygons, Entities, domains"]
   PALACE["Palace preparation<br/>existing port and junction model"]
   PARTITION["AEDT junction partition<br/>local PEC ends + central RLC rectangle"]
-  PLAN["SGB SurfacePlanRecord + contribution ledger<br/>surface patches and source evidence"]
+  PLAN["geometry compiler SurfacePlanRecord + contribution ledger<br/>surface patches and source evidence"]
   PREPARED["PreparedPlanarGeometry<br/>detached source, catalogue, bindings, hashes"]
   NATIVE["PreparedEprHfss<br/>native model, non-model sheets, expressions/cache"]
   RAW["Native raw integrals + evaluation evidence"]
@@ -723,7 +760,7 @@ flowchart TB
 |---|---|
 | `GeometryBuildInput` | Shared normalized source polygons, semantic Entities, solution domains, material and provenance facts. It is input to the backend planners. |
 | Final AEDT junction geometry | `prepare_planar_geometry_input()` partitions declared junction sheets before surface planning. Derived PEC ends and the central RLC rectangle retain source-owner and material lineage; original source input remains unchanged. |
-| `SurfacePlanRecord` and `surface_contribution_ledger` | SGB plans physical surface patches and records owner, interface, side, effective domain, source and aggregation evidence. The ledger is the authority for numeric surface catalog entries; a semantic declaration alone adds none. |
+| `SurfacePlanRecord` and `surface_contribution_ledger` | The geometry compiler plans physical surface patches and records owner, interface, side, effective domain, source and aggregation evidence. The ledger is the authority for numeric surface catalog entries; a semantic declaration alone adds none. |
 | `PreparedPlanarGeometry` | Detached pre-native AEDT request containing source/junction facts, catalog, selected contributions, surface bindings, and model/source digests. It does not claim that native geometry or a solve was validated. |
 | `PreparedEprHfss` | In-process owner of the active AEDT application handle, prepared geometry and setup records, non-model sheets, expressions/cache, and timing/readback state. It is not a portable result or evidence of a completed solve. |
 | `EprResult` | Detached per-mode or per-mode/pass rows. `raw_integrals` and `raw_integral_evidence` retain observed quantities and evaluation context; the existing combination step computes domain, surface, and junction values with the model-wide normalization. |
@@ -994,7 +1031,7 @@ recorded geometry.
 #### Catalogue-driven handoff
 
 The inputs below are the real `GeometryBuildInput` and prepared-stack mapping
-from the existing in-tree SGB workflow, including the selected route and its
+from the existing in-tree geometry workflow, including the selected route and its
 material, vacuum-region, and (for Route A) thin-film provenance. See
 [Geometry and SGB Route A/B](../geometry-sgb.qmd#shared-source-facts-for-aedt).
 The first call requests no analysis contributions and exposes the horizontal
@@ -1009,8 +1046,8 @@ existing Route A profile
 (`substrate_face` or `metal_gap_equivalent`) explicitly as `route_a_profile`;
 no profile is defaulted.
 
-The catalogue is built from the SGB planner's physical surface-contribution
-ledger. A generic declaration without physical ledger evidence remains
+The catalogue is built from the geometry compiler's physical
+surface-contribution ledger. A generic declaration without physical ledger evidence remains
 semantic metadata and does not add a numeric EPR contribution. For Route B
 finite-shell top and bottom patches, the mask and analysis-sheet plane use the
 same resolved source Z: `z_max_um` (or `z_min_um + thickness_um`) for the top,
@@ -1033,7 +1070,7 @@ from scgsim.aedt import (
     prepare_hfss_eigenmode_from_geometry,
     prepare_planar_geometry_input,
 )
-from scgsim.sgb import GeometryBuildInput
+from scgsim.geometry import GeometryBuildInput
 
 
 def prepare_surface_epr_handoff(
@@ -1119,7 +1156,7 @@ def prepare_surface_epr_handoff(
     return geometry, request, handoff
 ```
 
-Call this local example with the existing SGB outputs, the exact IDs printed
+Call this local example with the existing geometry outputs, the exact IDs printed
 from the catalogue, the same declared `PlanarJunction` objects for both
 geometry preparations, PDK film properties, the selected
 `EigenmodeRunControl`, the existing Route A profile passed as

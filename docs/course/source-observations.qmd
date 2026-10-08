@@ -14,7 +14,7 @@ vacuum envelope is easier to understand at the source boundary.
 
 ```python
 from IPython.display import display
-from scgsim.sgb import summarize_geometry_input
+from scgsim.geometry import summarize_geometry_input
 
 summary = summarize_geometry_input(
     snapshot.geometry_input, prepared_stack=snapshot.stack
@@ -43,7 +43,7 @@ reconstructing the coupon in a live GDSFactory cache.
 ```python
 import json
 from pathlib import Path
-from scgsim.sgb import build_gds_stack_geometry_input
+from scgsim.geometry import build_gds_stack_geometry_input
 
 source_dir = Path(".artifacts/study-source")
 source_dir.mkdir(parents=True, exist_ok=True)

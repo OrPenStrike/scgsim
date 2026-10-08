@@ -48,7 +48,7 @@ import orpen_sc_pdk
 from orpen_sc_pdk import LAYER_STACK, get_material_records
 from orpen_sc_pdk.helpers.assembly import place_flip_chip_ground_short_bumps
 from orpen_sc_pdk.tech import OUTER_VACUUM_THICKNESS_UM
-from scgsim.sgb import GeometryPlan
+from scgsim.geometry import GeometryPlan
 
 orpen_sc_pdk.activate()
 gf.clear_cache()

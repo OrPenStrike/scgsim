@@ -248,7 +248,7 @@ keeps finite metal geometry. The pad is excited, Ground is fixed, and the
 exterior remains natural rather than a grounded enclosure.
 
 ```python
-from scgsim.sgb import GeometryPlan
+from scgsim.geometry import GeometryPlan
 from scgsim.palace import ElectrostaticSim
 
 plan = GeometryPlan(

@@ -13,7 +13,7 @@ from IPython.display import display
 from IPython.utils.capture import capture_output
 
 from scgsim.palace import inspect_run_trustworthiness
-from scgsim.palace.resolve import _read_csv_table, _validate_table
+from scgsim.palace.results.resolve import _read_csv_table, _validate_table
 
 
 _EIG_HEADER = (

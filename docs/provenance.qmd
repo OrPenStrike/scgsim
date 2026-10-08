@@ -12,7 +12,7 @@ A run or report binds, as applicable:
 
 - SCGSim distribution version and measured runtime-source module/content identity;
 - SCGSim Git revision observation when available, and backend revision;
-- SGB source and geometry/topology identity;
+- Geometry source, compiler and topology identity;
 - solver and schema version;
 - machine profile and run receipt;
 - config, mesh, handoff, result, and report artifact identities;
@@ -23,6 +23,24 @@ notes. A distribution version alone does not identify the runtime code bytes,
 layout, settings or native result of a particular study. The current
 runtime-source manifest and content digest identify the module bytes used for
 execution; a Git revision is recorded only when truthfully available.
+
+Human accepted the SCGSim 2.0 implementation/API on 2026-10-09 at source
+candidate `a932a173edb5c56ae14740ff5177190996255bdd` (tree
+`2745321736e53e2a4fe8d150f2e9d8bd176669db`). The candidate used
+`2.0.0.dev1` metadata; the current develop prerelease metadata advances to
+`2.0.0rc1` without rewriting earlier artifact identity. Runtime-source v13
+records its declared module bytes and content digest as measured, while its
+Git revision observation may truthfully be unavailable; it does not attest
+the complete transitive dependency tree. The six earlier full native
+observations and the later build-only Q3D observation remain bound to their
+separate wheel/runtime identities described in the
+[API migration evidence](api-migration.qmd#accepted-scope-and-evidence-status).
+
+The current Palace geometry authority is `scgsim.geometry.compiler`. Palace
+continues to serialize the established `scgsim_sgb` field, whose current value
+names that authority. The field name does not request an import from the former
+package. Historical receipt values and runtime-source inventories retain the
+module identities they recorded and are not rewritten to the current paths.
 
 ## Publication boundary
 

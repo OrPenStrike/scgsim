@@ -88,3 +88,17 @@ Read [problem choices](docs/concepts/problems.qmd),
 [boundaries and numerical interpretation](docs/concepts/model-and-numerics.qmd).
 Exact interfaces belong to the Contract reference. Repository contributors can
 use the separate [maintainer guide](docs/ownership.qmd).
+
+## Python API
+
+Source geometry uses `scgsim.geometry`; advanced compilation uses
+`scgsim.geometry.compiler`:
+
+```python
+from scgsim.geometry import GeometryPlan, VacuumRegionSpec
+from scgsim.geometry.compiler import SemanticGeometryBuilder
+from scgsim.palace import ElectrostaticSim, EigenmodeSim
+```
+
+Palace and AEDT keep their separate solver APIs. For existing projects, see the
+[API migration reference](docs/api-migration.qmd).

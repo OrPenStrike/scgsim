@@ -211,8 +211,10 @@ Prefer `set_plan(snapshot)` for the shared source-first course. The standalone
 `set_geometry(component)` / `set_stack(stack)` / explicit envelope APIs remain
 supported on a fresh unbound simulation; do not mix them with a plan snapshot.
 The [GeometryPlan contract](../geometry-sgb.qmd) owns occurrence/Nets, generated
-vacuum, contact and Route-A/B semantics. In-tree `scgsim.sgb` is the current
-geometry authority; external SGB and gsim are derivation history only.
+vacuum, contact and Route-A/B semantics. The current source-facing geometry
+authority is `scgsim.geometry`; route planning and derived construction are
+owned by `scgsim.geometry.compiler`. External SGB and gsim are derivation
+history only.
 
 The [Electrostatic lesson](../course/palace-electrostatic.qmd) teaches exact Net
 terminals/ground and the real mesh/config sequence. The separate
@@ -258,8 +260,8 @@ schema-v1 read support for sealed historical runs, but only schema v2 carries
 and can claim the physical-versus-exterior Ground split.
 
 External gsim and historical SGB revisions are derivation evidence only. The
-runtime authority is the in-tree `scgsim.sgb` Core and the current
-`scgsim.palace` implementation.
+runtime geometry authority is the in-tree `scgsim.geometry.compiler` and the
+current `scgsim.palace` implementation.
 
 See [Geometry and SGB Route A/B](../geometry-sgb.qmd),
 [Headless Geometry Preview](../geometry-preview.qmd),

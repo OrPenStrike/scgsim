@@ -126,7 +126,7 @@ def _generate_knowledge() -> None:
             kind="project",
             title=readme_title,
             summary=project["description"],
-            status="STABILIZED",
+            status="CONVERGING",
         )
     )
 

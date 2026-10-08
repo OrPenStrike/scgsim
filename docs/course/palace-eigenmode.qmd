@@ -58,7 +58,7 @@ For Eigenmode it also reports a topological Nédélec degree-of-freedom estimate
 for the configured FEM order. This estimate is not the solver's actual DOF
 count; changing FEM order refreshes it without regenerating the mesh.
 
-Meshing lowers source geometry through in-tree SGB to a conformal model and
+Meshing lowers source geometry through `scgsim.geometry.compiler` to a conformal model and
 actual Gmsh mesh. The finite-metal PEC shell excludes conductor interiors from
 Palace solution domains. Config writing uses the resulting exact mesh/index
 identity. Changing source geometry or mesh controls invalidates derived state;

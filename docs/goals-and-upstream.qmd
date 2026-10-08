@@ -19,7 +19,7 @@ See [supported calculations](backend-support.qmd) and the [tutorials](examples.q
 The accepted 1.1.0 source model includes explicit authored curve boundaries
 and caller-selected GDS boundary reconstruction. Curves remain bound to source
 Entities and placed occurrences; polygon-only inputs retain their polygon
-boundaries. Palace consumes curve intent through the in-tree SGB path, while
+boundaries. Palace consumes curve intent through `scgsim.geometry.compiler`, while
 AEDT curve lowering remains unsupported. The accepted Palace behavior also
 separates Gmsh geometric order from finite-element order and exposes
 mesh-generation records through a detached summary. The
@@ -41,8 +41,9 @@ The study author chooses physical assumptions and interprets the quantities.
 
 Historical starting-source identities are listed in the
 [repository maintainer record](https://github.com/OrPenStrike/scgsim/blob/develop/MAINTAINING.md#implementation-and-project-references).
-They describe origin, not additional supported APIs. The runtime uses
-`scgsim.sgb`, not a direct external SGB consumer.
+They describe origin, not additional supported APIs. Current source geometry
+uses `scgsim.geometry` and its compiler surface, not a direct external SGB
+consumer.
 
 ## Contributor references {#v1-acceptance-and-delivery}
 

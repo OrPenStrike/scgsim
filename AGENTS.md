@@ -14,6 +14,7 @@ Read first: `README.md`, `docs/goals-and-upstream.qmd`,
 Then read the smallest relevant technical contract before editing.
 
 External gsim and historical SGB are derivation provenance only: new SCGSim
-work must use the in-tree `scgsim.sgb` authority, never a direct external
-consumer or fallback. OrPen SC PDK owns public component-simulation notebooks;
+work must use the in-tree `scgsim.geometry` source APIs and the advanced
+`scgsim.geometry.compiler` APIs, never a direct external consumer or fallback.
+OrPen SC PDK owns public component-simulation notebooks;
 SCGSim owns no duplicate notebook source.

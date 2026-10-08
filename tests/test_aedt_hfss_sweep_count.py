@@ -14,12 +14,16 @@ from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 
-from scgsim.aedt import _hfss_runtime as runtime
-from scgsim.aedt._hfss_convergence import read_hfss_convergence
-from scgsim.aedt.resolve import _validate_readback
-from scgsim.aedt.spec import (
-    FrequencySweepSpec, HfssDrivenSpec, HfssRunControl, LayerImport,
-    ModalPort, ObjectBinding, PdkMaterial, TerminalPort,
+from scgsim.aedt.runtime.families import hfss as runtime
+from scgsim.aedt.results.convergence.hfss import read_hfss_convergence
+from scgsim.aedt.results.resolve import _validate_readback
+from scgsim.aedt.specs.hfss import FrequencySweepSpec, HfssDrivenSpec, HfssRunControl
+from scgsim.aedt.specs.common import (
+    LayerImport,
+    ModalPort,
+    ObjectBinding,
+    PdkMaterial,
+    TerminalPort,
 )
 
 

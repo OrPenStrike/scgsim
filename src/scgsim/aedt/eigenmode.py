@@ -1,4 +1,4 @@
-"""One mutable Eigenmode preparation facade over the existing AEDT handoff."""
+"""One mutable Eigenmode preparation facade over the AEDT owners."""
 
 from __future__ import annotations
 
@@ -9,17 +9,18 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Literal
 
-from scgsim.semantics.epr import film_assumptions
-from scgsim.sgb import (
+from scgsim.geometry import (
     GeometryBuildInput,
     GeometryPlanSnapshot,
     InputSummary,
     build_gds_stack_geometry_input,
     summarize_geometry_input,
 )
+from scgsim.semantics.epr import film_assumptions
 
-from ._epr_geometry import prepare_planar_geometry_input, validate_geometry_workers
-from ._epr_models import (
+from .epr.analysis import reanalyze_epr
+from .epr.geometry import prepare_planar_geometry_input, validate_geometry_workers
+from .epr.models import (
     EprAnalysisRequest,
     EprResult,
     ExpressionCacheConvergence,
@@ -27,10 +28,12 @@ from ._epr_models import (
     PreparedPlanarGeometry,
     SurfaceEprSpec,
 )
-from ._epr_results import reanalyze_epr, show_epr
-from .handoff import HandoffPlan, prepare_hfss_eigenmode_from_geometry
-from .resolve import ResolvedRun, resolve_results
-from .spec import AedtResources, EigenmodeRunControl
+from .preparation.handoff import HandoffPlan
+from .preparation.geometry import prepare_hfss_eigenmode_from_geometry
+from .presentation.epr import show_epr
+from .results.resolve import ResolvedRun, resolve_results
+from .specs.common import AedtResources
+from .specs.hfss import EigenmodeRunControl
 
 
 @dataclass
@@ -55,7 +58,9 @@ class EigenmodeSim:
     expression_convergence: ExpressionCacheConvergence | None = None
     prepared_geometry: PreparedPlanarGeometry | None = field(default=None, init=False)
     handoff_plan: HandoffPlan | None = field(default=None, init=False)
-    _plan_snapshot: GeometryPlanSnapshot | None = field(default=None, init=False, repr=False)
+    _plan_snapshot: GeometryPlanSnapshot | None = field(
+        default=None, init=False, repr=False
+    )
 
     def _invalidate_model(self) -> None:
         self.prepared_geometry = None
@@ -63,7 +68,9 @@ class EigenmodeSim:
 
     def set_geometry(self, component: Any | GeometryBuildInput) -> None:
         if self._plan_snapshot is not None:
-            raise ValueError("GeometryPlan owns the paired source; use set_plan(new_snapshot) or a new Sim")
+            raise ValueError(
+                "GeometryPlan owns the paired source; use set_plan(new_snapshot) or a new Sim"
+            )
         if isinstance(component, GeometryBuildInput):
             self.build_input, self.component = component, None
         elif callable(getattr(component, "write_gds", None)):
@@ -90,7 +97,9 @@ class EigenmodeSim:
 
     def set_stack(self, stack: Mapping[str, Any] | str | Path) -> None:
         if self._plan_snapshot is not None:
-            raise ValueError("GeometryPlan owns the paired source; use set_plan(new_snapshot) or a new Sim")
+            raise ValueError(
+                "GeometryPlan owns the paired source; use set_plan(new_snapshot) or a new Sim"
+            )
         if isinstance(stack, Mapping):
             payload = dict(stack)
         elif isinstance(stack, (str, Path)):
@@ -116,16 +125,25 @@ class EigenmodeSim:
             or isinstance(layers, (str, bytes))
             or not isinstance(metadata, Mapping)
         ):
-            raise TypeError("stack materials, solution_regions, and metadata must be mappings; layers must be a sequence")
+            raise TypeError(
+                "stack materials, solution_regions, and metadata must be mappings; layers must be a sequence"
+            )
         if any(not isinstance(item, Mapping) for item in materials.values()):
             raise TypeError("stack materials must contain mappings")
         if any(not isinstance(item, Mapping) for item in regions.values()):
             raise TypeError("stack solution_regions must contain mappings")
         if any(not isinstance(item, Mapping) for item in layers):
             raise TypeError("stack layers must contain mappings")
-        if any(record.get("material_id", semantic_id) not in materials for semantic_id, record in regions.items()):
+        if any(
+            record.get("material_id", semantic_id) not in materials
+            for semantic_id, record in regions.items()
+        ):
             raise ValueError("stack solution region references an unknown material")
-        if any(record.get("material_id") not in materials for record in layers if "material_id" in record):
+        if any(
+            record.get("material_id") not in materials
+            for record in layers
+            if "material_id" in record
+        ):
             raise ValueError("stack layer references an unknown material")
         detached = json.loads(json.dumps(payload, allow_nan=False))
         self.stack = detached
@@ -276,7 +294,10 @@ class EigenmodeSim:
         """Show configured normalized inputs without writing GDS or preparing HFSS."""
 
         if self._plan_snapshot is not None:
-            source, stack = self._plan_snapshot.geometry_input, self._plan_snapshot.stack
+            source, stack = (
+                self._plan_snapshot.geometry_input,
+                self._plan_snapshot.stack,
+            )
         elif self.build_input is not None and self.stack is not None:
             source, stack = self.build_input, self.stack
         else:
@@ -295,7 +316,9 @@ class EigenmodeSim:
             "run_control": (
                 None if self.run_control is None else self.run_control.to_payload()
             ),
-            "resources": None if self.resources is None else self.resources.to_payload(),
+            "resources": None
+            if self.resources is None
+            else self.resources.to_payload(),
             "geometry_workers": self.geometry_workers,
             "surface_contributions": [
                 item.to_payload() for item in self.surface_contributions
@@ -314,7 +337,9 @@ class EigenmodeSim:
         return InputSummary(data)
 
     def prepare_handoff(self) -> HandoffPlan:
-        source_stack = self._plan_snapshot.stack if self._plan_snapshot is not None else self.stack
+        source_stack = (
+            self._plan_snapshot.stack if self._plan_snapshot is not None else self.stack
+        )
         if (
             source_stack is None
             or self.output_dir is None
@@ -370,7 +395,10 @@ class EigenmodeSim:
 
     @staticmethod
     def show_epr(
-        result: EprResult, *, mode: int | None = None, native_pass: int | None = None,
+        result: EprResult,
+        *,
+        mode: int | None = None,
+        native_pass: int | None = None,
         theme: str = "light",
     ) -> Any:
         return show_epr(result, mode=mode, native_pass=native_pass, theme=theme)

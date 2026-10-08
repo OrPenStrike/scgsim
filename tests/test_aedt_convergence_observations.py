@@ -9,13 +9,25 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scgsim.aedt._hfss_convergence import read_hfss_convergence
-from scgsim.aedt._q2d_convergence import read_q2d_convergence, read_q3d_convergence
-from scgsim.aedt.spec import (
-    EigenmodeRunControl, FrequencySweepSpec, HfssDrivenSpec, HfssEigenmodeSpec,
-    HfssRunControl, LayerImport, MatrixRunControl, ModalPort, ObjectBinding,
-    PdkMaterial, Q2dConductorSpec, Q2dRectangleSpec, Q2dSpec, Q3dNetSpec, Q3dSpec,
+from scgsim.aedt.results.convergence.hfss import read_hfss_convergence
+from scgsim.aedt.results.convergence.q2d import read_q2d_convergence
+from scgsim.aedt.results.convergence.q3d import read_q3d_convergence
+from scgsim.aedt.specs.hfss import (
+    EigenmodeRunControl,
+    FrequencySweepSpec,
+    HfssDrivenSpec,
+    HfssEigenmodeSpec,
+    HfssRunControl,
 )
+from scgsim.aedt.specs.common import (
+    LayerImport,
+    MatrixRunControl,
+    ModalPort,
+    ObjectBinding,
+    PdkMaterial,
+)
+from scgsim.aedt.specs.q2d import Q2dConductorSpec, Q2dRectangleSpec, Q2dSpec
+from scgsim.aedt.specs.q3d import Q3dNetSpec, Q3dSpec
 
 
 def _gds_inputs():
