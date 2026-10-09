@@ -130,7 +130,7 @@ def _is_route_a_sheet_interface(
     interface: InterfacePlanRecord,
 ) -> bool:
     return (
-        route == "A"
+        route in {"A", "_effective"}
         and interface.metadata.get("recognition_rule")
         == "route_a_surface_sheet_polygon"
     )

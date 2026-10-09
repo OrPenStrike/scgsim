@@ -53,6 +53,8 @@ def _solution_regions(
             "metadata": {
                 "pdk_level_id": semantic_id,
                 "pdk_semantic_authority": "layer_stack",
+                **({"aedt_modeling": copy.deepcopy(info["aedt_modeling"])}
+                   if "aedt_modeling" in info else {}),
             },
         }
     return result
@@ -171,6 +173,8 @@ def _semantic_layer_records(
                 "pdk_semantic_authority": "layer_stack",
                 "component_semantic_authority": "component.info",
                 **component_metadata,
+                **({"aedt_modeling": copy.deepcopy(level_info["aedt_modeling"])}
+                   if "aedt_modeling" in level_info else {}),
                 **(
                     {"host_reference_origin": "generated_background"}
                     if auto_host

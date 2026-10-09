@@ -10,20 +10,44 @@ Continue from [CPW inputs](aedt-inputs.qmd) in the same session. Ordinary HFSS
 Eigenmode has no driven excitation ports. It searches for the requested modes
 using an explicit adaptive setup; it does not create a source-first Surface-EPR
 catalogue or saved-field analysis request merely because its name is Eigenmode.
+The inputs page's equal-Z M1 mapping is a historical sheet request. This
+current Thin Film example adds the CPW source owner's explicit `NB_FILM`
+interval and lower contact side, preserving the existing sheet plane without
+claiming that c997 embeds this declaration.
 
 ```python
 from pathlib import Path
 from scgsim.aedt import (
-    EigenmodeRunControl, HfssEigenmodeSpec, prepare_handoff,
+    EigenmodeRunControl, HfssEigenmodeSpec, LayerImport, PhysicalLayerSpec,
+    prepare_handoff,
+)
+
+metal_thickness_um = 0.2
+physical_layer_id = "orpen_sc_pdk:CpwFiniteGround:NB_FILM"
+physical_layer = PhysicalLayerSpec(
+    physical_layer_id=physical_layer_id,
+    kind="stack_film",
+    z_min_um=0.0,
+    z_max_um=metal_thickness_um,
+    contact_side="lower",
+)
+layer_imports = (
+    LayerImport(
+        1, 0, "D0_TOP_M1", 0.0, metal_thickness_um,
+        physical_layer_id=physical_layer_id,
+    ),
+    LayerImport(201, 0, "D0_SUBSTRATE", -500.0, 0.0),
 )
 
 spec = HfssEigenmodeSpec(
+    modeling="thin_film",
     gds_path=source_gds,
     project_name="public_cpw_eigenmode",
     design_name="CpwFiniteGroundEigenmode",
     materials=materials,
     vacuum_material_id="vacuum",
     layer_imports=layer_imports,
+    physical_layers=(physical_layer,),
     object_bindings=object_bindings,
     run_control=EigenmodeRunControl(
         setup_name="Setup1", minimum_frequency_ghz=3.0, num_modes=2,

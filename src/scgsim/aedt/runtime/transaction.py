@@ -32,6 +32,7 @@ from scgsim.aedt.preparation.cohort import (
     canonical_handoff_paths,
     canonical_member_paths,
     validate_geometry_source,
+    validate_hfss_import_source,
 )
 
 from scgsim.aedt.results.epr import seal_saved_solution
@@ -44,7 +45,7 @@ from scgsim.aedt.results.provenance import (
     validate_runtime_source,
 )
 
-from scgsim.aedt.runtime.families.hfss import run_hfss
+from scgsim.aedt.runtime.families.hfss import prepare_hfss, run_hfss
 
 from scgsim.aedt.runtime.families.q2d import run_q2d
 
@@ -61,7 +62,7 @@ from scgsim.aedt.runtime.native.common import (
 
 from scgsim.aedt.specs.common import AedtResources, LOCKED_PYAEDT, REQUIRED_AEDT_VERSION
 
-from scgsim.aedt.specs.hfss import HfssEprAnalysisSpec, HfssEprSpec
+from scgsim.aedt.specs.hfss import HfssDrivenSpec, HfssEigenmodeSpec, HfssEprAnalysisSpec, HfssEprSpec
 
 from scgsim.aedt.specs.parse import AedtSpec, parse_aedt_spec
 
@@ -88,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--prepare-only",
         action="store_true",
-        help="Create and verify an HFSS EPR or Q3D native model without solving it",
+        help="Create and verify an HFSS 3D or Q3D native model without solving it",
     )
     parser.add_argument(
         "--analyze-epr",
@@ -152,7 +153,10 @@ def _execute(
     ):
         raise RuntimeError("prepared spec must use geometry/design.gds")
     valid_flags = (
-        (isinstance(spec, (HfssEprSpec, Q3dSpec)) and not analyze_epr)
+        (
+            isinstance(spec, (HfssEprSpec, HfssDrivenSpec, HfssEigenmodeSpec, Q3dSpec))
+            and not analyze_epr
+        )
         or (isinstance(spec, HfssEprAnalysisSpec) and analyze_epr and not prepare_only)
         or (
             not isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec))
@@ -201,7 +205,7 @@ def _execute(
             else "not_started"
         ),
     }
-    if isinstance(spec, Q3dSpec) and prepare_only:
+    if prepare_only:
         receipt["solver_invoked"] = False
     write_json(receipt_path, receipt)
 
@@ -289,6 +293,28 @@ def _execute(
                 resources,
                 receipt["resources"],
             )
+        elif prepare_only:
+            prepared = prepare_hfss(
+                owned_application_constructor(Hfss, desktop), run_dir, spec
+            )
+            result = {
+                "outputs": {},
+                "connected": {
+                    "aedt_version": prepared.app.desktop_class.aedt_version_id,
+                    "pyaedt_version": pyaedt_version(),
+                },
+                "project": prepared.project_path.relative_to(
+                    prepared.request.workspace
+                ).as_posix(),
+                "materials": prepared.materials,
+                "region": prepared.region,
+                "mesh": prepared.mesh,
+                "ports": prepared.ports,
+                "setup": prepared.setup,
+                "save": {"ok": True},
+                "solver_invoked": False,
+            }
+            status = "native_preparation_only"
         else:
             result = _solve(
                 owned_application_constructor(Hfss, desktop),
@@ -337,18 +363,26 @@ def _execute(
             receipt["error"] = failure
         if isinstance(spec, HfssEprSpec):
             receipt["solver_invoked"] = epr_solver_attempted
-        if result is not None and isinstance(spec, Q3dSpec) and prepare_only:
-            try:
-                if not _record_epr_project_after_release(run_dir, receipt, result):
-                    raise RuntimeError(
-                        "Q3D project is missing after owned Desktop release"
-                    )
-            except Exception as exc:  # noqa: BLE001 -- retain the primary native failure.
-                receipt["save"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-                status = "failed"
-                if failure is None:
-                    failure = receipt["save"]["error"]
-                    receipt["error"] = failure
+        if (
+            result is not None
+            and isinstance(spec, (Q3dSpec, HfssDrivenSpec, HfssEigenmodeSpec))
+            and prepare_only
+        ):
+            if receipt.get("release") == {"ok": True}:
+                try:
+                    if not _record_epr_project_after_release(run_dir, receipt, result):
+                        raise RuntimeError(
+                            "prepared project is missing after owned Desktop release"
+                        )
+                except Exception as exc:  # noqa: BLE001 -- retain the primary native failure.
+                    receipt["save"] = {
+                        "ok": False,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                    status = "failed"
+                    if failure is None:
+                        failure = receipt["save"]["error"]
+                        receipt["error"] = failure
         elif result is not None and isinstance(
             spec, (HfssEprAnalysisSpec, HfssEprSpec)
         ):
@@ -416,19 +450,24 @@ def _record_result_before_release(
 ) -> None:
     """Copy returned facts before releasing the one transaction-owned Desktop."""
 
-    if isinstance(spec, Q3dSpec) and result.get("solver_invoked") is False:
+    if (
+        isinstance(spec, (Q3dSpec, HfssDrivenSpec, HfssEigenmodeSpec))
+        and result.get("solver_invoked") is False
+    ):
         for name in (
             "outputs",
             "connected",
             "project",
             "materials",
             "region",
-            "nets",
             "setup",
             "save",
             "solver_invoked",
         ):
             receipt[name] = result[name]
+        for name in ("nets", "ports", "mesh"):
+            if name in result:
+                receipt[name] = result[name]
     elif isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec)):
         receipt["outputs"] = result["outputs"]
         receipt["connected"] = result["connected"]
@@ -718,6 +757,7 @@ def _verify_prepared_cohort(
         hashes[relative] = item["sha256"]
     if isinstance(spec, Q3dSpec):
         validate_geometry_source(run_dir, receipt["source"], spec)
+    validate_hfss_import_source(run_dir, read_json(run_dir / "aedt_spec.json"), spec)
     return {
         "preparation_cohort": preparation_cohort,
         "prepared_runtime_source": prepared_source,

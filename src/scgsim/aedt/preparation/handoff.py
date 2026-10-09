@@ -70,6 +70,8 @@ def prepare_handoff(
     """Bind every required input into a new portable run directory."""
     if resources is not None and not isinstance(resources, AedtResources):
         raise TypeError("resources must be AedtResources or None")
+    if not isinstance(spec, Q2dSpec) and getattr(spec, "modeling", None) is None:
+        raise ValueError("new AEDT 3D execution requires explicit modeling")
     source_gds: Path | None = None
     preflight: dict[str, int | set[tuple[int, int]]] | None = None
     if not isinstance(spec, (Q2dSpec, Q3dSpec)):
@@ -96,7 +98,9 @@ def prepare_handoff(
         geometry_dir = run_dir / "geometry"
         geometry_dir.mkdir()
         copied_gds = geometry_dir / "design.gds"
-        shutil.copy2(source_gds, copied_gds)
+        original_gds = geometry_dir / "source.gds"
+        shutil.copy2(source_gds, original_gds)
+        _write_import_gds(source_gds, copied_gds, spec.effective_layer_imports)
 
     script_path = run_dir / "run_aedt.sh"
     spec_path = run_dir / "aedt_spec.json"
@@ -112,6 +116,13 @@ def prepare_handoff(
     payload = spec.to_payload()
     if not isinstance(spec, (Q2dSpec, Q3dSpec)):
         payload["gds"]["path"] = "geometry/design.gds"
+        payload["gds"]["source_path"] = "geometry/source.gds"
+        payload["gds"]["source_sha256"] = file_sha256(original_gds)
+        payload["gds"]["import_layer_map"] = [
+            {key: item[key] for key in ("layer", "datatype", "layer_name",
+                                       "physical_layer_id", "native_import_layer")}
+            for item in spec.effective_layer_imports
+        ]
     if isinstance(spec, Q3dSpec) and spec.geometry_source is not None:
         geometry_source = detached(spec.geometry_source)
         for key, destination in GEOMETRY_SOURCE_PATHS.items():
@@ -410,16 +421,6 @@ def _gds_preflight(path: Path) -> dict[str, int | set[tuple[int, int]]]:
     }
     if not pairs:
         raise ValueError("GDS preflight found no polygons")
-    by_layer: dict[int, set[int]] = {}
-    for layer, datatype in pairs:
-        by_layer.setdefault(layer, set()).add(datatype)
-    ambiguous = {
-        layer: sorted(values) for layer, values in by_layer.items() if len(values) != 1
-    }
-    if ambiguous:
-        raise ValueError(
-            f"PyAEDT 1.3 import_gds_3d cannot select GDS datatypes: {ambiguous!r}"
-        )
     return {
         "polygon_layer_datatypes": {
             (int(layer), int(datatype)) for layer, datatype in pairs
@@ -493,3 +494,21 @@ def _member(path: Path, root: Path) -> dict[str, str | int]:
 
 def _utc_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _write_import_gds(source: Path, destination: Path, effective_imports) -> None:
+    """Lower explicit source pairs for numeric-layer-only native GDS import.
+
+    Cells, references, database unit and polygon vertices stay source-authored;
+    only the derived file's import selectors change. The source file is retained.
+    """
+    import gdstk
+
+    library = gdstk.read_gds(source)
+    selectors = {(item["layer"], item["datatype"]): item["native_import_layer"]
+                 for item in effective_imports}
+    for cell in library.cells:
+        for polygon in cell.polygons:
+            polygon.layer = selectors[(polygon.layer, polygon.datatype)]
+            polygon.datatype = 0
+    library.write_gds(destination, max_points=0)

@@ -5,13 +5,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from numbers import Number
 
 from pathlib import Path
 
 from typing import Any, Literal
+
+from scgsim.aedt.specs.modeling import (
+    Modeling, PhysicalLayerSpec, _request_modeling, _modeling_payload, _effective_record, _source_record_payload, _verify_effective_records,
+)
 
 from scgsim.aedt.specs.common import (
     EIGENMODE_SCHEMA_VERSION,
@@ -123,6 +127,7 @@ class HfssDrivenSpec:
 
     mode: HfssDrivenMode
     gds_path: Path | str
+    modeling: Modeling
     project_name: str
     design_name: str
     materials: Mapping[str, PdkMaterial]
@@ -132,11 +137,14 @@ class HfssDrivenSpec:
     ports: tuple[TerminalPort, TerminalPort] | tuple[ModalPort, ModalPort]
     run_control: HfssRunControl
     region_padding_um: tuple[float, float, float, float, float, float]
+    physical_layers: tuple[PhysicalLayerSpec, ...] = ()
+    _historical_modeling: bool = False
     length_mesh: LengthMeshSpec | None = None
     aedt_version: str = REQUIRED_AEDT_VERSION
     pyaedt_version: str = LOCKED_PYAEDT
 
     def __post_init__(self) -> None:
+        _request_modeling(self)
         if self.mode not in {"terminal", "modal"}:
             raise ValueError("mode must be terminal or modal")
         grounds, signals = _normalize_gds_spec(self)
@@ -186,8 +194,38 @@ class HfssDrivenSpec:
                 "length mesh targets must be declared ground/signal objects"
             )
 
+    @property
+    def effective_ports(self) -> tuple[TerminalPort, ...] | tuple[ModalPort, ...]:
+        """Native port coordinates derived from immutable authored endpoints."""
+        mapping = _request_modeling(self)
+        if mapping is None:
+            raise ValueError("historical requests have no new execution modeling map")
+        return tuple(
+            replace(port, integration_line_um=tuple(
+                (x, y, mapping.map_z(z)) for x, y, z in port.integration_line_um
+            )) if isinstance(port, ModalPort) else port
+            for port in self.ports
+        )
+
+    @property
+    def effective_layer_imports(self) -> tuple[dict[str, Any], ...]:
+        mapping = _request_modeling(self)
+        if mapping is None:
+            raise ValueError("historical requests have no new execution modeling map")
+        pairs = {pair: index + 1 for index, pair in enumerate(sorted(
+            (item.layer, item.datatype) for item in self.layer_imports))}
+        domain_pairs = {(item.layer, item.datatype) for item in self.layer_imports
+                        if any(binding.role == "substrate"
+                               and binding.layer == item.layer
+                               and binding.object_name.startswith(f"{item.layer_name}_")
+                               for binding in self.object_bindings)}
+        return tuple({**_effective_record(item, mapping, retained_domain=(item.layer, item.datatype) in domain_pairs),
+                      "native_import_layer": pairs[(item.layer, item.datatype)]}
+                     for item in self.layer_imports)
+
     def to_payload(self) -> dict[str, Any]:
         return {
+            **_modeling_payload(self),
             "schema_version": SCHEMA_VERSION,
             "mode": self.mode,
             "aedt": {"requested_version": self.aedt_version},
@@ -202,9 +240,12 @@ class HfssDrivenSpec:
             },
             "vacuum_material_id": self.vacuum_material_id,
             "gds": {"path": self.gds_path.as_posix()},
-            "layer_imports": [item.to_payload() for item in self.layer_imports],
+            "layer_imports": (list(self.effective_layer_imports) if self.modeling is not None
+                              else [item.to_payload() for item in self.layer_imports]),
             "object_bindings": [item.to_payload() for item in self.object_bindings],
             "ports": [item.to_payload() for item in self.ports],
+            **({"effective_ports": [item.to_payload() for item in self.effective_ports]}
+               if self.modeling is not None else {}),
             "run_control": self.run_control.to_payload(),
             "region_padding_um": list(self.region_padding_um),
             "length_mesh": self.length_mesh.to_payload() if self.length_mesh else None,
@@ -212,7 +253,7 @@ class HfssDrivenSpec:
 
     @classmethod
     def from_payload(
-        cls, payload: dict[str, Any], *, base_dir: Path | None = None
+        cls, payload: dict[str, Any], *, base_dir: Path | None = None, allow_historical_modeling: bool = False
     ) -> HfssDrivenSpec:
         if payload.get("schema_version") != SCHEMA_VERSION:
             raise ValueError("unsupported HFSS driven schema")
@@ -221,7 +262,7 @@ class HfssDrivenSpec:
         if base_dir is not None and not gds.is_absolute():
             gds = base_dir / gds
         imports = tuple(
-            LayerImport(**item) for item in payload.get("layer_imports", ())
+            LayerImport(**_source_record_payload(item)) for item in payload.get("layer_imports", ())
         )
         bindings = tuple(
             ObjectBinding(**item) for item in payload.get("object_bindings", ())
@@ -241,7 +282,10 @@ class HfssDrivenSpec:
         run = payload.get("run_control", {})
         sweep = FrequencySweepSpec(**run.get("sweep", {}))
         length = payload.get("length_mesh")
-        return cls(
+        result = cls(
+            modeling=payload.get("modeling"),
+            physical_layers=tuple(PhysicalLayerSpec(**item) for item in payload.get("physical_layers", ())),
+            _historical_modeling=allow_historical_modeling and "modeling" not in payload,
             mode=mode,  # type: ignore[arg-type]
             gds_path=gds,
             project_name=_project_name_from_payload(
@@ -277,6 +321,11 @@ class HfssDrivenSpec:
                 payload.get("pyaedt", {}).get("locked_version"), "pyaedt.locked_version"
             ),
         )
+        if result.modeling is not None:
+            _verify_effective_records(payload["layer_imports"], result.effective_layer_imports)
+            _verify_effective_records(payload["effective_ports"],
+                                      [item.to_payload() for item in result.effective_ports])
+        return result
 
 
 @dataclass(frozen=True)
@@ -331,6 +380,7 @@ class HfssEigenmodeSpec:
     """One port-free HFSS Eigenmode model with explicit native setup controls."""
 
     gds_path: Path | str
+    modeling: Modeling
     project_name: str
     design_name: str
     materials: Mapping[str, PdkMaterial]
@@ -339,6 +389,8 @@ class HfssEigenmodeSpec:
     object_bindings: tuple[ObjectBinding, ...]
     run_control: EigenmodeRunControl
     region_padding_um: tuple[float, float, float, float, float, float]
+    physical_layers: tuple[PhysicalLayerSpec, ...] = ()
+    _historical_modeling: bool = False
     length_mesh: LengthMeshSpec | None = None
     aedt_version: str = REQUIRED_AEDT_VERSION
     pyaedt_version: str = LOCKED_PYAEDT
@@ -348,6 +400,7 @@ class HfssEigenmodeSpec:
         return "eigenmode"
 
     def __post_init__(self) -> None:
+        _request_modeling(self)
         grounds, signals = _normalize_gds_spec(self)
         object.__setattr__(self, "region_padding_um", _padding(self.region_padding_um))
         if self.length_mesh is not None and (
@@ -358,8 +411,25 @@ class HfssEigenmodeSpec:
                 "length mesh targets must be declared ground/signal objects"
             )
 
+    @property
+    def effective_layer_imports(self) -> tuple[dict[str, Any], ...]:
+        mapping = _request_modeling(self)
+        if mapping is None:
+            raise ValueError("historical requests have no new execution modeling map")
+        pairs = {pair: index + 1 for index, pair in enumerate(sorted(
+            (item.layer, item.datatype) for item in self.layer_imports))}
+        domain_pairs = {(item.layer, item.datatype) for item in self.layer_imports
+                        if any(binding.role == "substrate"
+                               and binding.layer == item.layer
+                               and binding.object_name.startswith(f"{item.layer_name}_")
+                               for binding in self.object_bindings)}
+        return tuple({**_effective_record(item, mapping, retained_domain=(item.layer, item.datatype) in domain_pairs),
+                      "native_import_layer": pairs[(item.layer, item.datatype)]}
+                     for item in self.layer_imports)
+
     def to_payload(self) -> dict[str, Any]:
         return {
+            **_modeling_payload(self),
             "schema_version": EIGENMODE_SCHEMA_VERSION,
             "mode": self.mode,
             "aedt": {"requested_version": self.aedt_version},
@@ -374,7 +444,8 @@ class HfssEigenmodeSpec:
             },
             "vacuum_material_id": self.vacuum_material_id,
             "gds": {"path": self.gds_path.as_posix()},
-            "layer_imports": [item.to_payload() for item in self.layer_imports],
+            "layer_imports": (list(self.effective_layer_imports) if self.modeling is not None
+                              else [item.to_payload() for item in self.layer_imports]),
             "object_bindings": [item.to_payload() for item in self.object_bindings],
             "run_control": self.run_control.to_payload(),
             "region_padding_um": list(self.region_padding_um),
@@ -383,7 +454,7 @@ class HfssEigenmodeSpec:
 
     @classmethod
     def from_payload(
-        cls, payload: dict[str, Any], *, base_dir: Path | None = None
+        cls, payload: dict[str, Any], *, base_dir: Path | None = None, allow_historical_modeling: bool = False
     ) -> HfssEigenmodeSpec:
         if payload.get("schema_version") != EIGENMODE_SCHEMA_VERSION:
             raise ValueError("unsupported HFSS Eigenmode schema")
@@ -401,7 +472,10 @@ class HfssEigenmodeSpec:
         if not isinstance(run, dict):
             raise TypeError("run_control must be a JSON object")
         length = payload.get("length_mesh")
-        return cls(
+        result = cls(
+            modeling=payload.get("modeling"),
+            physical_layers=tuple(PhysicalLayerSpec(**item) for item in payload.get("physical_layers", ())),
+            _historical_modeling=allow_historical_modeling and "modeling" not in payload,
             gds_path=gds,
             project_name=_project_name_from_payload(
                 payload.get("project", {}).get("name")
@@ -414,7 +488,7 @@ class HfssEigenmodeSpec:
                 payload.get("vacuum_material_id"), "vacuum_material_id"
             ),
             layer_imports=tuple(
-                LayerImport(**item) for item in payload.get("layer_imports", ())
+                LayerImport(**_source_record_payload(item)) for item in payload.get("layer_imports", ())
             ),
             object_bindings=tuple(
                 ObjectBinding(**item) for item in payload.get("object_bindings", ())
@@ -430,16 +504,22 @@ class HfssEigenmodeSpec:
                 payload.get("pyaedt", {}).get("locked_version"), "pyaedt.locked_version"
             ),
         )
+        if result.modeling is not None:
+            _verify_effective_records(payload["layer_imports"], result.effective_layer_imports)
+        return result
 
 
 @dataclass(frozen=True)
 class HfssEprSpec:
     """One body-first HFSS Eigenmode request with embedded planar authority."""
 
+    modeling: Modeling
     project_name: str
     design_name: str
     geometry: Any
     run_control: EigenmodeRunControl
+    physical_layers: tuple[PhysicalLayerSpec, ...] = ()
+    _historical_modeling: bool = False
     epr_request: Any = None
     aedt_version: str = REQUIRED_AEDT_VERSION
     pyaedt_version: str = LOCKED_PYAEDT
@@ -451,6 +531,7 @@ class HfssEprSpec:
         return "eigenmode"
 
     def __post_init__(self) -> None:
+        _request_modeling(self)
         from scgsim.aedt.epr.models import (
             EprAnalysisRequest,
             ExpressionCacheConvergence,
@@ -467,6 +548,14 @@ class HfssEprSpec:
         object.__setattr__(self, "design_name", _text(self.design_name, "design_name"))
         if not isinstance(self.geometry, PreparedPlanarGeometry):
             raise TypeError("geometry must be PreparedPlanarGeometry")
+        if not self._historical_modeling and self.geometry.modeling != self.modeling:
+            raise ValueError("request and prepared geometry modeling differ")
+        if not self._historical_modeling:
+            declared = tuple(PhysicalLayerSpec(**item) for item in self.geometry.source["modeling"]["source_layers"])
+            if self.physical_layers and {item.physical_layer_id: item for item in self.physical_layers} != {item.physical_layer_id: item for item in declared}:
+                raise ValueError("request physical layers differ from prepared source map")
+            object.__setattr__(self, "physical_layers", declared)
+
         if not isinstance(self.run_control, EigenmodeRunControl):
             raise TypeError("run_control must be EigenmodeRunControl")
         if self.epr_request is not None and not isinstance(
@@ -494,6 +583,7 @@ class HfssEprSpec:
             )
         )
         return {
+            **_modeling_payload(self),
             "schema_version": schema_version,
             "mode": self.mode,
             "aedt": {"requested_version": self.aedt_version},
@@ -515,7 +605,7 @@ class HfssEprSpec:
         }
 
     @classmethod
-    def from_payload(cls, payload: dict[str, Any]) -> HfssEprSpec:
+    def from_payload(cls, payload: dict[str, Any], *, allow_historical_modeling: bool = False) -> HfssEprSpec:
         from scgsim.aedt.epr.models import (
             EprAnalysisRequest,
             ExpressionCacheConvergence,
@@ -539,6 +629,8 @@ class HfssEprSpec:
             "geometry",
             "epr",
         }
+        if "modeling" in payload:
+            expected.update({"modeling", "physical_layers"})
         if schema == EPR_EIGENMODE_SCHEMA_VERSION_V3:
             expected.add("expression_convergence")
             if payload.get("expression_convergence") is None:
@@ -554,6 +646,9 @@ class HfssEprSpec:
         if not isinstance(project, dict):
             raise TypeError("project must be a JSON object")
         return cls(
+            modeling=payload.get("modeling"),
+            physical_layers=tuple(PhysicalLayerSpec(**item) for item in payload.get("physical_layers", ())),
+            _historical_modeling=allow_historical_modeling and "modeling" not in payload,
             project_name=_project_name_from_payload(project.get("name")),
             design_name=_text(project.get("design"), "project.design"),
             geometry=PreparedPlanarGeometry.from_payload(payload.get("geometry")),

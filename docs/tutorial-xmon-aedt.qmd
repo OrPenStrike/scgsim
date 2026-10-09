@@ -17,7 +17,9 @@ layout-geometry and PyAEDT Python dependencies; it does not install AEDT or
 provide a license. The target run host needs AEDT 2024.2, PyAEDT 1.3.0, and an
 appropriate AEDT license. Use the matching SCGSim source revision listed in
 [Examples](examples.qmd). Quarto does not open AEDT, create native geometry, or
-solve this model.
+solve this model. The snapshot retains its source physical stack; this page
+selects `modeling="solid"` for AEDT. A Route A/B choice describes upstream
+geometry construction and is not an AEDT preparation argument.
 
 ## Configure surface and junction EPR
 
@@ -85,7 +87,7 @@ from scgsim.aedt import SurfaceEprSpec, prepare_planar_geometry_input
 prepared = prepare_planar_geometry_input(
     snapshot.geometry_input,
     prepared_stack=snapshot.stack,
-    route="B",
+    modeling="solid",
     junctions=(junction,),
 )
 catalogue = prepared.contribution_catalog
@@ -163,13 +165,12 @@ if native_region is not None:
 bulk_domain_ids = tuple(sorted(bulk_ids))
 print(bulk_domain_ids)
 
-sim = EigenmodeSim()
+sim = EigenmodeSim(modeling="solid")
 sim.set_plan(snapshot)
 sim.set_output_dir(aedt_run_dir)
 sim.set_eigenmode(
     project_name="public_xmon_route_b_eigenmode",
     design_name="Xmon",
-    route="B",
     run_control=EigenmodeRunControl(
         setup_name="Setup1",
         minimum_frequency_ghz=3.0,

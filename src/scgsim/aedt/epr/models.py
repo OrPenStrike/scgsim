@@ -492,7 +492,7 @@ class ExpressionCacheConvergence:
 class PreparedPlanarGeometry:
     """Detached source request before any native AEDT object exists."""
 
-    route: Route
+    modeling: str | None
     source: Mapping[str, Any]
     junctions: tuple[PlanarJunction, ...]
     contribution_catalog: tuple[Mapping[str, Any], ...]
@@ -500,11 +500,16 @@ class PreparedPlanarGeometry:
     surface_bindings: tuple[Mapping[str, Any], ...]
     model_sha256: str
     source_sha256: str
+    route: Route | None = None
+    _historical_modeling: bool = field(default=False, repr=False, compare=False)
     _legacy_payload: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        if self.route not in {"A", "B"}:
-            raise ValueError("EPR supports only planar Route A or Route B")
+        if self._historical_modeling:
+            if self.route not in {"A", "B"} or self.modeling is not None:
+                raise ValueError("historical planar geometry requires its original route basis")
+        elif self.modeling not in {"solid", "thin_film"} or self.route is not None:
+            raise ValueError("new planar geometry requires explicit modeling without route alias")
         junctions = tuple(self.junctions)
         catalog = tuple(self.contribution_catalog)
         contributions = tuple(self.contributions)
@@ -531,7 +536,7 @@ class PreparedPlanarGeometry:
         )
         expected_model = canonical_sha256(
             {
-                "route": self.route,
+                **self._modeling_identity,
                 "source": source,
                 "junctions": [item.to_payload() for item in self.junctions],
             }
@@ -540,7 +545,7 @@ class PreparedPlanarGeometry:
             raise ValueError("prepared planar model digest is inconsistent")
         expected = canonical_sha256(
             {
-                "route": self.route,
+                **self._modeling_identity,
                 "source": source,
                 "junctions": [item.to_payload() for item in self.junctions],
                 "contribution_catalog": self.contribution_catalog,
@@ -551,6 +556,11 @@ class PreparedPlanarGeometry:
         if self.source_sha256 != expected:
             raise ValueError("prepared planar source digest is inconsistent")
 
+    @property
+    def _modeling_identity(self) -> dict[str, Any]:
+        return ({"route": self.route} if self._historical_modeling
+                else {"modeling": self.modeling})
+
     def to_payload(self) -> dict[str, Any]:
         return {
             "schema_version": (
@@ -558,7 +568,7 @@ class PreparedPlanarGeometry:
                 if self._legacy_payload
                 else "scgsim.aedt.epr-planar.v2"
             ),
-            "route": self.route,
+            **self._modeling_identity,
             "source": detached(self.source),
             "junctions": [item.to_payload() for item in self.junctions],
             "contribution_catalog": [
@@ -585,6 +595,9 @@ class PreparedPlanarGeometry:
             "model_sha256",
             "source_sha256",
         }
+        if "modeling" in value:
+            expected.remove("route")
+            expected.add("modeling")
         schema = value.get("schema_version")
         if set(value) != expected or schema not in {
             "scgsim.aedt.epr-planar.v1",
@@ -592,7 +605,9 @@ class PreparedPlanarGeometry:
         }:
             raise ValueError("prepared planar payload is not canonical")
         return cls(
-            route=value["route"],
+            modeling=value.get("modeling"),
+            route=value.get("route"),
+            _historical_modeling="modeling" not in value,
             source=value["source"],
             junctions=tuple(
                 PlanarJunction.from_payload(item) for item in value["junctions"]

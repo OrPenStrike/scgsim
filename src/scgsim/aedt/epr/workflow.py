@@ -151,6 +151,10 @@ def prepare_epr_hfss(
     bound = request.parse()
     if not isinstance(bound, HfssEprSpec):
         raise TypeError("bound EPR request did not retain its schema")
+    if bound.modeling not in {"solid", "thin_film"} or (
+        bound.geometry.modeling != bound.modeling
+    ):
+        raise ValueError("new EPR HFSS preparation requires explicit modeling")
     project_path = request.workspace / f"{bound.project_name}.aedt"
     timings: dict[str, Any] = {}
     preparation_started = time.perf_counter()

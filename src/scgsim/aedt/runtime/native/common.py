@@ -365,10 +365,18 @@ def _resolve_native_assignment(
 
 
 def import_and_bind(hfss: Any, spec: HfssSpec) -> list[dict[str, Any]]:
-    """Import and bind the HFSS GDS pieces owned by its numeric-layer schema."""
+    """Import HFSS geometry using the spec's source-to-effective layer records."""
+    effective_layers = {
+        (int(item["layer"]), int(item["datatype"])): item
+        for item in spec.effective_layer_imports
+    }
     mapping = {
-        item.layer: [
-            (item.z_min_um, item.z_max_um - item.z_min_um),
+        effective_layers[(item.layer, item.datatype)]["native_import_layer"]: [
+            (
+                effective_layers[(item.layer, item.datatype)]["effective_z_min_um"],
+                effective_layers[(item.layer, item.datatype)]["effective_z_max_um"]
+                - effective_layers[(item.layer, item.datatype)]["effective_z_min_um"],
+            ),
             item.layer_name,
         ]
         for item in spec.layer_imports
@@ -382,7 +390,6 @@ def import_and_bind(hfss: Any, spec: HfssSpec) -> list[dict[str, Any]]:
         raise RuntimeError(
             f"import object readback mismatch: expected {sorted(expected)!r}, got {sorted(actual)!r}"
         )
-    layers = {item.layer: item for item in spec.layer_imports}
     materials = dict(spec.materials)
     pec_sheets: list[str] = []
     pec_solids: list[str] = []
@@ -391,37 +398,66 @@ def import_and_bind(hfss: Any, spec: HfssSpec) -> list[dict[str, Any]]:
         obj = hfss.modeler.get_object_from_name(binding.object_name)
         if obj is None:
             raise RuntimeError(f"missing declared object {binding.object_name!r}")
-        layer = layers[binding.layer]
         # AEDT's Geometry3D ``Group`` remains ``Model`` after GDS import. PyAEDT
         # 1.3.0 exposes the explicit destination layer through the imported
-        # object-name prefix, so bind every declared object to that exact prefix.
+        # object-name prefix, so bind every declared object to its exact source
+        # layer/datatype record rather than the importer-only numeric layer.
         destination_name = obj.name
         matches = [
-            candidate
+            (candidate, effective_layers[(candidate.layer, candidate.datatype)])
             for candidate in spec.layer_imports
             if destination_name.startswith(f"{candidate.layer_name}_")
         ]
-        if matches != [layer]:
+        if len(matches) != 1:
             raise RuntimeError(
-                f"import destination-layer mismatch for {binding.object_name!r}: "
-                f"expected exactly {layer.layer_name!r}, got "
-                f"{[candidate.layer_name for candidate in matches]!r}"
+                f"import destination-pair mismatch for {binding.object_name!r}: "
+                f"got {[candidate.layer_name for candidate, _ in matches]!r}"
+            )
+        layer, effective = matches[0]
+        if binding.layer != layer.layer:
+            raise RuntimeError(
+                f"import source-layer mismatch for {binding.object_name!r}: "
+                f"expected {binding.layer!r}, got {layer.layer!r}"
+            )
+        representation = effective["representation"]
+        expected_native_type = {"solid": "Solid", "sheet": "Sheet"}.get(
+            representation
+        )
+        if expected_native_type is None:
+            raise ValueError(
+                f"unsupported HFSS conductor representation: {representation!r}"
             )
         material = materials[binding.material_id]
+        native = _native_object_evidence(hfss, binding.object_name)
+        if native["native_object_type"] != expected_native_type:
+            raise RuntimeError(
+                f"HFSS imported representation mismatch for {binding.object_name!r}: "
+                f"expected {expected_native_type!r} from the declared effective layer, "
+                f"got {native['native_object_type']!r}"
+            )
         record: dict[str, Any] = {
             "object_name": binding.object_name,
             "layer": binding.layer,
+            "datatype": layer.datatype,
             "layer_name": layer.layer_name,
+            "native_import_layer": effective["native_import_layer"],
             "role": binding.role,
             "material_id": material.material_id,
             "kind": material.kind,
             "is_superconducting": material.is_superconducting,
             "requested_library_name": material.library_name,
             "native_destination_layer_prefix": layer.layer_name,
+            "physical_layer_id": effective["physical_layer_id"],
+            "representation": representation,
+            "source_z_min_um": effective["z_min_um"],
+            "source_z_max_um": effective["z_max_um"],
+            "physical_thickness_um": effective["physical_thickness_um"],
+            "effective_z_min_um": effective["effective_z_min_um"],
+            "effective_z_max_um": effective["effective_z_max_um"],
+            **native,
         }
         if material.is_superconducting:
-            native = _native_object_evidence(hfss, binding.object_name)
-            if native["native_object_type"] == "Solid":
+            if representation == "solid":
                 pec_solids.append(binding.object_name)
                 obj.material_name = "pec"
                 obj.solve_inside = False
@@ -458,7 +494,7 @@ def import_and_bind(hfss: Any, spec: HfssSpec) -> list[dict[str, Any]]:
                     "native_material_name": observed_material,
                     "native_solve_inside": False,
                 }
-            elif native["native_object_type"] == "Sheet":
+            elif representation == "sheet":
                 pec_sheets.append(binding.object_name)
                 record["requested_pec_boundary"] = "SCGSimPEC"
                 record["hfss_pec_binding"] = {
@@ -469,11 +505,6 @@ def import_and_bind(hfss: Any, spec: HfssSpec) -> list[dict[str, Any]]:
                     **native,
                     "implementation": "perfect_e_sheet",
                 }
-            else:
-                raise RuntimeError(
-                    f"unsupported HFSS PEC native object type for "
-                    f"{binding.object_name!r}: {native['native_object_type']!r}"
-                )
         else:
             existing = hfss.materials.exists_material(material.library_name)
             if not existing:

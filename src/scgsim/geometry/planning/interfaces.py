@@ -540,7 +540,7 @@ def plan_mm_contact_records(
                     "conductor_component_id": component_id,
                     "net_id": component_net,
                     "equipotential_id": component_equipotential,
-                    "hidden_solver_contact": route in {"A", "B"},
+                    "hidden_solver_contact": route in {"A", "B", "_effective"},
                 },
             )
         )
@@ -822,7 +822,7 @@ def _contact_patch_metadata(
     interface_kinds: tuple[str, ...] = ("MM",)
     export_surface = route != "B"
 
-    if route == "A":
+    if route in {"A", "_effective"}:
         sheet = next(
             (
                 entity
@@ -856,6 +856,7 @@ def _contact_patch_metadata(
 
     contact_policy = {
         "A": "sheet_contact_patch",
+        "_effective": "sheet_contact_patch",
         "B": "hidden_cutout_contact",
         "C": "retained_material_contact",
     }[route]

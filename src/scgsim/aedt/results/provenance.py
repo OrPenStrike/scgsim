@@ -54,7 +54,9 @@ SOURCE_SCHEMA_V12 = "scgsim.aedt.runtime-source.v12"
 
 SOURCE_SCHEMA_V13 = "scgsim.aedt.runtime-source.v13"
 
-SOURCE_SCHEMA = SOURCE_SCHEMA_V13
+SOURCE_SCHEMA_V15 = "scgsim.aedt.runtime-source.v15"
+
+SOURCE_SCHEMA = SOURCE_SCHEMA_V15
 
 _RUNTIME_SOURCE_V1_MODULES = (
     "_hfss_convergence.py",
@@ -223,6 +225,15 @@ _RUNTIME_SOURCE_V13_PATHS = (
 )
 
 
+_RUNTIME_SOURCE_V15_PATHS = tuple(sorted((*_RUNTIME_SOURCE_V13_PATHS,
+    "src/scgsim/aedt/specs/modeling.py",
+    "src/scgsim/geometry/_primitives/geometry_refs.py",
+    "src/scgsim/geometry/_primitives/surface_records.py",
+    "src/scgsim/geometry/planning/evidence.py",
+    "src/scgsim/geometry/source/intents.py",
+    "src/scgsim/geometry/source/_normalization.py",
+)))
+
 def _module_manifest() -> list[dict[str, str]]:
     source_root = Path(__file__).resolve().parents[3]
     return [
@@ -231,7 +242,7 @@ def _module_manifest() -> list[dict[str, str]]:
             "path": path,
             "sha256": file_sha256(source_root / path.removeprefix("src/")),
         }
-        for path in _RUNTIME_SOURCE_V13_PATHS
+        for path in _RUNTIME_SOURCE_V15_PATHS
     ]
 
 
@@ -335,6 +346,7 @@ def validate_runtime_source(
         SOURCE_SCHEMA_V11: _RUNTIME_SOURCE_V11_PATHS,
         SOURCE_SCHEMA_V12: _RUNTIME_SOURCE_V12_PATHS,
         SOURCE_SCHEMA_V13: _RUNTIME_SOURCE_V13_PATHS,
+        SOURCE_SCHEMA_V15: _RUNTIME_SOURCE_V15_PATHS,
     }.get(schema)
     if (
         expected_paths is None
@@ -356,7 +368,7 @@ def validate_runtime_source(
             or item["module"] != expected_module
             or not isinstance(item["path"], str)
             or not item["path"].startswith(
-                "src/scgsim/" if schema == SOURCE_SCHEMA_V13 else "scgsim/"
+                "src/scgsim/" if schema in {SOURCE_SCHEMA_V13, SOURCE_SCHEMA_V15} else "scgsim/"
             )
             or Path(item["path"]).is_absolute()
             or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])
@@ -377,7 +389,7 @@ def validate_runtime_source(
         }:
             raise RuntimeError("prepared runtime source provenance is invalid")
         _validate_revision_observation(value.get("revision_observation"), stage=stage)
-    elif schema == SOURCE_SCHEMA_V13:
+    elif schema in {SOURCE_SCHEMA_V13, SOURCE_SCHEMA_V15}:
         if set(value) != {
             "schema_version",
             "stage",

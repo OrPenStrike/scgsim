@@ -11,12 +11,13 @@ from scgsim.geometry.models.input import LayoutPolygonSpec, SemanticEntitySpec
 def _route_a_sheet_interfaces(
     entities: Sequence[SemanticEntitySpec],
     polygons: Sequence[LayoutPolygonSpec],
+    *, representation_key: str = "A",
 ) -> dict[str, tuple[Mapping[str, Any], ...]]:
     """Build automatic Route A sheet intents from current source polygons."""
     polygons_by_id = {polygon.polygon_id: polygon for polygon in polygons}
     interfaces: list[Mapping[str, Any]] = []
     for entity in entities:
-        if entity.route_representations.get("A") != "surface_sheet":
+        if entity.route_representations.get(representation_key) != "surface_sheet":
             continue
         for index, polygon_id in enumerate(entity.polygon_ids):
             polygon = polygons_by_id.get(polygon_id)
@@ -35,7 +36,7 @@ def _route_a_sheet_interfaces(
                     "recognition_rule": "route_a_surface_sheet_polygon",
                     "intent_origin": "generated_route_a_surface_sheet",
                     "source_polygon_ids": (polygon_id,),
-                    "valid_routes": ("A",),
+                    "valid_routes": (representation_key,),
                     "plane": {"axis": "z", "value_um": z_um},
                     "outer_loop": polygon.exterior,
                     "hole_loops": polygon.holes,

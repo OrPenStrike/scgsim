@@ -86,6 +86,8 @@ def prepare_hfss(Hfss: Any, run_dir: Path, spec: HfssSpec) -> PreparedHfss:
         raise TypeError("bound HFSS request did not retain an HFSS spec")
     run_dir = request.workspace
     spec = bound_spec
+    if spec.modeling not in {"solid", "thin_film"}:
+        raise ValueError("new HFSS preparation requires explicit modeling")
     project_path = run_dir / f"{spec.project_name}.aedt"
     app = Hfss(
         project=str(project_path),
@@ -292,7 +294,7 @@ def _assign_ports(hfss: Any, spec: HfssSpec) -> list[dict[str, Any]]:
     ]
     centers = {face_id: center for face_id, center in faces}
     records: list[dict[str, Any]] = []
-    for port in spec.ports:
+    for port, effective_port in zip(spec.ports, spec.effective_ports, strict=True):
         face_id = _face_for_side(faces, port.side)
         if isinstance(port, TerminalPort):
             before = set(hfss.oboundary.GetExcitationsOfType("Terminal"))
@@ -329,10 +331,14 @@ def _assign_ports(hfss: Any, spec: HfssSpec) -> list[dict[str, Any]]:
                 }
             )
         elif isinstance(port, ModalPort):
+            if not isinstance(effective_port, ModalPort):
+                raise TypeError("modal effective port must preserve ModalPort type")
             before = set(hfss.get_oo_name(hfss.odesign, "Excitations"))
             boundary = hfss.wave_port(
                 face_id,
-                integration_line=[list(point) for point in port.integration_line_um],
+                integration_line=[
+                    list(point) for point in effective_port.integration_line_um
+                ],
                 modes=1,
                 impedance=50,
                 name=port.name,
@@ -362,6 +368,12 @@ def _assign_ports(hfss: Any, spec: HfssSpec) -> list[dict[str, Any]]:
                         "renormalize": False,
                         "deembed_um": 0.0,
                         "characteristic_impedance": "Zpi",
+                    },
+                    "effective": {
+                        "integration_line_um": [
+                            list(point)
+                            for point in effective_port.integration_line_um
+                        ]
                     },
                     "native": native,
                 }
@@ -946,9 +958,13 @@ def _bind_modal_evidence(
         raise RuntimeError("AEDT native modal boundaries are unavailable") from exc
     if not isinstance(boundaries, dict):
         raise TypeError("AEDT native modal boundary data is invalid")
-    for record, port in zip(ports, spec.ports, strict=True):
+    for record, port, effective_port in zip(
+        ports, spec.ports, spec.effective_ports, strict=True
+    ):
         if not isinstance(port, ModalPort):
             raise TypeError("modal evidence requires ModalPort entries")
+        if not isinstance(effective_port, ModalPort):
+            raise TypeError("modal effective evidence requires ModalPort entries")
         boundary = boundaries.get(port.name)
         try:
             mode = boundary["Modes"]["Mode1"]
@@ -961,7 +977,7 @@ def _bind_modal_evidence(
             [_native_position_um(item[f"{axis}Position"]) for axis in "XYZ"]
             for item in positions
         ]
-        expected = [list(point) for point in port.integration_line_um]
+        expected = [list(point) for point in effective_port.integration_line_um]
         if (
             boundary.get("BoundType") != "Wave Port"
             or boundary.get("WavePortType") != "Modal"

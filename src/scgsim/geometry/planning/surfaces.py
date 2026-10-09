@@ -48,7 +48,6 @@ from scgsim.geometry._primitives.surface_records import (
     _RouteASheetPatch,
     _surface_contribution_provenance,
 )
-from scgsim.geometry.compiler.validation import validate_selected_route
 from scgsim.geometry.models.common import (
     HIGH_COUNT_LOCAL_CONDUCTOR_PART_ROLES,
     RouteLiteral,
@@ -112,15 +111,32 @@ def plan_surface_contribution_patches(
     """
 
     build_input = _prepare_auto_vacuum_solution_regions(build_input, route=route)
-    if route == "A":
+    if route in {"A", "_effective"}:
         build_input = _refresh_generated_route_a_sheet_interfaces(build_input)
+    from scgsim.geometry.compiler.validation import validate_selected_route
+
     validate_selected_route(build_input, route)
+    return _plan_surface_contribution_geometry(build_input, representation_key=route)
+
+
+def _plan_surface_contribution_geometry(
+    build_input: GeometryBuildInput, *, representation_key: str
+) -> tuple[GeometryBuildInput, tuple[SurfacePlanRecord, ...]]:
+    """Geometric contribution primitive after caller-owned modeling selection.
+
+    The private effective key consumes per-Part sheet/solid facts. It performs
+    no Palace route eligibility validation and does not classify source roles.
+    """
+    route = representation_key
+    if route == "_effective":
+        build_input = _prepare_auto_vacuum_solution_regions(build_input, route=route)
+        build_input = _refresh_generated_route_a_sheet_interfaces(build_input, representation_key=route)
     semantic_facts = build_semantic_evidence_facade(build_input, route=route)
     interfaces = recognize_route_interfaces(build_input, route=route)
     interfaces = plan_conductor_contact_patches(
         build_input, route=route, interfaces=interfaces
     )
-    if route in {"A", "B"}:
+    if route in {"A", "B", "_effective"}:
         interfaces, mm_contacts = plan_mm_contact_records(
             build_input, route=route, interfaces=interfaces
         )
@@ -146,7 +162,7 @@ def plan_surface_contribution_patches(
 
 
 def _refresh_generated_route_a_sheet_interfaces(
-    build_input: GeometryBuildInput,
+    build_input: GeometryBuildInput, *, representation_key: str = "A"
 ) -> GeometryBuildInput:
     """Rebuild adapter-generated Route A sheet footprints from final geometry.
 
@@ -179,9 +195,9 @@ def _refresh_generated_route_a_sheet_interfaces(
     generated = tuple(
         intent
         for intent in _route_a_sheet_interfaces(
-            build_input.entities, build_input.polygons
+            build_input.entities, build_input.polygons, representation_key=representation_key
         )["interfaces"]
-        if intent["owner_semantic_ids"][0] in generated_owner_ids
+        if representation_key == "_effective" or intent["owner_semantic_ids"][0] in generated_owner_ids
     )
     intents["interfaces"] = (*explicit, *generated)
     return replace(
@@ -255,6 +271,7 @@ def _plan_route_a_sheet_patches(
     *,
     interfaces: Sequence[InterfacePlanRecord],
     semantic_facts: SemanticEvidenceFacade,
+    representation_key: str = "A",
 ) -> tuple[_RouteASheetPatch, ...]:
     """Partition each Route-A sheet by its exact ordered local domains."""
     import gdstk
@@ -269,7 +286,7 @@ def _plan_route_a_sheet_patches(
         ]
     ] = []
     for interface in interfaces:
-        if not _is_route_a_sheet_interface("A", interface):
+        if not _is_route_a_sheet_interface(representation_key, interface):
             continue
         sheet = _entity_by_id(build_input, interface.owner_semantic_ids[0])
         plane_z_um = _route_a_sheet_plane_z_um(build_input, sheet)
@@ -445,8 +462,9 @@ def plan_route_surfaces(
             build_input,
             interfaces=interfaces,
             semantic_facts=semantic_facts,
+            representation_key=route,
         )
-        if route == "A"
+        if route in {"A", "_effective"}
         else ()
     )
     sheet_patches_by_interface: dict[str, list[_RouteASheetPatch]] = {}
@@ -466,7 +484,7 @@ def plan_route_surfaces(
     contact_faces = _contact_patches_by_entity_face(interfaces)
     sheet_contacts_by_face = (
         _route_a_sheet_contacts_by_face_metal(build_input, mm_contacts)
-        if route == "A"
+        if route in {"A", "_effective"}
         else {}
     )
     normalized_sheet_loops = _sheet_contact_loops_by_face_metal(
@@ -627,7 +645,7 @@ def plan_route_surfaces(
                             normalized_sheet_loops.get(entity.semantic_id, ())
                             if route == "B" and entity.part_role == "face_metal"
                             else normalized_pad_loops.get(entity.semantic_id, ())
-                            if route == "A" and shell_part == "bottom"
+                            if route in {"A", "_effective"} and shell_part == "bottom"
                             else ()
                         ),
                     ),
@@ -1596,7 +1614,7 @@ def _is_hidden_contact_interface(
 ) -> bool:
     return (
         interface.recognition_rule == "coplanar_conductor_contact_patch"
-        and route in {"A", "B"}
+        and route in {"A", "B", "_effective"}
         and bool(interface.metadata.get("hidden_solver_contact"))
     )
 

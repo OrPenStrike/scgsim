@@ -354,6 +354,62 @@ def _solution_body(
     return body
 
 
+def _prepared_modeling_identity(prepared: PreparedPlanarGeometry) -> dict[str, Any]:
+    """Keep legacy route labels on historical rebinds; new records name modeling."""
+    if prepared.modeling is not None:
+        return {"modeling": prepared.modeling}
+    return {"route": prepared.route}
+
+
+def _validate_native_modeling_source(
+    prepared: PreparedPlanarGeometry, source: Mapping[str, Any]
+) -> None:
+    """Keep current effective-layer provenance separate from legacy route reads."""
+    if prepared.modeling is None:
+        if "modeling" in source:
+            raise ValueError("historical EPR geometry has current modeling provenance")
+        return
+    if not isinstance(source.get("modeling"), Mapping):
+        raise ValueError("prepared EPR effective-layer provenance is unavailable")
+
+
+def _native_conductor_geometry(
+    source: Mapping[str, Any], entity: Mapping[str, Any]
+) -> tuple[str, float, float]:
+    """Read the producer's effective native shape and Z without remapping it."""
+    if "modeling" in source:
+        modeling = source["modeling"]
+        if not isinstance(modeling, Mapping):
+            raise TypeError("prepared EPR modeling provenance is unavailable")
+        physical_layer = entity.get("physical_layer")
+        if not isinstance(physical_layer, Mapping):
+            raise ValueError(
+                f"EPR conductor {entity.get('semantic_id')!r} lacks "
+                "effective-layer provenance"
+            )
+        representation = physical_layer.get("representation")
+        if representation not in {"solid", "sheet"}:
+            raise ValueError("prepared EPR conductor representation is invalid")
+        if entity.get("representation") != representation:
+            raise ValueError(
+                f"EPR conductor {entity.get('semantic_id')!r} representation "
+                "differs from its effective layer"
+            )
+        return (
+            str(representation),
+            float(physical_layer["effective_z_min_um"]),
+            float(physical_layer["effective_z_max_um"]),
+        )
+
+    # Historical saved-project reads retain the recorded route basis. New native
+    # construction is rejected before reaching this reader-only interpretation.
+    z_min_um, z_max_um = _entity_z_range(entity)
+    if entity["representation"] == "surface_sheet":
+        z_min_um = z_max_um = _route_a_sheet_z(source, entity)
+        return "sheet", z_min_um, z_max_um
+    return "solid", z_min_um, z_max_um
+
+
 def _material_readback(app: Any, materials: Mapping[str, Any]) -> dict[str, Any]:
     observed: dict[str, Any] = {}
     for material_id, record in materials.items():
@@ -1128,11 +1184,10 @@ def _native_junction_live_readback(
         for partition in source["junction_partitions"].values()
     }
     for entity in source["conductors"]:
-        plane = (
-            _route_a_sheet_z(source, entity)
-            if entity["representation"] == "surface_sheet"
-            else _entity_z_range(entity)[0]
+        representation, effective_z_min_um, effective_z_max_um = (
+            _native_conductor_geometry(source, entity)
         )
+        plane = effective_z_min_um
         for pid in entity["polygon_ids"]:
             if pid in authored_ids:
                 continue
@@ -1152,7 +1207,7 @@ def _native_junction_live_readback(
                 tuple(Fraction(str(v)) for v in p[:2]): p
                 for p in bottom_observation["face_vertices_um"]
             }
-            if entity["representation"] == "surface_sheet":
+            if representation == "sheet":
                 assignment(
                     _native_name("pec_boundary", entity["semantic_id"], pid),
                     name,
@@ -1169,7 +1224,8 @@ def _native_junction_live_readback(
                     )
                 zs = [float(vertex.position[2]) for vertex in obj.vertices]
                 if not zs or not _native_coordinates_close(
-                    (min(zs), max(zs)), _entity_z_range(entity)
+                    (min(zs), max(zs)),
+                    (effective_z_min_um, effective_z_max_um),
                 ):
                     raise RuntimeError(
                         f"native junction source material/Z lineage differs: {name!r}"
@@ -1190,7 +1246,7 @@ def _native_junction_live_readback(
                     tuple(Fraction(str(v)) for v in p[:2]): p
                     for p in observations[-1]["face_vertices_um"]
                 }
-                thickness = _entity_z_range(entity)[1] - _entity_z_range(entity)[0]
+                thickness = effective_z_max_um - effective_z_min_um
                 if any(
                     not _native_coordinates_close(
                         bottom_matches[point], top_matches[point]
@@ -1208,9 +1264,14 @@ def _native_junction_live_readback(
                         "native junction actual top/bottom extrusion differs"
                     )
                 _native_extrusion_sides(
-                    obj, loops, top, _entity_z_range(entity), thickness, observations
+                    obj,
+                    loops,
+                    top,
+                    (effective_z_min_um, effective_z_max_um),
+                    thickness,
+                    observations,
                 )
-            solid = entity["representation"] != "surface_sheet"
+            solid = representation != "sheet"
             native_z = (
                 (min(zs), max(zs))
                 if solid
@@ -1771,6 +1832,8 @@ def prepare_native_planar_geometry(
 
     if not isinstance(prepared, PreparedPlanarGeometry):
         raise TypeError("prepared must be PreparedPlanarGeometry")
+    if prepared.modeling not in {"solid", "thin_film"}:
+        raise ValueError("new EPR native construction requires explicit modeling")
     source = detached(prepared.source)
     if (
         source.get("native_region", {}).get("method")
@@ -1779,6 +1842,7 @@ def prepare_native_planar_geometry(
         raise ValueError("EPR geometry predates single Region; reprepare the handoff")
     if source["native_region"].get("outer_boundary_policy") != "hfss_default.v1":
         raise ValueError("EPR Region boundary policy requires re-preparation")
+    _validate_native_modeling_source(prepared, source)
     polygons = {item["polygon_id"]: item for item in source["polygons"]}
     junction_regions = {
         item["source_polygon_id"]: item for item in source["junction_regions"]
@@ -1831,9 +1895,11 @@ def prepare_native_planar_geometry(
     junction_polygons = {item.source_polygon_id for item in prepared.junctions}
     started = time.perf_counter()
     for entity in entities:
-        z_min_um, z_max_um = _entity_z_range(entity)
-        is_route_a_sheet = entity["representation"] == "surface_sheet"
-        z_um = _route_a_sheet_z(source, entity) if is_route_a_sheet else z_min_um
+        representation, z_min_um, z_max_um = _native_conductor_geometry(
+            source, entity
+        )
+        is_sheet = representation == "sheet"
+        z_um = z_min_um
         thickness_um = z_max_um - z_min_um
         for polygon_id in entity["polygon_ids"]:
             if polygon_id in junction_polygons:
@@ -1842,7 +1908,7 @@ def prepare_native_planar_geometry(
                 source, "conductor", entity["semantic_id"], polygon_id
             )
             boundary_name: str | None = None
-            if is_route_a_sheet:
+            if is_sheet:
                 obj = _polygon_sheet(app, polygons[polygon_id], name=name, z_um=z_um)
                 boundary_name = _native_name(
                     "pec_boundary", entity["semantic_id"], polygon_id
@@ -1867,11 +1933,11 @@ def prepare_native_planar_geometry(
                 obj.material_name = "pec"
                 obj.solve_inside = False
             evidence = _native_object_evidence(app, obj.name)
-            expected_type = "Sheet" if is_route_a_sheet else "Solid"
+            expected_type = "Sheet" if is_sheet else "Solid"
             if evidence["native_object_type"] != expected_type:
                 raise RuntimeError(f"native conductor type mismatch for {obj.name!r}")
             observed: dict[str, Any] = {}
-            if not is_route_a_sheet:
+            if not is_sheet:
                 observed = {
                     "native_material_name": native_object_property(
                         obj, "Material"
@@ -1892,7 +1958,8 @@ def prepare_native_planar_geometry(
                     "kind": "conductor",
                     "semantic_id": entity["semantic_id"],
                     "source_polygon_id": polygon_id,
-                    "route": prepared.route,
+                    **_prepared_modeling_identity(prepared),
+                    "physical_layer": detached(entity["physical_layer"]),
                     "object_name": obj.name,
                     "boundary_name": boundary_name,
                     "observed": observed,
@@ -1925,11 +1992,7 @@ def prepare_native_planar_geometry(
                 f"junction {junction.junction_id!r} source owners do not match its nets"
             )
         z_values = [
-            (
-                _route_a_sheet_z(source, owner)
-                if owner["representation"] == "surface_sheet"
-                else _entity_z_range(owner)[0]
-            )
+            _native_conductor_geometry(source, owner)[1]
             for owner in owners
         ]
         if max(z_values) - min(z_values) > 1e-9:
@@ -2061,7 +2124,7 @@ def prepare_native_planar_geometry(
         raise RuntimeError("native planar object names are not unique")
     return {
         "schema_version": "scgsim.aedt.epr-native-binding.v1",
-        "route": prepared.route,
+        **_prepared_modeling_identity(prepared),
         "source_sha256": prepared.source_sha256,
         "objects": bindings,
         "junctions": junction_bindings,
@@ -2082,6 +2145,7 @@ def bind_saved_planar_geometry(
     if not isinstance(prepared, PreparedPlanarGeometry):
         raise TypeError("prepared must be PreparedPlanarGeometry")
     source = detached(prepared.source)
+    _validate_native_modeling_source(prepared, source)
     if (
         source.get("native_region", {}).get("method")
         != "single_region_absolute_offset.v1"
@@ -2135,7 +2199,8 @@ def bind_saved_planar_geometry(
 
     junction_polygon_ids = {item.source_polygon_id for item in prepared.junctions}
     for entity in source["conductors"]:
-        is_sheet = entity["representation"] == "surface_sheet"
+        representation, _, _ = _native_conductor_geometry(source, entity)
+        is_sheet = representation == "sheet"
         for polygon_id in entity["polygon_ids"]:
             if polygon_id in junction_polygon_ids:
                 continue
@@ -2190,7 +2255,12 @@ def bind_saved_planar_geometry(
                     "kind": "conductor",
                     "semantic_id": entity["semantic_id"],
                     "source_polygon_id": polygon_id,
-                    "route": prepared.route,
+                    **_prepared_modeling_identity(prepared),
+                    **(
+                        {"physical_layer": detached(entity["physical_layer"])}
+                        if isinstance(entity.get("physical_layer"), Mapping)
+                        else {}
+                    ),
                     "object_name": name,
                     "boundary_name": boundary_name,
                     "observed": observed,
@@ -2288,7 +2358,7 @@ def bind_saved_planar_geometry(
         raise ValueError("saved EPR Region boundary policy is unknown")
     return {
         "schema_version": "scgsim.aedt.epr-native-binding.v1",
-        "route": prepared.route,
+        **_prepared_modeling_identity(prepared),
         "source_sha256": prepared.source_sha256,
         "objects": objects,
         "junctions": junctions,

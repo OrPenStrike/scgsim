@@ -16,16 +16,18 @@ you need, then choose the appropriate source and boundary model.
 |---|---|---|---|
 | Electrostatic | Palace | GeometryPlan, terminal and ground Nets | Ordered capacitance matrix |
 | Eigenmode | Palace | GeometryPlan, optional inductive ports | Mode frequency/native Q, energies; requested EPR |
-| Eigenmode | HFSS | GDS mapping or source-first GeometryPlan | Mode frequency/native Q; requested EPR |
-| Driven Modal | HFSS | GDS mapping and integration-line ports | Complex S-parameters, CSV and Touchstone |
-| Driven Terminal | HFSS | GDS mapping and explicit reference conductors | Complex S-parameters, CSV and Touchstone |
-| Finite 3D extraction | Q3D | `Q3dSpec` v3 bodies or GeometryPlan-backed C/G preparation | C/G and optional AC/RL extraction matrices |
+| Eigenmode | HFSS | `modeling="solid"` or `"thin_film"`; GDS mapping or source-first GeometryPlan | Mode frequency/native Q; requested EPR |
+| Driven Modal | HFSS | `modeling="solid"` or `"thin_film"`; GDS mapping and integration-line ports | Complex S-parameters, CSV and Touchstone |
+| Driven Terminal | HFSS | `modeling="solid"` or `"thin_film"`; GDS mapping and explicit reference conductors | Complex S-parameters, CSV and Touchstone |
+| Finite 3D extraction | Q3D | `modeling="solid"` or `"thin_film"`; `Q3dSpec` v3 bodies or GeometryPlan-backed C/G preparation | C/G and optional AC/RL extraction matrices |
 | Cross-section extraction | Q2D | Explicit rectangles and conductor groups | Per-unit-length C/G/L/R blocks |
 
 :::
 
-Q3D body-v3 native lowering remains **CONVERGING**; the table describes the
-request families and returned quantities, not an observed v3 native run.
+Every new Q3D and HFSS 3D request must select its modeling representation
+explicitly; there is no default. The Solid/Thin-Film extension is
+**CONVERGING**. The table describes supported request families and intended
+returned quantities, not solver results observed for the new representation.
 
 Palace Driven and Magnetostatic are not implemented; Meep is outside SCGSim's
 scope. Palace's [native problem types](https://awslabs.github.io/palace/stable/guide/problem/)

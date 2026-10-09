@@ -23,6 +23,8 @@ from scgsim.aedt.epr.models import canonical_sha256, detached
 
 from scgsim.aedt.specs.common import MatrixRunControl, PdkMaterial
 
+from scgsim.aedt.specs.modeling import Modeling, _source_physical_layers
+
 from scgsim.aedt.specs.q3d import Q3dBodySpec, Q3dNetSpec, Q3dSpec
 
 
@@ -46,6 +48,7 @@ def _entity_polygons(entity, polygons):
 def lower_q3d_geometry(
     snapshot: GeometryPlanSnapshot,
     *,
+    modeling: Modeling,
     directory: Path,
     project_name: str,
     design_name: str,
@@ -64,6 +67,7 @@ def lower_q3d_geometry(
             "AEDT finite Q3D lowering does not support active source curve intent"
         )
     stack = snapshot.stack
+    physical_layers, layer_bindings = _source_physical_layers(source, stack, modeling)
     conductors = [
         entity for entity in source.entities if entity.material_kind == "conductor"
     ]
@@ -144,6 +148,7 @@ def lower_q3d_geometry(
             bodies.append(
                 Q3dBodySpec(
                     body_id=body_id,
+                    physical_layer_id=layer_bindings.get(entity.semantic_id),
                     exterior_um=exterior,
                     holes_um=holes,
                     z_min_um=zmin,
@@ -207,6 +212,8 @@ def lower_q3d_geometry(
         )
     }
     return Q3dSpec(
+        modeling=modeling,
+        physical_layers=physical_layers,
         project_name=project_name,
         design_name=design_name,
         materials=materials,
