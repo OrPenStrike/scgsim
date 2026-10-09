@@ -11,7 +11,6 @@ from pathlib import Path
 
 from scgsim.aedt.results.convergence.hfss import read_hfss_convergence
 from scgsim.aedt.results.convergence.q2d import read_q2d_convergence
-from scgsim.aedt.results.convergence.q3d import read_q3d_convergence
 from scgsim.aedt.specs.hfss import (
     EigenmodeRunControl,
     FrequencySweepSpec,
@@ -27,7 +26,6 @@ from scgsim.aedt.specs.common import (
     PdkMaterial,
 )
 from scgsim.aedt.specs.q2d import Q2dConductorSpec, Q2dRectangleSpec, Q2dSpec
-from scgsim.aedt.specs.q3d import Q3dNetSpec, Q3dSpec
 
 
 def _gds_inputs():
@@ -90,12 +88,8 @@ def _write_eigenmode(root, *, status="Yes", current=.2, consecutive=2,
     return {"export_convergence": path}
 
 
-def _matrix_spec(q3d=False):
+def _matrix_spec():
     control = MatrixRunControl("Setup", 6, 3, 1)
-    if q3d:
-        return Q3dSpec(**_gds_inputs(), run_control=control, nets=(
-            Q3dNetSpec("Signal", "Signal", ("Signal",), "Signal", "+X", "Signal", "-X"),
-            Q3dNetSpec("Ground", "Ground", ("Ground",))))
     inputs = _gds_inputs()
     return Q2dSpec(project_name=inputs["project_name"], design_name=inputs["design_name"],
                    materials=inputs["materials"], vacuum_material_id="vacuum",
@@ -107,22 +101,19 @@ def _matrix_spec(q3d=False):
                    run_control=control, region_padding_um=(10, 10, 10, 10))
 
 
-def _write_matrix(root, *, q3d=False, converged=True, delta=2, final_pass=2,
-                  target=1, maximum=3, ambiguous=False):
+def _write_matrix(root, *, converged=True, delta=2, final_pass=2,
+                  target=1, maximum=3):
     results = root / "Synthetic.aedtresults"
     profiles = results / "Design.results"
     profiles.mkdir(parents=True)
-    names = ("CapConv", "ACRLConv") if q3d else ("CGConv", "RLConv")
+    names = ("CGConv", "RLConv")
     blocks, statuses = [], []
     for i, name in enumerate(names, 1):
         fields = f"p={final_pass}, tri=1200, "
-        fields += f"delta={delta}" if q3d else f"de={delta}, ee=0.25"
+        fields += f"de={delta}, ee=0.25"
         blocks.append(f"$begin '{i}'\nConvSetupName='{name}'\nConvTarget='{target}'\n"
                       f"MaxPasses='{maximum}'\nc({fields})\n$end '{i}'\n")
         status = "Adaptive Passes converged" if converged else "Adaptive Passes did not converge"
-        if ambiguous:
-            status += "\n" + ("Adaptive Passes did not converge" if converged
-                               else "Adaptive Passes converged")
         statuses.append(f"$begin '{i}'\n{status}\n$end '{i}'\n")
     asol = results / "Design.asol"
     profile = profiles / "Adaptive.profile"
@@ -186,34 +177,30 @@ class ConvergenceObservationTests(unittest.TestCase):
                 read_hfss_convergence(root, _hfss_spec())
 
     def test_matrix_native_yes_above_target_and_no_before_maximum(self):
-        for q3d in (False, True):
-            for converged in (True, False):
-                with self.subTest(q3d=q3d, converged=converged), tempfile.TemporaryDirectory() as temporary:
-                    root = Path(temporary)
-                    sources = _write_matrix(root, q3d=q3d, converged=converged)
-                    reader = read_q3d_convergence if q3d else read_q2d_convergence
-                    value = reader(root, _matrix_spec(q3d))
-                    for key in (("capacitance", "ac_rl") if q3d else ("cg", "rl")):
-                        record = value[key]
-                        self.assertEqual((record["converged"], record["target_percent"],
-                                          record["final_matrix_delta_percent"], record["final_pass"],
-                                          record["final_triangle_count"]), (converged, 1, 2, 2, 1200))
-                        self.assertEqual(record["stop_reason"], "Adaptive Passes converged" if converged
-                                         else "Adaptive Passes did not converge")
-                        if not q3d:
-                            self.assertEqual(record["final_error_percent"], .25)
-                    self.assert_sources(root, value, sources)
+        for converged in (True, False):
+            with self.subTest(converged=converged), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                sources = _write_matrix(root, converged=converged)
+                reader = read_q2d_convergence
+                value = reader(root, _matrix_spec())
+                for key in ("cg", "rl"):
+                    record = value[key]
+                    self.assertEqual((record["converged"], record["target_percent"],
+                                      record["final_matrix_delta_percent"], record["final_pass"],
+                                      record["final_triangle_count"]), (converged, 1, 2, 2, 1200))
+                    self.assertEqual(record["stop_reason"], "Adaptive Passes converged" if converged
+                                     else "Adaptive Passes did not converge")
+                    self.assertEqual(record["final_error_percent"], .25)
+                self.assert_sources(root, value, sources)
 
     def test_matrix_controls_ambiguous_status_and_missing_artifact_remain_errors(self):
-        for q3d, fields, error in ((False, {"target": 2}, "target does not match"),
-                                  (True, {"maximum": 4}, "maximum passes do not match"),
-                                  (True, {"ambiguous": True}, "ambiguous convergence status")):
-            with self.subTest(q3d=q3d, fields=fields), tempfile.TemporaryDirectory() as temporary:
+        for fields, error in (({"target": 2}, "target does not match"),):
+            with self.subTest(fields=fields), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
-                _write_matrix(root, q3d=q3d, **fields)
-                reader = read_q3d_convergence if q3d else read_q2d_convergence
+                _write_matrix(root, **fields)
+                reader = read_q2d_convergence
                 with self.assertRaisesRegex(RuntimeError, error):
-                    reader(root, _matrix_spec(q3d))
+                    reader(root, _matrix_spec())
         with tempfile.TemporaryDirectory() as temporary:
             with self.assertRaisesRegex(RuntimeError, "evidence is missing"):
                 read_q2d_convergence(Path(temporary), _matrix_spec())

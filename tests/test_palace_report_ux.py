@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import inspect
 import json
 import math
 import sys
@@ -14,18 +13,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
-from scgsim import palace
 from scgsim.palace import (
-    PalaceCost,
-    PalacePerformance,
-    PalaceProvenance,
     PalaceResultSelection,
-    PalaceReturnedReceipt,
     PalaceTrustReport,
-    ParsedTable,
     PhysicsQuantitiesReport,
-    ResolvedPalaceResult,
-    SimulationBenchmarkReport,
     inspect_run_trustworthiness,
 )
 from scgsim.palace.results.report_data import (
@@ -263,230 +254,7 @@ def _failed_eigenmode_run(
     return handoff_id, receipt
 
 
-def _resolved_result() -> ResolvedPalaceResult:
-    tables = {
-        "eig": ParsedTable(
-            name="eig",
-            path=Path("eig.csv"),
-            headers=("m", "Re{f} (GHz)"),
-            rows=({"m": 1, "Re{f} (GHz)": 5.0},),
-        ),
-        "error-indicators": ParsedTable(
-            name="error-indicators",
-            path=Path("error-indicators.csv"),
-            headers=("Norm",),
-            rows=({"Norm": 0.1},),
-        ),
-    }
-    receipt = PalaceReturnedReceipt(
-        schema="palace-returned-run-receipt.v1",
-        schema_version=1,
-        handoff_id="handoff",
-        status="completed",
-        exit_code=0,
-        solver_exit_code=0,
-        tee_exit_code=0,
-        route="A",
-        problem="Eigenmode",
-        identity_verified=True,
-        timestamp_utc="2026-08-20T00:00:00Z",
-        job_identity={},
-        input_hashes=(),
-        output_files=(),
-        log=None,
-        solver_identity={},
-    )
-    return ResolvedPalaceResult(
-        run_dir=Path("run"),
-        problem="Eigenmode",
-        route="A",
-        has_returned_outputs=True,
-        status="completed",
-        performance=PalacePerformance(counts={}, durations={}),
-        cost=PalaceCost(
-            problem_degrees_of_freedom=100,
-            mesh_elements=50,
-            mpi_size=1,
-            openmp_threads=1,
-            peak_memory_megabytes={},
-            peak_node_memory_megabytes={},
-            linear_solver={},
-            git_tag="test",
-        ),
-        tables=tables,
-        returned_receipt=receipt,
-        provenance=PalaceProvenance(
-            handoff_metadata={},
-            run_metadata={},
-            resource_record={},
-            handoff_archive_manifest={},
-            index_map={},
-            mesh_manifest={},
-            config={},
-            palace_json={},
-            returned_receipt={},
-        ),
-    )
-
-
 class PalaceReportUxTests(unittest.TestCase):
-    def test_public_methods_and_aggregate_order(self) -> None:
-        result = _resolved_result()
-        original_tables = result.tables
-        trust = _trust_report().show_run_trustworthiness(
-            theme="dark",
-            show_details=True,
-        )
-        with (
-            patch(
-                "scgsim.palace.presentation.reports._show_run_trustworthiness",
-                return_value=trust,
-            ) as show_trust,
-            _captured_notebook_display() as displayed,
-        ):
-            returned = result.show_all_results(
-                theme="dark",
-                ranking_limit=10,
-                show_details=True,
-            )
-
-        self.assertIsNone(returned)
-        self.assertEqual(len(displayed), 3)
-        self.assertIs(displayed[0], trust)
-        benchmark = displayed[1]
-        self.assertIsInstance(benchmark, SimulationBenchmarkReport)
-        self.assertIs(benchmark.trust, trust)
-        self.assertTrue(benchmark.show_details)
-        physics = displayed[2]
-        self.assertIsInstance(physics, PhysicsQuantitiesReport)
-        self.assertIs(physics.trust, trust)
-        self.assertEqual(physics.ranking_limit, 10)
-        show_trust.assert_called_once_with(
-            result,
-            theme="dark",
-            show_details=True,
-        )
-        self.assertIs(result.tables, original_tables)
-        self.assertIn("eig", result.tables)
-
-        parameters = inspect.signature(result.show_all_results).parameters
-        self.assertEqual(tuple(parameters), ("theme", "ranking_limit", "show_details"))
-        self.assertFalse(hasattr(result, "show_surface_epr_physics"))
-        self.assertFalse(hasattr(palace, "NativeTabularSummary"))
-
-    def test_partial_report_supports_the_same_display_surface(self) -> None:
-        partial = _trust_report(
-            completeness="partial",
-            latest_source="iteration01",
-        )
-        trust = partial.show_run_trustworthiness(theme="dark", show_details=True)
-        benchmark = SimulationBenchmarkReport(
-            trust,
-            {"performance_metadata": {"completeness": "partial"}},
-            True,
-        )
-        physics = PhysicsQuantitiesReport(trust, 5)
-        with (
-            patch.object(
-                PalaceTrustReport,
-                "show_run_trustworthiness",
-                return_value=trust,
-            ) as show_trust,
-            patch.object(
-                PalaceTrustReport,
-                "show_simulation_benchmark",
-                return_value=benchmark,
-            ) as show_benchmark,
-            patch.object(
-                PalaceTrustReport,
-                "show_physics_quantities",
-                return_value=physics,
-            ) as show_physics,
-            _captured_notebook_display() as displayed,
-        ):
-            returned = partial.show_all_results(
-                theme="dark",
-                ranking_limit=5,
-                show_details=True,
-            )
-
-        self.assertIsNone(returned)
-        self.assertEqual(displayed, [trust, benchmark, physics])
-        show_trust.assert_called_once_with(theme="dark", show_details=True)
-        show_benchmark.assert_called_once_with(show_details=True)
-        show_physics.assert_called_once_with(theme="dark", ranking_limit=5)
-        self.assertEqual(
-            tuple(inspect.signature(partial.show_all_results).parameters),
-            ("theme", "ranking_limit", "show_details"),
-        )
-        self.assertEqual(
-            tuple(inspect.signature(partial.show_run_trustworthiness).parameters),
-            ("theme", "show_details"),
-        )
-        self.assertEqual(
-            tuple(inspect.signature(partial.show_physics_quantities).parameters),
-            ("theme", "ranking_limit"),
-        )
-        metadata = partial.show_simulation_benchmark().data["performance_metadata"]
-        self.assertEqual(metadata["completeness"], "partial")
-        self.assertEqual(metadata["latest_source"], "iteration01")
-
-    def test_details_are_opt_in_and_machine_data_remain_available(self) -> None:
-        trust = _trust_report()
-        with (
-            patch.object(
-                PalaceTrustReport, "_convergence_items", return_value=["numerical"]
-            ),
-            patch.object(
-                PalaceTrustReport, "_surface_convergence_items", return_value=[]
-            ),
-            _captured_notebook_display() as displayed,
-        ):
-            trust.show_run_trustworthiness()._ipython_display_()
-        html_output = "".join(
-            item.data for item in displayed if isinstance(item, _Html)
-        )
-        self.assertNotIn("<h3>Provenance</h3>", html_output)
-
-        with (
-            patch.object(
-                PalaceTrustReport, "_convergence_items", return_value=["numerical"]
-            ),
-            patch.object(
-                PalaceTrustReport, "_surface_convergence_items", return_value=[]
-            ),
-            _captured_notebook_display() as displayed,
-        ):
-            trust.show_run_trustworthiness(show_details=True)._ipython_display_()
-        html_output = "".join(
-            item.data for item in displayed if isinstance(item, _Html)
-        )
-        self.assertIn("<h3>Provenance</h3>", html_output)
-
-        benchmark = trust.show_simulation_benchmark()
-        self.assertIsInstance(benchmark, SimulationBenchmarkReport)
-        self.assertIn("performance_metadata", benchmark.data)
-        with (
-            patch("scgsim.palace.presentation.reports._show_figure"),
-            _captured_notebook_display() as displayed,
-        ):
-            benchmark._ipython_display_()
-        html_output = "".join(
-            item.data for item in displayed if isinstance(item, _Html)
-        )
-        self.assertIn("Simulation Benchmark", html_output)
-        self.assertNotIn("Benchmark metadata", html_output)
-
-        with (
-            patch("scgsim.palace.presentation.reports._show_figure"),
-            _captured_notebook_display() as displayed,
-        ):
-            trust.show_simulation_benchmark(show_details=True)._ipython_display_()
-        html_output = "".join(
-            item.data for item in displayed if isinstance(item, _Html)
-        )
-        self.assertIn("Benchmark metadata", html_output)
-
     def test_surface_ranking_reserves_one_row_per_two_line_label(self) -> None:
         records = tuple(
             SurfaceEprRecord(

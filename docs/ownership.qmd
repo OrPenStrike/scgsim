@@ -24,10 +24,19 @@ release procedures belong to the secondary
 Human accepted the v2 module and API structure on 2026-10-09 as candidate
 `a932a173edb5c56ae14740ff5177190996255bdd` (tree
 `2745321736e53e2a4fe8d150f2e9d8bd176669db`). Its semantic state is `ACCEPTED`,
-not `STABILIZED` or integrated. The intake baseline is `develop@3a52fb1`, tree
+not `STABILIZED`. The implementation was integrated into `develop` through
+PR34 at `cc1424c84ffe9d295a57dbabb3c2ab6431110f6c` (tree
+`f9ecfe49df4c79be84a7991e44cc50c2602e3adb`). This closeout starts from the
+later `develop` slimming successor `b46bcc7d64fbb8bab181c0da2b9234a003a20adf`
+(tree `c99c670927e877fb407aa4c73de32793e86a4460`). The intake/migration
+baseline remains `develop@3a52fb1`, tree
 `96adcf8672b497a29dd0a6b43043cca11efc3043`. Existing consumers remain on their
 recorded pins until they choose a migration. Accepted API scope does not imply
-completion of the three deferred full native endpoints described in the
+completion of the full native-to-Resolve-to-Report operations for Xmon Palace
+Eigenmode Route A, CircularPad Palace Eigenmode Route B, or HFSS Eigenmode
+saved-field EPR/offline loss. Those operations were not observed as complete
+workflows and are outside this closeout; earlier partial evidence does not
+establish them as complete or failed. See the
 [migration reference](api-migration.qmd#accepted-scope-and-evidence-status).
 
 | Target area | Owns | Must not take ownership of |

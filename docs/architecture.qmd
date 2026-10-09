@@ -21,13 +21,19 @@ identity, or common provenance.
 Human accepted the current v2 structural/API implementation on 2026-10-09:
 candidate `a932a173edb5c56ae14740ff5177190996255bdd`, tree
 `2745321736e53e2a4fe8d150f2e9d8bd176669db`. Its semantic state is `ACCEPTED`,
-not `STABILIZED` or integrated. The migration baseline is
-`develop@3a52fb1`, tree `96adcf8672b497a29dd0a6b43043cca11efc3043`; existing
-consumer pins remain unchanged. The accepted Q3D body-v3 scope includes a
-native build-only/readback/save/release operation, not a completed C/G solve.
-The full Xmon Route A, CircularPad Route B, and HFSS Eigenmode/saved-field
-EPR/offline-loss endpoints remain deferred; their partial observations are not
-reported as full completion.
+not `STABILIZED`. The implementation was integrated into `develop` through
+PR34 at `cc1424c84ffe9d295a57dbabb3c2ab6431110f6c` (tree
+`f9ecfe49df4c79be84a7991e44cc50c2602e3adb`). This closeout starts from the
+later `develop` slimming successor `b46bcc7d64fbb8bab181c0da2b9234a003a20adf`
+(tree `c99c670927e877fb407aa4c73de32793e86a4460`). The original migration
+baseline remains `develop@3a52fb1`, tree
+`96adcf8672b497a29dd0a6b43043cca11efc3043`; existing consumer pins remain
+unchanged. The accepted Q3D body-v3 scope includes a native
+build-only/readback/save/release operation, not a completed C/G solve. The full
+Xmon Route A, CircularPad Route B, and HFSS Eigenmode/saved-field EPR/offline-loss
+operations have not been observed as complete native-to-Resolve-to-Report
+workflows. They are outside this closeout; partial observations do not establish
+full completion, and this status does not label them failed or complete.
 
 The accepted responsibility tree is:
 
