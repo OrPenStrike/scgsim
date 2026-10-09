@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import math
 
+import sys
+
 from dataclasses import dataclass
 
 from pathlib import Path
@@ -18,6 +20,7 @@ from scgsim.aedt.results.convergence.q3d import read_q3d_convergence
 from scgsim.aedt.results.matrices import parse_matrix_export
 
 from scgsim.aedt.runtime.benchmark import attach_simulation_benchmark
+from scgsim.aedt.runtime.control import Q3dStopControl
 
 from scgsim.aedt.runtime.native.common import (
     BoundAedtRequest,
@@ -74,11 +77,39 @@ def run_q3d(
     spec: Q3dSpec,
     resources: AedtResources | None = None,
     resource_evidence: dict[str, Any] | None = None,
+    *,
+    control_metadata: Path | None = None,
+    runtime_source: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Use the same preparation stage as diagnostics, then solve and export."""
     prepared = prepare_q3d(Q3d, run_dir, spec)
-    solve_q3d(prepared, resources, resource_evidence)
+    control = None
+    if control_metadata is not None and sys.platform == "linux":
+        if runtime_source is None:
+            raise RuntimeError(
+                "Q3D stop control requires the actual recorder runtime identity"
+            )
+        control = Q3dStopControl(control_metadata, prepared.app, runtime_source)
+    try:
+        solve_q3d(prepared, resources, resource_evidence, control=control)
+    except Exception as exc:
+        if control is None or (
+            control.snapshot().get("intent") is None and control.ledger_error is None
+        ):
+            raise
+        return stopped_q3d_result(prepared, control.snapshot(), exc)
+    if control is not None and control.snapshot().get("intent") is not None:
+        return stopped_q3d_result(prepared, control.snapshot(), None)
     result = export_q3d(prepared)
+    result["stop_control"] = (
+        control.snapshot()
+        if control is not None
+        else {
+            "status": "unsupported_platform"
+            if sys.platform != "linux"
+            else "not_registered"
+        }
+    )
     return attach_simulation_benchmark(
         result, prepared.app, run_dir, spec.run_control.setup_name
     )
@@ -163,6 +194,8 @@ def solve_q3d(
     prepared: PreparedQ3d,
     resources: AedtResources | None = None,
     resource_evidence: dict[str, Any] | None = None,
+    *,
+    control: Q3dStopControl | None = None,
 ) -> None:
     """Run the one explicit Q3D setup solve."""
     spec = prepared.request.parse()
@@ -174,6 +207,7 @@ def solve_q3d(
         prepared.request.workspace,
         resources,
         resource_evidence if resource_evidence is not None else {},
+        analysis_call=control.analyze if control is not None else None,
     ):
         raise RuntimeError(
             f"Q3D failed to analyze setup {spec.run_control.setup_name!r}"
@@ -804,29 +838,11 @@ def _export_q3d(
     output_dir.mkdir(parents=True, exist_ok=True)
     hashes: dict[str, str] = {}
     summaries: dict[str, Any] = {}
-    frequency_hz = spec.run_control.frequency_ghz * 1e9
     exports = (("C", "c"), ("AC RL", "ac_rl")) if spec.solve_ac_rl else (("C", "c"),)
     normalized: list[dict[str, Any]] = []
     for problem, stem in exports:
         path = output_dir / f"{stem}_matrix.csv"
-        app.odesign.ExportMatrixData(
-            str(path),
-            problem,
-            "",
-            f"{spec.run_control.setup_name} : LastAdaptive",
-            "Original",
-            "ohm",
-            "nH",
-            "pF",
-            "mho",
-            frequency_hz,
-            "Maxwell",
-            0,
-            False,
-            15,
-            20,
-            1,
-        )
+        _export_matrix_file(app, path, spec, problem)
         titles = {
             "C": {"Capacitance Matrix": "C", "Conductance Matrix": "G"},
             "AC RL": {"AC Inductance Matrix": "L", "AC Resistance Matrix": "R"},
@@ -878,3 +894,160 @@ def _export_q3d(
             "normalized_rows": len(normalized),
         }
     }
+
+
+def _export_matrix_file(app: Any, path: Path, spec: Q3dSpec, problem: str) -> None:
+    """One native LastAdaptive/Original export authority for full and stopped runs."""
+    frequency_hz = spec.run_control.frequency_ghz * 1e9
+    app.odesign.ExportMatrixData(
+        str(path),
+        problem,
+        "",
+        f"{spec.run_control.setup_name} : LastAdaptive",
+        "Original",
+        "ohm",
+        "nH",
+        "pF",
+        "mho",
+        frequency_hz,
+        "Maxwell",
+        0,
+        False,
+        15,
+        20,
+        1,
+    )
+
+
+def stopped_q3d_result(
+    prepared: PreparedQ3d, control: dict[str, Any], analysis_error: Exception | None
+) -> dict[str, Any]:
+    """Save first and retain independently available native artifacts, never physics completion."""
+    spec = prepared.request.parse()
+    run_dir = prepared.request.workspace
+    result = prepared_q3d_result(prepared)
+    result["solver_invoked"] = True
+    result["save"] = {"ok": False, "attempted": True}
+    workflow = {
+        "control": control,
+        "analysis": control["analysis_call"],
+        "primary_error": (
+            f"{type(analysis_error).__name__}: {analysis_error}"
+            if analysis_error is not None
+            else None
+        ),
+        "optional_artifacts": {},
+    }
+    if analysis_error is not None and getattr(analysis_error, "__notes__", None):
+        workflow["primary_error_notes"] = list(analysis_error.__notes__)
+    result["normal_stop"] = workflow
+    if control["analysis_call"].get("native_return") is False:
+        workflow["primary_error"] = "Q3D Analyze returned False"
+        if analysis_error is not None:
+            workflow["post_analyze_error"] = (
+                f"{type(analysis_error).__name__}: {analysis_error}"
+            )
+    if (
+        control.get("native_settlement", {}).get("status") != "inactive"
+        or control.get("request_readback", {}).get("status") == "unavailable"
+    ):
+        result["save"] = {
+            "ok": False,
+            "attempted": False,
+            "reason": "native_not_confirmed_inactive",
+        }
+        workflow["optional_artifacts"] = {
+            "status": "deferred",
+            "reason": "native_not_confirmed_inactive",
+        }
+        return result
+    # This save is distinct from the preparation save; failures cannot be padded
+    # with a hash of the older project to make this attempt look successful.
+    try:
+        if (
+            prepared.app.save_project() is not True
+            or not prepared.project_path.is_file()
+        ):
+            raise RuntimeError("Q3D stopped project save did not succeed")
+        result["save"] = {"ok": True, "attempted": True}
+    except Exception as exc:
+        result["save"]["error"] = f"{type(exc).__name__}: {exc}"
+
+    def artifact(path: Path, call: Any) -> dict[str, Any]:
+        observation: dict[str, Any] = {"status": "unavailable"}
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            call()
+        except Exception as exc:
+            observation["error"] = f"{type(exc).__name__}: {exc}"
+        # A native method can write a file and then throw. Keep that real file
+        # independently of export/parse errors and without erasing either error.
+        try:
+            if path.is_file():
+                relative = path.relative_to(run_dir).as_posix()
+                digest = file_sha256(path)
+                result["outputs"][relative] = digest
+                observation.update(status="available", path=relative, sha256=digest)
+        except Exception as exc:
+            observation["identity_error"] = f"{type(exc).__name__}: {exc}"
+        return observation
+
+    for problem, stem in (
+        (("C", "c"), ("AC RL", "ac_rl")) if spec.solve_ac_rl else (("C", "c"),)
+    ):
+        path = run_dir / "results/q3d" / f"{stem}_matrix.csv"
+        item = artifact(
+            path, lambda: _export_matrix_file(prepared.app, path, spec, problem)
+        )
+        workflow["optional_artifacts"][stem] = item
+        if item["status"] == "available":
+            try:
+                rows, native = parse_matrix_export(
+                    path,
+                    "Q3D",
+                    problem,
+                    spec.run_control.frequency_ghz,
+                    {
+                        "C": {"Capacitance Matrix": "C", "Conductance Matrix": "G"},
+                        "AC RL": {
+                            "AC Inductance Matrix": "L",
+                            "AC Resistance Matrix": "R",
+                        },
+                    }[problem],
+                    **(
+                        {
+                            "expected_label_set": {
+                                net.name
+                                for net in spec.nets
+                                if net.net_type == "Signal"
+                            }
+                        }
+                        if problem == "C"
+                        else {}
+                    ),
+                )
+                item["parsed"] = {"rows": rows, "native": native}
+            except Exception as exc:
+                item["parse_error"] = f"{type(exc).__name__}: {exc}"
+        convergence_path = run_dir / "results/q3d" / f"{stem}_convergence.prop"
+        workflow["optional_artifacts"][stem + "_convergence"] = artifact(
+            convergence_path,
+            lambda: prepared.app.odesign.ExportConvergence(
+                spec.run_control.setup_name,
+                "",
+                "CG" if problem == "C" else "AC RL",
+                str(convergence_path),
+                True,
+            ),
+        )
+    try:
+        workflow["convergence"] = {
+            "status": "available",
+            "parsed": read_q3d_convergence(run_dir, spec),
+        }
+    except Exception as exc:
+        workflow["convergence"] = {
+            "status": "unavailable",
+            "parse_error": f"{type(exc).__name__}: {exc}",
+        }
+    return result

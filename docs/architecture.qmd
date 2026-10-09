@@ -114,13 +114,15 @@ Within Palace, `results.report_data` owns detached report records and snapshot
 readers; `presentation.reports` owns trust/physics views and figures. The
 package facade retains the existing public result and report names.
 
-The current v2 AEDT producer emits `scgsim.aedt.runtime-source.v13` with 61
-canonical declared module paths, including 41 AEDT modules. Its records carry
-`schema_version`, `stage`, `modules`, `content_sha256`, and
+For the Q3D stop-and-save candidate, the AEDT producer advances to
+`scgsim.aedt.runtime-source.v14` with 62 canonical declared module paths,
+adding `scgsim/aedt/runtime/control.py` to the frozen V13 inventory of 61
+paths, including 41 AEDT modules. V14 records carry `schema_version`, `stage`,
+`modules`, `content_sha256`, and
 `revision_observation`; module bytes and their digest are mandatory, while the
-truthful Git observation may be unavailable. V13 has no helper-hash map and
+truthful Git observation may be unavailable. V14 has no helper-hash map and
 does not claim exhaustive transitive-source coverage. Historical runtime-source
-v1–v12 continue to interpret their original module paths and identities; V13
+v1–v13 continue to interpret their original module paths and identities; V14
 does not rewrite or reinterpret historical receipts.
 
 The flow below shows the accepted source structure. Geometry source preparation
@@ -284,6 +286,44 @@ preparation, explicit solve, and export/readback stages. Families do not import
 the transaction module, and their narrow shared native helpers do not import a
 family or start a Desktop.
 
+The Q3D user-requested stop-and-save path is an additive `CONVERGING` scope;
+its native operation is not yet observed. A separate local-Linux requester
+targets only the active Analyze on its exact locally owned Desktop and issues
+one Clean Stop via PyAEDT `Desktop.stop_simulations(clean_stop=True)` (native
+`oDesktop.StopSimulations(True)`). Its RPC outcome is separate from workflow
+and solver outcomes. `rpc_status=returned` means only that the method returned
+normally; its raw native response is uninterpreted and proves neither
+interruption nor success. Neither an Analyze true/false return or exception
+nor a stop-RPC return, exception, or unknown outcome proves native simulation
+inactivity.
+
+On Linux, execute-mode stop-managed Q3D refuses PyAEDT documentation mode
+(`PYAEDT_DOC_GENERATION`) before Desktop creation because that mode overrides
+the close flags required for exclusive transaction ownership. The recorder
+retains the blocking Analyze. After it settles and before save or release, the
+recorder makes one native `odesktop.AreThereSimulationsRunning(True)`
+observation. The argument includes pending simulations; only native `False`
+confirms inactivity. Confirmed inactivity permits save-first finalization,
+optional exports, normal release, and post-release sealing.
+
+Active or unknown native state, or a post-Analyze control-ledger closure, read,
+or write failure or uncertain/unavailable readback, fails the receipt, records
+the actual native observation or ledger error and
+detach/preserved-ownership outcome, and defers
+save/export with `attempted=false` and `native_not_confirmed_inactive`. A
+ledger failure does not fabricate stop intent. The recorder detaches without
+closing or releasing the Desktop and writes no post-release seal or
+`normal_stop_saved` status. `normal_stop_saved` requires committed user
+intent, `rpc_status=returned`, Analyze returning true, confirmed inactivity,
+successful save and release, and the post-release seal. It denotes the
+finalized stop-request/save workflow, not completed physics or proof that the
+request caused termination. No poll/wait loop, second stop, retry, or automatic
+cleanup of a preserved Desktop is performed; later owner action remains
+explicit. Analyze false/exception remains the primary failure; RPC
+unknown/exception and save/release failures also fail. Ordinary Q3D without
+stop intent, HFSS, Q2D, Eigenmode EPR, and non-Linux normal Q3D execution are
+unchanged.
+
 At family entry, one private bound request fixes the absolute run workspace and
 detaches the parsed spec payload. Relative source paths are interpreted against
 that bound workspace even if the process working directory later changes;
@@ -292,17 +332,19 @@ only this bound request after entry. Its carrier retains the mutable native app
 handle together with detached preparation readback; solve and export consume the
 carrier and cannot reinterpret a caller spec or workspace.
 
-New preparation keeps the handoff and handoff-manifest schemas at V1 while both
-declare that the mutable run receipt uses `scgsim.aedt.receipt.v3`. The initial
-V3 receipt records a declared `runtime-source.v13` preparation-time SCGSim module
+In this candidate, new preparation keeps the handoff and handoff-manifest
+schemas at V1 while both declare that the mutable run receipt uses
+`scgsim.aedt.receipt.v3`. The initial
+V3 receipt records a declared `runtime-source.v14` preparation-time SCGSim module
 manifest and content digest. Before mutation, execution verifies the canonical
 manifest and binds the initial-receipt and prepared-manifest hashes. A canonical historical
 V1 `not_run` handoff with neither marker remains executable, but its resulting
 V3 receipt records preparation provenance as `legacy_v1_not_recorded`; it does
 not fabricate history.
 
-Every new completed V3 receipt records a separate declared `runtime-source.v13`
-execution-time module manifest and digest. Its measured module bytes and
+Every new completed V3 receipt in this candidate records a separate declared
+`runtime-source.v14` execution-time module manifest and digest. Its measured
+module bytes and
 content digest are mandatory; it has no helper-hash map. Preparation and
 execution identities are not required to match: their separation records what
 prepared and what actually executed the handoff. Historical completed V1
@@ -314,9 +356,9 @@ consistency contract is not source authenticity for an actor able
 to rewrite the entire unsigned artifact set.
 
 The [AEDT receipt/provenance contract](specs/aedt-runtime.qmd#receipt-cohorts-and-source-provenance)
-is the unique authority for the exact current V13 inventory and frozen
-historical reader evolution. V1–V12 retain their exact prior path assignments
-and reader interpretations; V13 binds its declared file set, not every
+is the unique authority for the exact current V14 inventory and frozen
+historical reader evolution. V1–V13 retain their exact prior path assignments
+and reader interpretations; V14 binds its declared file set, not every
 transitive dependency. One pure, versioned initial-receipt codec owns historical
 V1/V2 and current V3 JSON member order, indentation and final newline; handoff
 writing and initial-receipt reconstruction use that codec. Historical receipt

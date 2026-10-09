@@ -88,11 +88,13 @@ rewrite existing artifacts, or provide a legacy-name fallback.
 
 ## Receipt cohorts and source provenance
 
-New handoffs retain `scgsim.aedt.handoff.v1` and
+For the Q3D stop-and-save candidate, new handoffs retain
+`scgsim.aedt.handoff.v1` and
 `scgsim.aedt.handoff-manifest.v1`. Both records add
 `expected_receipt_schema: scgsim.aedt.receipt.v3`, and the initial receipt is
-V3. It contains `prepared_runtime_source`: a deterministic, sorted
-`runtime-source.v13` manifest with 61 canonical declared module paths,
+V3. It contains `prepared_runtime_source`: a deterministic, canonical ordered
+`runtime-source.v14` manifest with 62 canonical declared module paths,
+adding `scgsim/aedt/runtime/control.py` to the frozen V13 inventory of 61 paths,
 including 41 AEDT modules. The record fields are `schema_version`, `stage`,
 `modules`, `content_sha256`, and `revision_observation`; there is no helper-hash
 map. Each declared module has measured bytes and the content digest binds that
@@ -119,12 +121,13 @@ receipt and records `prepared_runtime_source.status` as
 V2 handoff retains its prepared V2 provenance cohort when execution emits V3;
 it is not relabeled as new V3 preparation.
 
-Every new completed V3 receipt has a separate `runtime_source` manifest using
-`runtime-source.v13` and a content digest for the code that actually executed
-it. Declared module bytes and the digest are mandatory; V13 has no redundant
+Every new completed V3 receipt in this candidate has a separate
+`runtime_source` manifest using `runtime-source.v14` and a content digest for
+the code that actually executed
+it. Declared module bytes and the digest are mandatory; V14 has no redundant
 helper-hash fields. `revision_observation` carries the actual 40-hex commit
 when available and records `unavailable` truthfully for an immutable wheel
-without VCS metadata. A Git revision is not required for current V13
+without VCS metadata. A Git revision is not required for current V14
 byte-bound identity. Missing or corrupt declared module bytes, digest, schema,
 or cohort still fails closed. Preparation and execution hashes are evidence
 with different timing, not an equality requirement, and historical hashes are
@@ -150,12 +153,13 @@ enumeration rule. The V2–V11 inventories are frozen as well. V4 added
 `scgsim/sgb/adapter.py`, and `scgsim/sgb/stack.py` to V8. V10 added the shared
 `scgsim/aedt/_handoff_cohort.py` to V9; V11 added
 `scgsim/aedt/_q3d_bodies.py` to V10. V12 is frozen with V11's exact path
-membership. Current preparation and execution use V13 with a declared
-61-path inventory, including 41 AEDT modules, the five fields described above,
-and no helper-hash map. V13 uses the truthful optional
-`revision_observation`; V1–V12 retain their frozen path membership, field
-meanings, and version-specific reader rules. These manifests bind their
-declared file inventories, not an exhaustive transitive dependency
+membership. V13 is frozen with its 61-path inventory, including 41 AEDT
+modules. The candidate preparation and execution use V14, which adds
+`scgsim/aedt/runtime/control.py` for 62 declared
+paths and uses the fields described above without a helper-hash map. V14 uses
+the truthful optional `revision_observation`; V1–V13 retain their frozen path
+membership, field meanings, and version-specific reader rules. These manifests
+bind their declared file inventories, not an exhaustive transitive dependency
 attestation. The frozen V12 inventory, for example, does not separately hash
 `scgsim/sgb/engine_gates.py`. They do not change the V3 receipt schema. A pure
 initial-receipt codec owns exact V1/V2/V3 member
@@ -164,12 +168,13 @@ provenance; V2 and V3 insert it between `source` and `outputs`. Reading
 historical evidence uses the declared frozen schema and does not compare
 historical hashes with the installed package.
 
-Execution computes mandatory runtime-source provenance inside the receipt-bound
-failure transaction, before importing PyAEDT or constructing Desktop. Current
-V13 may record `revision_observation` as unavailable; that alone does not fail
+Execution in this candidate computes mandatory runtime-source provenance
+inside the receipt-bound failure transaction, before importing PyAEDT or
+constructing Desktop. V14 may record `revision_observation` as unavailable;
+that alone does not fail
 byte-bound identity or prevent execution. Missing or corrupt declared module
 bytes, digest, schema, or cohort still yield a failed V3 receipt without a
-Desktop launch rather than escaping receipt finalization. V1–V12 retain their
+Desktop launch rather than escaping receipt finalization. V1–V13 retain their
 version-specific historical validation rules, including revision requirements
 where declared.
 
@@ -533,6 +538,95 @@ materials, all-Signal net assignments, Region and setup; it saved the project,
 released its owned Desktop, and had a separate top/isometric geometry preview.
 It did not call `Analyze`, solve, or export C/G matrices. Normal Q3D
 `--execute` behavior is unchanged.
+
+#### Q3D user-requested stop and save — CONVERGING
+
+The candidate public function is
+`scgsim.aedt.request_q3d_stop_and_save(handoff)`. The receipt records stop
+intent separately from `rpc_status` and the raw native response. A
+`rpc_status=returned` means only that the native method returned normally; the
+raw response, including `False` or `None`, is not interpreted as interruption
+or success, and does not prove that saving or matrix export completed. The
+separate CLI form is:
+
+```sh
+python -m scgsim.aedt.run --handoff <run-dir>/metadata/aedt_handoff_metadata.json --stop-and-save
+```
+
+Use this Q3D-only command instead of `--execute`. It is exclusive with
+`--prepare-only`, analyze/solve controls, and resource overrides such as
+`--cores` or `--ram-limit-percent`. The requester is a separate local Linux
+process and accepts only the exact exclusive Desktop created for the active
+transaction, bound by its process-creation identity (start time, boot identity,
+and UID), PID, port, full project, design, and setup. Unsupported platforms
+fail before Desktop attachment; the requester never chooses a default or
+latest Desktop.
+
+On Linux, execute-mode stop-managed Q3D refuses PyAEDT documentation mode
+(`PYAEDT_DOC_GENERATION`) before creating a Desktop. That mode overrides the
+Desktop close flags required to preserve exclusive transaction ownership.
+
+The recorder registers control state at Analyze and keeps the blocking
+Analyze call. The requester serializes with Analyze settlement, commits one
+stop intent immediately before one PyAEDT `Desktop.stop_simulations(clean_stop=True)`
+call (`oDesktop.StopSimulations(True)` natively), and does not issue Stop when
+simulations are not running. Repeated requests return the stored outcome
+without another native RPC. The receipt keeps stop intent, RPC outcome,
+workflow state, and native Analyze outcome distinct. Neither an Analyze
+true/false return or exception nor a stop-RPC return, exception, or unknown
+outcome proves native inactivity.
+After Analyze settles, the recorder closes stop admission and makes one native
+`odesktop.AreThereSimulationsRunning(True)` observation on the owned Desktop,
+before any save or release. The `True` argument includes pending simulations;
+only native `False` confirms inactivity. Native `True`, an exception, or any
+unavailable/other response leaves inactivity unconfirmed.
+
+When inactivity is confirmed, stop/save finalization may proceed: the recorder
+attempts to save the existing project first, then
+independently attempts each requested matrix family and native convergence
+readback/export, releases the owned Desktop, and seals the post-release
+identities. Optional export absence or failure is recorded individually and
+does not suppress the project-save attempt or owned Desktop release. ACF
+restoration, stop, save/export, and release errors remain separately recorded.
+The terminal `normal_stop_saved` status requires committed user intent,
+`rpc_status=returned`, Analyze returning true, confirmed native inactivity,
+successful project save and release, and the post-release seal. The raw native
+stop response remains uninterpreted. This status describes the finalized
+stop-request/save workflow, not scientific completion or proof that the
+request caused termination; Analyze may finish naturally. Optional matrix and
+convergence exports are not prerequisites for this status; artifacts may be
+unavailable, and raw convergence output may exist while strict parsing cannot
+establish native convergence. No derived convergence flag is claimed.
+
+If native state is active or unknown, or post-Analyze control-ledger closure,
+read, or write fails or its readback is uncertain/unavailable, the receipt is
+`FAILED`; project-save and optional export attempts are deferred with
+`attempted=false` and reason
+`native_not_confirmed_inactive`. A ledger failure does not fabricate a stop
+intent. No `normal_stop_saved` status or post-release seal is written. The
+receipt retains the actual primary and secondary failures, native observation
+or ledger error, and detach/preserved-ownership outcome. The recorder detaches
+without closing, aborting, killing, or quitting the owned Desktop; it does not
+release it or write a post-release seal. No polling, wait loop, additional
+stop, retry, or automatic cleanup of the preserved Desktop is performed;
+later owner action remains explicit. ACF restoration, RPC unknown/exception,
+Analyze false/exception, and save/release failures yield `FAILED`; an Analyze
+failure stays primary with stop fields preserved.
+
+`normal_stop_saved` and `FAILED` receipts are not ordinary completed solver
+results: strict `resolve_results()` and Report behavior remain unchanged, with
+no new partial-result reader or Report API. RPC unknown/exception, Analyze
+false/exception, and save/release failure yield `FAILED`; stop fields are
+retained, with an Analyze failure remaining primary. The operation does not
+revise old runs,
+retry a stop RPC, or start another Analyze. If the requester fails after the
+RPC outcome becomes uncertain, that outcome remains unknown and is not
+automatically retried. A hung RPC can delay Analyze settlement; no timeout,
+abort, or host-kill finalization guarantee is claimed. The native operation is
+not yet observed. Ordinary Q3D runs without stop intent remain unchanged; on
+non-Linux platforms normal Q3D operation is unchanged.
+This Q3D-only addition does not change HFSS or Q2D behavior, or the Eigenmode
+EPR rule against automatic partial save/export recovery.
 
 The v3 handoff keeps the five ordinary allowed paths in their established
 order. A source-backed cohort appends `geometry/source.gds`,
