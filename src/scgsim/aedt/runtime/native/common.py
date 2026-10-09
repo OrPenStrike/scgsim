@@ -42,14 +42,23 @@ def analyze_with_resources(
     run_dir: Path,
     resources: AedtResources | None,
     evidence: dict[str, Any],
+    *,
+    analysis_call: Callable[[Callable[[], Any]], Any] | None = None,
 ) -> bool:
     """Select one run-local DSO configuration only for the owned blocking solve."""
+
+    def analyze() -> Any:
+        def call() -> Any:
+            return app.analyze_setup(name=setup_name, blocking=True)
+
+        return analysis_call(call) if analysis_call is not None else call()
+
     evidence["requested"] = resources.to_payload() if resources else None
     if resources is None:
         evidence["status"] = "aedt_active_configuration_unchanged"
         solve_started = time.perf_counter()
         try:
-            return bool(app.analyze_setup(name=setup_name, blocking=True))
+            return bool(analyze())
         finally:
             evidence["solve_seconds"] = round(time.perf_counter() - solve_started, 6)
 
@@ -115,7 +124,7 @@ def analyze_with_resources(
         evidence["activation_seconds"] = round(time.perf_counter() - started, 6)
         solve_started = time.perf_counter()
         try:
-            solved = app.analyze_setup(name=setup_name, blocking=True)
+            solved = analyze()
         finally:
             evidence["solve_seconds"] = round(time.perf_counter() - solve_started, 6)
         evidence["analyze_returned"] = solved is True
