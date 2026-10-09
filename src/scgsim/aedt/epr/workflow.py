@@ -23,6 +23,7 @@ from scgsim.aedt.epr.cache import (
     _SURFACE_ANALYSIS_SCOPE,
     _adaptive_epr_result,
     _adaptive_mode_history,
+    _attach_saved_native_surface_membership,
     _author_epr_expressions,
     _canonical_integral,
     _create_setup,
@@ -42,6 +43,7 @@ from scgsim.aedt.epr.native import (
     _read_saved_junction_lines,
     bind_saved_planar_geometry,
     prepare_native_planar_geometry,
+    verify_saved_native_surface_references,
 )
 
 from scgsim.aedt.results.convergence.hfss import read_hfss_convergence
@@ -151,6 +153,10 @@ def prepare_epr_hfss(
     bound = request.parse()
     if not isinstance(bound, HfssEprSpec):
         raise TypeError("bound EPR request did not retain its schema")
+    if bound.modeling not in {"solid", "thin_film"} or (
+        bound.geometry.modeling != bound.modeling
+    ):
+        raise ValueError("new EPR HFSS preparation requires explicit modeling")
     project_path = request.workspace / f"{bound.project_name}.aedt"
     timings: dict[str, Any] = {}
     preparation_started = time.perf_counter()
@@ -198,6 +204,11 @@ def prepare_epr_hfss(
     setup = _read_setup(app, bound)
     if bound.epr_request is not None:
         cache["serialized_readback"] = _read_cache(app, bound, cache["items"])
+        native_references = cache["native_surface_references"]
+        if native_references:
+            cache["native_surface_references"] = verify_saved_native_surface_references(
+                project_path, bound.design_name, native_references
+            )
     timings["readback_seconds"] = round(time.perf_counter() - started, 6)
     preparation_wall = time.perf_counter() - preparation_started
     timings["preparation_wall_seconds"] = round(preparation_wall, 6)
@@ -239,6 +250,15 @@ def prepared_epr_result(prepared: PreparedEprHfss) -> dict[str, Any]:
         raise TypeError("bound EPR request did not retain its schema")
     if not prepared.app.save_project() or not prepared.project_path.is_file():
         raise RuntimeError("HFSS EPR project final preparation save failed")
+    native_references = prepared.cache.get("native_surface_references", [])
+    if native_references:
+        prepared.cache["native_surface_references"] = (
+            verify_saved_native_surface_references(
+                prepared.project_path,
+                spec.design_name,
+                native_references,
+            )
+        )
     relative = prepared.project_path.relative_to(prepared.request.workspace).as_posix()
     digest = file_sha256(prepared.project_path)
     result = {
@@ -333,7 +353,14 @@ def solve_and_export_epr(
     outputs[history_path.relative_to(run_dir).as_posix()] = file_sha256(history_path)
     adaptive_result: EprResult | None = None
     if spec.epr_request is not None:
-        adaptive_result = _adaptive_epr_result(spec, history, convergence)
+        adaptive_result = _adaptive_epr_result(
+            spec,
+            history,
+            convergence,
+            native_surface_references=prepared.cache.get(
+                "native_surface_references", []
+            ),
+        )
         adaptive_result_path = output_dir / "adaptive-epr-result.json"
         write_json(adaptive_result_path, adaptive_result.to_payload())
         outputs[adaptive_result_path.relative_to(run_dir).as_posix()] = file_sha256(
@@ -456,7 +483,16 @@ def _evaluate_mode_integrals(
         value, item_evidence = _canonical_integral(
             scalar, target=target, purpose=purpose
         )
-        _store_integral(raw, target=target, value=value)
+        _store_integral(
+            raw,
+            target=target,
+            value=value,
+            expression_identity={
+                "name": expression["name"],
+                "identity_sha256": identity["sha256"],
+                "purpose": purpose,
+            },
+        )
         evidence.append(
             {
                 "name": expression["name"],
@@ -597,21 +633,22 @@ def analyze_saved_epr(
             }
         )
     timings["mode_integrals"] = mode_timings
+    result_provenance = {
+        "model_source_sha256": spec.geometry.model_sha256,
+        "analysis_source_sha256": spec.geometry.source_sha256,
+        "surface_analysis_scope": _SURFACE_ANALYSIS_SCOPE,
+        "saved_solution_content_sha256": spec.saved_solution.content_sha256,
+        "saved_solution_identity": detached(spec.saved_solution.identity),
+        "requested_modes": list(selected_modes),
+        "request": spec.epr_request.to_payload(),
+        "raw_integral_evidence": raw_evidence,
+    }
     result = EprResult(
         result_kind="saved_field",
         setup_name=spec.run_control.setup_name,
         rows=tuple(rows),
         _legacy_payload=spec._legacy_payload,
-        provenance={
-            "model_source_sha256": spec.geometry.model_sha256,
-            "analysis_source_sha256": spec.geometry.source_sha256,
-            "surface_analysis_scope": _SURFACE_ANALYSIS_SCOPE,
-            "saved_solution_content_sha256": spec.saved_solution.content_sha256,
-            "saved_solution_identity": detached(spec.saved_solution.identity),
-            "requested_modes": list(selected_modes),
-            "request": spec.epr_request.to_payload(),
-            "raw_integral_evidence": raw_evidence,
-        },
+        provenance=result_provenance,
     )
     result_path = output_dir / "epr-result.json"
     started = time.perf_counter()
@@ -624,6 +661,29 @@ def analyze_saved_epr(
     timings["workcopy_save_seconds"] = round(time.perf_counter() - started, 6)
     project_relative = project_path.relative_to(run_dir).as_posix()
     outputs[project_relative] = file_sha256(project_path)
+    native_references = cache.get("native_surface_references", [])
+    if native_references:
+        native_references = verify_saved_native_surface_references(
+            project_path, spec.design_name, native_references
+        )
+        cache["native_surface_references"] = native_references
+        for row in rows:
+            _attach_saved_native_surface_membership(
+                row["raw_integrals"], row, native_references
+            )
+        result = EprResult(
+            result_kind="saved_field",
+            setup_name=spec.run_control.setup_name,
+            rows=tuple(rows),
+            _legacy_payload=spec._legacy_payload,
+            provenance=result_provenance,
+        )
+        started = time.perf_counter()
+        write_json(result_path, result.to_payload())
+        outputs[result_path.relative_to(run_dir).as_posix()] = file_sha256(result_path)
+        timings["result_write_seconds"] = round(
+            timings["result_write_seconds"] + time.perf_counter() - started, 6
+        )
     return {
         "workflow_status": "epr_analysis_completed",
         "solver_invoked": False,

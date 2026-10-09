@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Literal
+from typing import Any
 
 from scgsim.geometry import (
     GeometryBuildInput,
@@ -33,6 +33,7 @@ from .preparation.geometry import prepare_hfss_eigenmode_from_geometry
 from .presentation.epr import show_epr
 from .results.resolve import ResolvedRun, resolve_results
 from .specs.common import AedtResources
+from .specs.modeling import Modeling, _modeling
 from .specs.hfss import EigenmodeRunControl
 
 
@@ -40,6 +41,7 @@ from .specs.hfss import EigenmodeRunControl
 class EigenmodeSim:
     """Configure ordinary and EPR Eigenmode on one body-first HFSS source."""
 
+    modeling: Modeling
     component: Any | None = None
     build_input: GeometryBuildInput | None = None
     stack: Mapping[str, Any] | None = None
@@ -47,8 +49,6 @@ class EigenmodeSim:
     project_name: str | None = None
     design_name: str | None = None
     run_control: EigenmodeRunControl | None = None
-    route: Literal["A", "B"] = "B"
-    route_a_profile: str | None = None
     resources: AedtResources | None = None
     geometry_workers: int | None = None
     surface_contributions: tuple[SurfaceEprSpec, ...] = ()
@@ -61,6 +61,9 @@ class EigenmodeSim:
     _plan_snapshot: GeometryPlanSnapshot | None = field(
         default=None, init=False, repr=False
     )
+
+    def __post_init__(self) -> None:
+        _modeling(self.modeling)
 
     def _invalidate_model(self) -> None:
         self.prepared_geometry = None
@@ -86,7 +89,7 @@ class EigenmodeSim:
         """Consume one immutable normalized source and its paired stack."""
         if not isinstance(snapshot, GeometryPlanSnapshot):
             raise TypeError("set_plan requires a GeometryPlanSnapshot")
-        trial = EigenmodeSim()
+        trial = EigenmodeSim(modeling=self.modeling)
         trial.set_stack(snapshot.stack)
         build_input = snapshot.geometry_input
         self.component = None
@@ -163,8 +166,6 @@ class EigenmodeSim:
         project_name: str,
         design_name: str,
         run_control: EigenmodeRunControl,
-        route: Literal["A", "B"] = "B",
-        route_a_profile: str | None = None,
         resources: AedtResources | None = None,
         geometry_workers: int | None = None,
     ) -> None:
@@ -179,30 +180,17 @@ class EigenmodeSim:
             raise ValueError("design_name must be non-empty text")
         if not isinstance(run_control, EigenmodeRunControl):
             raise TypeError("run_control must be EigenmodeRunControl")
-        if route not in {"A", "B"}:
-            raise ValueError("route must be A or B")
-        if route == "A" and route_a_profile not in {
-            "substrate_face",
-            "metal_gap_equivalent",
-        }:
-            raise ValueError("Route A requires an explicit supported thin-film profile")
-        if route == "B" and route_a_profile is not None:
-            raise ValueError("Route B cannot use route_a_profile")
+        _modeling(self.modeling)
         if resources is not None and not isinstance(resources, AedtResources):
             raise TypeError("resources must be AedtResources or None")
         validate_geometry_workers(geometry_workers)
-        model_changed = (route, route_a_profile) != (self.route, self.route_a_profile)
         self.project_name, self.design_name, self.run_control = (
             project_name,
             design_name,
             run_control,
         )
-        self.route, self.route_a_profile = route, route_a_profile
         self.resources, self.geometry_workers = resources, geometry_workers
-        if model_changed:
-            self._invalidate_model()
-        else:
-            self.handoff_plan = None
+        self.handoff_plan = None
 
     def set_surface_epr(
         self,
@@ -309,8 +297,7 @@ class EigenmodeSim:
         data = summarize_geometry_input(source, prepared_stack=stack).data
         data["backend"] = {
             "name": "aedt",
-            "route": self.route,
-            "route_a_profile": self.route_a_profile,
+            "modeling": self.modeling,
             "project_name": self.project_name,
             "design_name": self.design_name,
             "run_control": (
@@ -356,12 +343,12 @@ class EigenmodeSim:
             geometry = prepare_planar_geometry_input(
                 source,
                 prepared_stack=source_stack,
-                route=self.route,
-                route_a_profile=self.route_a_profile,
+                modeling=self.modeling,
                 junctions=self.junctions,
                 contributions=self.surface_contributions,
             )
         plan = prepare_hfss_eigenmode_from_geometry(
+            modeling=self.modeling,
             geometry=geometry,
             project_name=self.project_name,
             design_name=self.design_name,

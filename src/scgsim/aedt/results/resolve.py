@@ -7,6 +7,8 @@ import csv
 
 import math
 
+import re
+
 from dataclasses import dataclass
 
 from pathlib import Path
@@ -21,6 +23,7 @@ from scgsim.aedt.preparation.cohort import (
     canonical_handoff_paths,
     canonical_member_paths,
     validate_geometry_source,
+    validate_hfss_import_source,
 )
 
 from scgsim.aedt.results.benchmark import read_simulation_benchmark
@@ -130,7 +133,7 @@ class ResolvedRun:
 
         if self.mode == "q2d":
             root = self.receipt_path.parent.parent
-            spec = parse_aedt_spec(read_json(self._verified_spec()), base_dir=root)
+            spec = parse_aedt_spec(read_json(self._verified_spec()), base_dir=root, allow_historical_modeling=True)
             if not isinstance(spec, Q2dSpec):
                 raise RuntimeError("resolved Q2D result has a non-Q2D spec")
             rows, _ = read_q2d_rlgc_matrix(self.primary_csv, spec)
@@ -140,7 +143,7 @@ class ResolvedRun:
 
         if self.mode == "q3d":
             root = self.receipt_path.parent.parent
-            spec = parse_aedt_spec(read_json(self._verified_spec()), base_dir=root)
+            spec = parse_aedt_spec(read_json(self._verified_spec()), base_dir=root, allow_historical_modeling=True)
             if not isinstance(spec, Q3dSpec):
                 raise RuntimeError("resolved Q3D result has a non-Q3D spec")
             if not spec.solve_ac_rl:
@@ -291,7 +294,7 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
     if not isinstance(source, dict) or source.get("spec") != "aedt_spec.json":
         raise RuntimeError("receipt source paths are not canonical")
     spec_path = _verified(root, "aedt_spec.json", source, "spec_sha256")
-    spec = parse_aedt_spec(read_json(spec_path), base_dir=root)
+    spec = parse_aedt_spec(read_json(spec_path), base_dir=root, allow_historical_modeling=True)
     if receipt_schema in {RECEIPT_V2, RECEIPT_V3}:
         _validate_completion_cohort(root, receipt, spec)
     if isinstance(spec, HfssEprSpec):
@@ -713,6 +716,8 @@ def _validate_completion_cohort(root: Path, receipt: dict[str, Any], spec: Any) 
                 f"completed {version} manifest member mismatch: {relative}"
             )
 
+    validate_hfss_import_source(root, read_json(root / "aedt_spec.json"), spec)
+
 
 def _sha256_text(value: str) -> bool:
     return len(value) == 64 and all(
@@ -823,11 +828,49 @@ def _validate_hfss_pec_bindings(
         raise RuntimeError("HFSS V3 material binding evidence is invalid")
     materials = dict(spec.materials)
     layers = {layer.layer: layer for layer in spec.layer_imports}
+    effective_layers = (
+        {}
+        if spec.modeling is None
+        else {
+            (record["layer"], record["datatype"]): record
+            for record in spec.effective_layer_imports
+        }
+    )
     pec_records: list[dict[str, Any]] = []
     sheet_records: list[dict[str, Any]] = []
     for record, object_binding in zip(records, spec.object_bindings, strict=True):
         material = materials[object_binding.material_id]
         layer = layers[object_binding.layer]
+        if effective_layers:
+            candidates = [
+                item
+                for item in spec.layer_imports
+                if object_binding.object_name.startswith(f"{item.layer_name}_")
+            ]
+            if len(candidates) != 1:
+                raise RuntimeError("HFSS current source destination is ambiguous")
+            layer = candidates[0]
+            effective = effective_layers[(layer.layer, layer.datatype)]
+            expected_fields = {
+                "datatype": layer.datatype,
+                "native_import_layer": effective["native_import_layer"],
+                "physical_layer_id": effective["physical_layer_id"],
+                "representation": effective["representation"],
+                "source_z_min_um": effective["z_min_um"],
+                "source_z_max_um": effective["z_max_um"],
+                "physical_thickness_um": effective["physical_thickness_um"],
+                "effective_z_min_um": effective["effective_z_min_um"],
+                "effective_z_max_um": effective["effective_z_max_um"],
+                "native_object_type": "Sheet"
+                if effective["representation"] == "sheet"
+                else "Solid",
+            }
+            if not isinstance(record, dict) or any(
+                record.get(key) != value for key, value in expected_fields.items()
+            ):
+                raise RuntimeError(
+                    "HFSS effective material geometry differs from source mapping"
+                )
         if (
             not isinstance(record, dict)
             or record.get("object_name") != object_binding.object_name
@@ -845,6 +888,18 @@ def _validate_hfss_pec_bindings(
         if not material.is_superconducting:
             if binding is not None:
                 raise RuntimeError("non-PEC HFSS material has PEC binding evidence")
+            if effective_layers:
+                observed = record.get("observed")
+                if (
+                    not isinstance(observed, dict)
+                    or not isinstance(observed.get("native_material_name"), str)
+                    or observed["native_material_name"].casefold()
+                    != material.library_name.casefold()
+                    or not _positive_unique_ids([record.get("native_object_id")], 1)
+                ):
+                    raise RuntimeError(
+                        "HFSS dielectric material native binding differs"
+                    )
             continue
         face_ids = binding.get("native_face_ids") if isinstance(binding, dict) else None
         if not isinstance(binding, dict) or (
@@ -858,6 +913,12 @@ def _validate_hfss_pec_bindings(
             or not _positive_unique_ids(face_ids, len(face_ids))
         ):
             raise RuntimeError("HFSS V3 PEC source binding evidence is invalid")
+        if effective_layers and (
+            binding.get("native_object_id") != record.get("native_object_id")
+            or binding.get("native_object_type") != record.get("native_object_type")
+            or binding.get("native_face_ids") != record.get("native_face_ids")
+        ):
+            raise RuntimeError("HFSS effective object and PEC identities differ")
         evidence = binding.get("verified_evidence")
         if binding.get("native_object_type") == "Solid":
             if (
@@ -1153,11 +1214,45 @@ def _validate_q3d_readback(root: Path, receipt: dict[str, Any], spec: Q3dSpec) -
                     or terminal.get("name") != f"{expected.name}{kind.title()}"
                     or terminal.get("object_name") != object_name
                     or terminal.get("side") != side
-                    or not isinstance(terminal.get("native_face_ids"), list)
-                    or len(terminal["native_face_ids"]) != 1
-                    or not isinstance(terminal["native_face_ids"][0], int)
                 ):
                     raise RuntimeError("Q3D native terminal evidence is invalid")
+                effective = (
+                    {}
+                    if spec.modeling is None
+                    else {body["body_id"]: body for body in spec.effective_bodies}
+                )
+                if effective and effective[object_name]["representation"] == "sheet":
+                    from scgsim.aedt.runtime.native.q3d_bodies import (
+                        q3d_terminal_segments,
+                    )
+
+                    body = next(
+                        body for body in spec.bodies if body.body_id == object_name
+                    )
+                    indices = q3d_terminal_segments(body, side)
+                    edges = terminal.get("native_edge_ids")
+                    if (
+                        not isinstance(edges, list)
+                        or not _positive_unique_ids(edges, len(indices))
+                        or terminal.get("source_edges")
+                        != [
+                            {"source_segment_index": index, "native_edge_id": edge}
+                            for index, edge in zip(indices, edges, strict=True)
+                        ]
+                        or terminal.get("terminal_type") != "ConstantVoltage"
+                        or "native_face_ids" in terminal
+                    ):
+                        raise RuntimeError(
+                            "Q3D Sheet terminal evidence differs from source exterior"
+                        )
+                else:
+                    faces = terminal.get("native_face_ids")
+                    if not isinstance(faces, list) or not _positive_unique_ids(
+                        faces, 1
+                    ):
+                        raise RuntimeError(
+                            "Q3D Solid terminal face evidence is invalid"
+                        )
         elif "source" in record or "sink" in record:
             raise RuntimeError("Q3D net receipt contains undeclared terminals")
     net_object_ids = [
@@ -1165,7 +1260,7 @@ def _validate_q3d_readback(root: Path, receipt: dict[str, Any], spec: Q3dSpec) -
     ]
     if len(set(net_object_ids)) != len(net_object_ids):
         raise RuntimeError("Q3D native object IDs must be unique across nets")
-    _validate_q3d_body_bindings(receipt, spec, nets)
+    _validate_q3d_body_bindings(receipt, spec, nets, root)
     _validate_q3d_region_ground(receipt, spec, nets)
     expected_setup = {
         "name": spec.run_control.setup_name,
@@ -1245,7 +1340,7 @@ def _read_q3d_original_cg(
 
 
 def _validate_q3d_body_bindings(
-    receipt: dict[str, Any], spec: Q3dSpec, nets: list[dict[str, Any]]
+    receipt: dict[str, Any], spec: Q3dSpec, nets: list[dict[str, Any]], root: Path
 ) -> None:
     """Bind every created body to its declared geometry and final native identity.
 
@@ -1271,6 +1366,13 @@ def _validate_q3d_body_bindings(
         body.body_id for body in spec.bodies
     }:
         raise RuntimeError("Q3D native body inventory differs from the spec")
+    historical = spec.modeling is None
+    raw_bodies = {
+        body["body_id"]: body for body in read_json(root / "aedt_spec.json")["bodies"]
+    }
+    effective_bodies = (
+        {} if historical else {body["body_id"]: body for body in spec.effective_bodies}
+    )
     seen_native_ids = set()
     for body in spec.bodies:
         record = records[body.body_id]
@@ -1279,6 +1381,13 @@ def _validate_q3d_body_bindings(
         expected_native_material = (
             "pec" if material.is_superconducting else material.library_name
         )
+        sheet = (
+            not historical
+            and effective_bodies[body.body_id]["representation"] == "sheet"
+        )
+        observed_key = (
+            "native_boundary_material_name" if sheet else "native_material_name"
+        )
         if (
             record.get("material_id") != body.material_id
             or record.get("role") != body.physical_role
@@ -1286,20 +1395,33 @@ def _validate_q3d_body_bindings(
             or record.get("is_superconducting") is not material.is_superconducting
             or record.get("requested_library_name") != material.library_name
             or not isinstance(observed, dict)
-            or not isinstance(observed.get("native_material_name"), str)
-            or observed["native_material_name"].casefold()
-            != expected_native_material.casefold()
+            or not isinstance(observed.get(observed_key), str)
+            or observed[observed_key].casefold() != expected_native_material.casefold()
         ):
             raise RuntimeError("Q3D body material binding differs from the spec")
+        if sheet and (
+            observed.get("native_material_property") != "not_applicable_sheet"
+            or "native_material_name" in observed
+        ):
+            raise RuntimeError(
+                "Q3D Sheet evidence must identify boundary-only material"
+            )
         evidence = record.get("body_binding")
         if not isinstance(evidence, dict):
             raise RuntimeError("Q3D native body binding is absent")
         native_id = evidence.get("native_object_id")
         faces = evidence.get("native_face_ids")
         if (
-            evidence.get("body") != body.to_payload()
+            evidence.get("body")
+            != (raw_bodies[body.body_id] if historical else body.to_payload())
             or evidence.get("object_name") != body.body_id
-            or evidence.get("native_object_type") != "Solid"
+            or evidence.get("native_object_type")
+            != (
+                "Sheet"
+                if not historical
+                and effective_bodies[body.body_id]["representation"] == "sheet"
+                else "Solid"
+            )
             or not _positive_unique_ids([native_id], 1)
             or native_id in seen_native_ids
             or not isinstance(faces, list)
@@ -1313,6 +1435,90 @@ def _validate_q3d_body_bindings(
             raise RuntimeError(
                 "Q3D body binding differs from the native identity/source declaration"
             )
+        if not historical:
+            effective = effective_bodies[body.body_id]
+            if evidence.get("effective_geometry") != effective:
+                raise RuntimeError(
+                    "Q3D effective geometry binding differs from the spec"
+                )
+            thin = evidence.get("thin_conductor")
+            if effective["representation"] == "sheet":
+                if not isinstance(thin, dict):
+                    raise RuntimeError("Q3D ThinConductor evidence is not recorded")
+                raw_material = thin.get("material_raw")
+                if (
+                    isinstance(raw_material, list)
+                    and len(raw_material) == 2
+                    and raw_material[0] == "Material:="
+                ):
+                    raw_material = raw_material[1]
+                if not isinstance(raw_material, str):
+                    raise RuntimeError(
+                        "Q3D ThinConductor Material has unknown native shape"
+                    )
+                material_name = raw_material.strip('"')
+                # Offline replay of pinned PyAEDT 1.3 Length conversion, without AEDT.
+                raw_thickness = thin.get("thickness")
+                length = re.fullmatch(
+                    r"\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)([A-Za-z]+)",
+                    raw_thickness if isinstance(raw_thickness, str) else "",
+                )
+                scales = {
+                    "fm": 1e-15,
+                    "pm": 1e-12,
+                    "nm": 1e-9,
+                    "um": 1e-6,
+                    "mm": 1e-3,
+                    "cm": 1e-2,
+                    "dm": 1e-1,
+                    "meter": 1.0,
+                    "km": 1e3,
+                    "uin": 0.0254 * 1e-6,
+                    "mil": 0.0254 * 1e-3,
+                    "in": 0.0254,
+                    "ft": 0.0254 * 12,
+                    "yd": 0.0254 * 36,
+                    "mile": 0.0254 * 63360,
+                }
+                if length is None or length[2].lower() not in scales:
+                    raise RuntimeError(
+                        "Q3D ThinConductor Thickness is not a native length"
+                    )
+                thickness_um = float(length[1]) * scales[length[2].lower()] / 1e-6
+                raw_ids = thin.get("native_assignment_ids_raw")
+                if not isinstance(raw_ids, list) or any(
+                    not (
+                        type(value) is int
+                        or (isinstance(value, str) and re.fullmatch(r"[0-9]+", value))
+                    )
+                    for value in raw_ids
+                ):
+                    raise RuntimeError(
+                        "Q3D ThinConductor assignment readback is malformed"
+                    )
+                assigned_ids = [int(value) for value in raw_ids]
+                expected_thin = {
+                    "name": f"{body.body_id}ThinConductor",
+                    "bound_type": "ThinConductor",
+                    "material": material_name,
+                    "material_raw": thin.get("material_raw"),
+                    "thickness": raw_thickness,
+                    "thickness_um": thickness_um,
+                    "native_assignment_ids_raw": raw_ids,
+                    "native_object_ids": assigned_ids,
+                }
+                if (
+                    thin != expected_thin
+                    or material_name.casefold() != "pec"
+                    or material_name != observed[observed_key]
+                    or thickness_um != effective["physical_thickness_um"]
+                    or assigned_ids != [native_id]
+                ):
+                    raise RuntimeError(
+                        "Q3D ThinConductor binding differs from physical source"
+                    )
+            elif thin is not None:
+                raise RuntimeError("Q3D Solid body contains Sheet boundary evidence")
         seen_native_ids.add(native_id)
         incidence = evidence.get("incidence")
         if not isinstance(incidence, dict):
@@ -1647,7 +1853,8 @@ def _validate_eigenmode_readback(
 def _validate_modal_native_evidence(ports: Any, spec: HfssDrivenSpec) -> None:
     if not isinstance(ports, list) or len(ports) != 2:
         raise RuntimeError("completed receipt has invalid modal ports")
-    for record, port in zip(ports, spec.ports, strict=True):
+    native_ports = spec.ports if spec.modeling is None else spec.effective_ports
+    for record, port, native_port in zip(ports, spec.ports, native_ports, strict=True):
         if not isinstance(port, ModalPort) or not isinstance(record, dict):
             raise TypeError("completed receipt has invalid modal port identity")
         if (
@@ -1669,6 +1876,14 @@ def _validate_modal_native_evidence(ports: Any, spec: HfssDrivenSpec) -> None:
             }
         ):
             raise RuntimeError("completed receipt modal request does not match spec")
+        if spec.modeling is not None and record.get("effective") != {
+            "integration_line_um": [
+                list(point) for point in native_port.integration_line_um
+            ]
+        }:
+            raise RuntimeError(
+                "completed receipt modal effective endpoints differ from source map"
+            )
         native = record.get("native")
         if not isinstance(native, dict):
             raise TypeError("completed receipt has no native modal evidence")
@@ -1711,7 +1926,7 @@ def _validate_modal_native_evidence(ports: Any, spec: HfssDrivenSpec) -> None:
             or any(
                 not math.isclose(float(actual), wanted, abs_tol=1e-9)
                 for actual_point, expected_point in zip(
-                    integration_line, port.integration_line_um, strict=True
+                    integration_line, native_port.integration_line_um, strict=True
                 )
                 for actual, wanted in zip(actual_point, expected_point, strict=True)
             )

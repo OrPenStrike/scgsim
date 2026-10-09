@@ -421,7 +421,7 @@ def _auto_vacuum_surface_sheet_for_xy_envelope(
     entity: SemanticEntitySpec,
     route: RouteLiteral,
 ) -> bool:
-    return route == "A" and entity.route_representations.get(route) == "surface_sheet"
+    return route in {"A", "_effective"} and entity.route_representations.get(route) == "surface_sheet"
 
 
 def _auto_vacuum_entity_xy_bounds(
@@ -578,7 +578,7 @@ def _auto_vacuum_envelope_bounds(
             entry["z_min_um"] = float(z_min_um)
             entry["z_max_um"] = float(z_max_um)
         elif (
-            route == "A"
+            route in {"A", "_effective"}
             and entity.route_representations.get(route) == "surface_sheet"
             and not is_subtractor
         ):
@@ -611,6 +611,9 @@ def _auto_vacuum_envelope_bounds(
 def _auto_vacuum_sheet_z(
     build_input: GeometryBuildInput, entity: SemanticEntitySpec
 ) -> float:
+    effective = entity.metadata.get("aedt_effective_layer")
+    if isinstance(effective, Mapping) and effective.get("representation") == "sheet":
+        return float(effective["effective_z_min_um"])
     provenance = build_input.metadata.get("route_a_thin_film")
     if not isinstance(provenance, Mapping):
         raise ValueError(
@@ -769,7 +772,7 @@ def _conductor_face_solution_pieces(
     geometry_refs: Sequence[Mapping[str, Any]],
 ) -> tuple[tuple[str, dict[str, Any]], ...]:
     """Partition Route-A/B planar faces by exact local solution adjacency."""
-    if route not in {"A", "B"}:
+    if route not in {"A", "B", "_effective"}:
         adjacent_id = _conductor_face_adjacent_solution_id(
             build_input,
             entity,
@@ -1203,7 +1206,7 @@ def _solution_boundary_edge_parameters(
     end: tuple[float, float],
 ) -> tuple[float, ...]:
     """Split a vacuum exterior edge at exact finite-conductor endpoints."""
-    if route != "B" or not _is_vacuum_solution_entity(solution):
+    if route not in {"B", "_effective"} or not _is_vacuum_solution_entity(solution):
         return (0.0, 1.0)
     parameters = {0.0, 1.0}
     solution_z_min = float(solution.geometry["z_min_um"])
@@ -2207,7 +2210,7 @@ def _conductor_entities_on_solution_plane(
             # `_plan_substrate_air_surfaces`; whole-entity coverage cannot
             # represent a sheet spanning supported and exposed regions.
             if (
-                route != "A"
+                route not in {"A", "_effective"}
                 and set(_route_a_sheet_boundary_volume_ids(build_input, entity))
                 == pair_ids
                 and _same_z(_route_a_sheet_plane_z_um(build_input, entity), z_um)

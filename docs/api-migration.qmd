@@ -1,8 +1,8 @@
 ---
 title: "SCGSim 2.0 API Migration Map"
-description: "Current public geometry, AEDT, Palace and visualization symbols mapped to the accepted SCGSim 2.0 module structure."
+description: "Current public geometry, AEDT, Palace and visualization symbols mapped to the accepted SCGSim 2.0 structure and the converging AEDT modeling extension."
 scgsim-kind: "contract"
-scgsim-status: "ACCEPTED"
+scgsim-status: "CONVERGING"
 scgsim-id: "docs/api-migration"
 ---
 
@@ -19,6 +19,15 @@ baseline remains `develop@3a52fb1`, tree
 `96adcf8672b497a29dd0a6b43043cca11efc3043`. Isolated wheel observations are
 specific to their frozen package and runtime-source identities; they do not
 establish a user installation or transfer native results to another wheel.
+
+The Solid/Thin-Film 3D request extension is a separate `CONVERGING` API scope.
+It requires a request-level `modeling` value of `"solid"` or `"thin_film"` for
+every new Q3D and HFSS 3D request. The field has no default, and an absent mode
+is never inferred for those families. Previously supported result payloads
+remain readable only under their original family/schema reader with their raw
+payload and hash preserved. This does not change the shared versioned handoff
+compatibility of unchanged families such as Q2D. Q2D and Palace contracts are
+otherwise unchanged.
 
 Package-level facades remain the supported high-level entrypoints. The move
 does not add compatibility wrappers for old internal paths. Existing consumer
@@ -41,14 +50,66 @@ the v2 package and the corresponding old-to-new map.
   matrix result.
 - Preserve the formal `python -m scgsim.aedt.run` command as the AEDT
   transaction entrypoint. It is a supported CLI, not a legacy wrapper.
-- The v2 AEDT producer emits `scgsim.aedt.runtime-source.v13`. Its manifest
-  declares 61 canonical module paths, including 41 AEDT modules, and records
-  `schema_version`, `stage`, `modules`, `content_sha256`, and
-  `revision_observation`; declared module bytes and digest are required, while
-  the truthful Git observation may be unavailable. V13 adds no helper-hash
-  map. Its declared files are not a transitive dependency attestation.
-  Historical runtime-source v1–v12 retain their exact paths and identity rules;
-  migration does not rewrite or reinterpret historical receipts.
+- The accepted 2.0 baseline AEDT producer emits
+  `scgsim.aedt.runtime-source.v13`. That frozen manifest has 61 declared paths,
+  including 41 AEDT modules, and records `schema_version`, `stage`, `modules`,
+  `content_sha256`, and `revision_observation`; module bytes and digest are
+  required while the Git observation may truthfully be unavailable. V13 adds
+  no helper-hash map. Its declared files are not a transitive dependency
+  attestation. V1–V13 retain their exact historical path and identity rules;
+  migration does not rewrite or reinterpret their receipts.
+
+## Solid/Thin-Film request migration
+
+New Q3D and HFSS 3D requests require the explicit request-level selection
+`modeling="solid"` or `modeling="thin_film"`. Omitting it or supplying another
+mode does not select an implicit compatibility path. The PDK/source contract
+also supplies exact physical-layer identity, layer representation
+(stack-bearing film, local film/deck, or retained solid), physical thickness,
+and sheet-contact side where applicable. Existing Object, Net, port, connected
+outline and hole identities remain the request's source of truth.
+
+This selection uses the existing Q3D body-v3 and HFSS family schema
+identifiers. A supported historical Q3D/HFSS result payload without `modeling`
+can only be read through its original versioned result reader; its raw payload
+and hash are preserved, and it cannot start a new execution. The new execution
+path never infers or supplies a missing mode. Layer declarations use
+`PhysicalLayerSpec(physical_layer_id, kind, z_min_um, z_max_um, contact_side,
+source_thickness_um=None)`
+in the single authored `LayerStack` coordinate system. In solid mode the
+`physical_layers` collection may be empty; source body and `LayerImport`
+records may identify a layer with `physical_layer_id`. Preparation exposes
+source and mapped intervals in `effective_bodies` and
+`effective_layer_imports`. The physical layer ID is counted once across
+polygons, occurrences, and Net membership; no per-layer `stack_id` is
+introduced. GeometryPlan preparation carries the original Level thickness in
+`source_thickness_um`; direct callers may supply that original source fact.
+Film physical-thickness output retains it without rounding or recomputing it
+from endpoints. Omission means endpoint-defined thickness, not an original PDK
+thickness claim. Coordinate mapping still uses endpoint spans; retained solids
+keep their own body extent.
+
+The mode selection chooses geometry representation; it does not choose a solver
+family or a public A/B/C execution route. The complete transform and material,
+terminal, build-only, and failure behavior is defined in the
+[AEDT Solid and thin-film contract](specs/aedt-runtime.qmd#aedt-solid-thin-film).
+Q2D and Palace are outside this migration. Q3D input-v1/v2 request schemas
+remain removed; shared V1/V2 handoff compatibility for other supported family
+paths does not restore those Q3D request schemas or bypass the explicit-mode
+requirement.
+
+This extension uses the next declared AEDT runtime-source identity,
+`scgsim.aedt.runtime-source.v15`; V14 remains reserved for the held PR35, and
+V1–V14 keep their existing contracts. V15 will bind the implemented module
+bytes and digest without claiming exhaustive transitive dependency coverage;
+its precise path list is owned by the frozen implementation inventory.
+
+The current continuation's candidate scope covers terminal-free Q3D C/G, HFSS
+Eigenmode with EPR/saved-field analysis, and HFSS Driven Terminal. Q3D AC/RL
+and HFSS Driven Modal are deferred from this continuation; that scope boundary
+does not remove their existing request or result contracts. The runtime
+contract below owns the occurrence-local Ground and field-side/thickness
+distinctions for these modeling paths.
 
 ## Geometry and compiler API
 

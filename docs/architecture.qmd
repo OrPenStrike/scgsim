@@ -114,7 +114,27 @@ runtime transaction owns receipt transitions and the sole Desktop lifecycle;
 family runtimes own native prepare/solve/export/readback. EPR preparation and
 saved-field analysis stay in their EPR workflow, strict resolution does not
 execute a solver, and presentation consumes detached results. These are
-separate ownership boundaries, not shared solver base classes.
+separate ownership boundaries, not shared solver base classes. The available
+Solid Surface-EPR contract adds distinct raw native-face reference integrals
+for selected MA/MS/SA contributions; it keeps their owner and support separate
+from masked Sheet results and does not fold them into participation or loss
+totals. The references may cover different support or material basis from the
+Sheets. Required native-member readback uses the saved design's matching
+`EntityList` at the existing post-save checkpoint; assignment-time
+`props.List` is cached state, not independent native readback. A current
+SimplePad Solid run recorded six raw native-face references in each of two
+adaptive passes, with FaceList membership matching the saved design's
+`EntityList`. The run did not converge at its two-pass maximum (delta 79.181);
+this does not establish accuracy or incident-material equivalence. Mode 1,
+pass 2 saved-field analysis then completed with six raw references; strict
+resolution and Report presentation exposed the raw integrals and membership.
+ThinFilm Surface-EPR also uses separate non-model integration sheets for
+masked and unmasked support. Its calculator `Surface`/`Adjacent` selector is
+chosen from each sheet's `FacePrimitive.normal` and the source contribution's
+requested material side, independently from geometric normal projection. This
+mapping remains empirical, not a generally validated native side query; the
+call emits a warning about that limitation. See the
+[field-side contract](specs/aedt-runtime.qmd#eigenmode-saved-fields-and-surface-epr-direction).
 
 Within Palace, `results.report_data` owns detached report records and snapshot
 readers; `presentation.reports` owns trust/physics views and figures. The
@@ -289,6 +309,12 @@ Private HFSS, Q3D, and Q2D modules each own their native model
 preparation, explicit solve, and export/readback stages. Families do not import
 the transaction module, and their narrow shared native helpers do not import a
 family or start a Desktop.
+
+HFSS Eigenmode and EPR share one private setup-control mapping; EPR owns only
+its expression-cache extension. Driven HFSS and Q3D/Q2D retain their
+family-specific setup translations. Shared Desktop, ACF/resource, and raw
+saved-setup helpers do not define solver-specific setup fields; see the
+[AEDT setup-control contract](specs/aedt-runtime.qmd#aedt-family-setup-controls).
 
 At family entry, one private bound request fixes the absolute run workspace and
 detaches the parsed spec payload. Relative source paths are interpreted against

@@ -21,19 +21,14 @@ from multiprocessing import get_context
 
 from typing import Any
 
-from scgsim.semantics.route_a import (
-    apply_thin_film_profile_with_provenance,
-    derive_thin_film_facts,
-    geometry_z_range,
-)
+from scgsim.semantics.route_a import geometry_z_range
 
 from scgsim.geometry import GeometryBuildInput
-from scgsim.geometry.compiler.validation import validate_selected_route
 from scgsim.geometry.source.validation import validate_geometry_input
 
 from scgsim.geometry._primitives.spatial import _geometry_ref_surface_z_um
-from scgsim.geometry.planning.domain import verified_route_a_substrate_support
-from scgsim.geometry.planning.surfaces import plan_surface_contribution_patches
+from scgsim.geometry.planning.surfaces import _plan_surface_contribution_geometry
+from scgsim.aedt.specs.modeling import Modeling, _effective_geometry_input
 
 from scgsim.aedt.epr.junction_partition import _closed_contact, partition_junctions
 
@@ -286,7 +281,8 @@ def _source_payload(
                 "material_id": item.material_id,
                 "material_kind": item.material_kind,
                 "part_role": item.part_role,
-                "representation": item.route_representations.get(route),
+                "representation": item.metadata.get("aedt_effective_layer", {}).get("representation", item.route_representations.get(route)),
+                "physical_layer": _plain(item.metadata.get("aedt_effective_layer")),
                 "net_id": item.net_id,
                 "polygon_ids": list(item.polygon_ids),
                 "geometry": _plain(item.geometry),
@@ -423,13 +419,12 @@ def _source_payload(
             max(item[1] for item in z_ranges),
         ],
     }
-    profile = metadata.get("route_a_thin_film")
-    if profile is not None and not isinstance(profile, Mapping):
-        raise TypeError("prepared_stack route_a_thin_film provenance must be a mapping")
     return {
         "schema_version": "scgsim.aedt.epr-planar-source.v1",
+        "modeling": _plain(metadata.get("aedt_modeling")),
         "source_dbu_um": source_dbu_um,
         "prepared_stack_sha256": canonical_sha256(_plain(prepared_stack)),
+        "source_stack_sha256": metadata["aedt_modeling"]["source_stack_sha256"],
         "materials": material_catalog,
         "solution_regions": normalized_regions,
         "native_region": native_region,
@@ -452,7 +447,6 @@ def _source_payload(
             else {}
         ),
         "conductors": conductors,
-        "route_a_thin_film": _plain(profile) if profile is not None else None,
         "junction_regions": [
             {
                 "port_sheet_id": item.port_sheet_id,
@@ -480,110 +474,6 @@ def _source_payload(
             for item in build_input.polygons
         ],
     }
-
-
-def _geometry_with_prepared_z(
-    geometry: Mapping[str, Any], prepared: Mapping[str, Any], context: str
-) -> dict[str, Any]:
-    z_min, z_max = geometry_z_range(prepared.get("geometry", prepared), context)
-    result = dict(geometry)
-    if "z_min_um" in result or "z_max_um" in result:
-        result["z_min_um"], result["z_max_um"] = z_min, z_max
-    else:
-        result["z_um"], result["thickness_um"] = z_min, z_max - z_min
-    return result
-
-
-def _profiled_geometry_input(
-    build_input: GeometryBuildInput, prepared_stack: Mapping[str, Any]
-) -> GeometryBuildInput:
-    regions = prepared_stack["solution_regions"]
-    layers = {
-        str(item.get("semantic_id")): item
-        for item in prepared_stack["layers"]
-        if isinstance(item, Mapping) and isinstance(item.get("semantic_id"), str)
-    }
-    entities = []
-    for entity in build_input.entities:
-        if entity.material_kind in {"vacuum", "dielectric"}:
-            record = regions.get(entity.semantic_id)
-        else:
-            source_id = str(
-                entity.metadata.get("source_semantic_id", entity.semantic_id)
-                if "split_polygon_index" in entity.metadata
-                else entity.semantic_id
-            )
-            if (
-                "split_polygon_index" in entity.metadata
-                and "source_semantic_id" not in entity.metadata
-            ):
-                source_id = str(
-                    entity.metadata.get("semantic_group_id", entity.semantic_id)
-                )
-            record = layers.get(source_id)
-        if not isinstance(record, Mapping):
-            raise ValueError(
-                f"prepared stack lacks geometry for {entity.semantic_id!r}"
-            )
-        entities.append(
-            replace(
-                entity,
-                geometry=_geometry_with_prepared_z(
-                    entity.geometry, record, entity.semantic_id
-                ),
-            )
-        )
-    metadata = prepared_stack.get("metadata", {})
-    return replace(
-        build_input,
-        entities=tuple(entities),
-        solution_regions=_plain(regions),
-        metadata={**dict(build_input.metadata), **dict(metadata)},
-    )
-
-
-def _prepare_stack_and_geometry(
-    build_input: GeometryBuildInput,
-    prepared_stack: Mapping[str, Any],
-    *,
-    route: str,
-    route_a_profile: str | None,
-) -> tuple[GeometryBuildInput, Mapping[str, Any]]:
-    if route == "B":
-        if route_a_profile is not None:
-            raise ValueError("Route B does not accept route_a_profile")
-        return _profiled_geometry_input(build_input, prepared_stack), prepared_stack
-    if route_a_profile not in {"substrate_face", "metal_gap_equivalent"}:
-        raise ValueError(
-            "Route A requires route_a_profile='substrate_face' or "
-            "'metal_gap_equivalent'"
-        )
-    metadata = prepared_stack.get("metadata", {})
-    if not isinstance(metadata, Mapping):
-        raise TypeError("prepared_stack metadata must be a mapping")
-    existing = metadata.get("route_a_thin_film")
-    if existing is not None:
-        if (
-            not isinstance(existing, Mapping)
-            or existing.get("variant") != route_a_profile
-        ):
-            raise ValueError("prepared_stack Route A profile contradicts request")
-        profiled = prepared_stack
-    else:
-        support = verified_route_a_substrate_support(build_input, prepared_stack)
-        facts = derive_thin_film_facts(
-            prepared_stack,
-            allow_single_face=route_a_profile == "substrate_face",
-            substrate_support=support,
-        )
-        source_digest = canonical_sha256(_plain(prepared_stack))
-        profiled = apply_thin_film_profile_with_provenance(
-            prepared_stack,
-            profile=route_a_profile,
-            facts=facts,
-            source_revision=f"sha256:{source_digest}",
-        )
-    return _profiled_geometry_input(build_input, profiled), profiled
 
 
 def _surface_mask_plane(geometry_ref: Mapping[str, Any]) -> dict[str, Any]:
@@ -670,6 +560,9 @@ def _project_plane_region(
 
 
 def _route_a_sheet_z(source: Mapping[str, Any], entity: Mapping[str, Any]) -> float:
+    effective = entity.get("physical_layer")
+    if isinstance(effective, Mapping) and effective.get("representation") == "sheet":
+        return float(effective["effective_z_min_um"])
     profile = source.get("route_a_thin_film")
     if not isinstance(profile, Mapping):
         raise ValueError("Route A conductor lacks thin-film profile provenance")
@@ -1007,13 +900,12 @@ def prepare_planar_geometry_input(
     build_input: GeometryBuildInput,
     *,
     prepared_stack: Mapping[str, Any],
-    route: str,
-    route_a_profile: str | None = None,
+    modeling: Modeling,
     junctions: Sequence[PlanarJunction] = (),
     contributions: Sequence[SurfaceEprSpec] = (),
     source_dbu_um: float | None = None,
 ) -> PreparedPlanarGeometry:
-    """Validate and detach the shared Route A/B source facts used by HFSS EPR."""
+    """Detach explicit source/effective Solid or Thin Film facts for HFSS EPR."""
 
     if not isinstance(build_input, GeometryBuildInput):
         raise TypeError("build_input must be GeometryBuildInput")
@@ -1021,8 +913,7 @@ def prepare_planar_geometry_input(
         raise NotImplementedError(
             "AEDT planar lowering does not support active source curve intent"
         )
-    if route not in {"A", "B"}:
-        raise ValueError("HFSS planar EPR supports only Route A or Route B")
+    route = "_effective"
     if not isinstance(prepared_stack, Mapping):
         raise TypeError("prepared_stack must be a mapping")
     recorded_dbu = build_input.metadata.get("source_dbu_um")
@@ -1039,14 +930,7 @@ def prepare_planar_geometry_input(
         raise ValueError("planar EPR requires a finite positive source_dbu_um")
     source_dbu_um = float(source_dbu_um)
     validate_geometry_input(build_input)
-    build_input, prepared_stack = _prepare_stack_and_geometry(
-        build_input,
-        prepared_stack,
-        route=route,
-        route_a_profile=route_a_profile,
-    )
-    validate_geometry_input(build_input)
-    validate_selected_route(build_input, route)  # type: ignore[arg-type]
+    build_input, prepared_stack = _effective_geometry_input(build_input, prepared_stack, modeling)
     junction_tuple = tuple(junctions)
     contribution_tuple = tuple(contributions)
     if any(not isinstance(item, PlanarJunction) for item in junction_tuple):
@@ -1113,6 +997,7 @@ def prepare_planar_geometry_input(
                     if "split_polygon_index" in e.metadata
                     else e.semantic_id,
                     "representation": e.route_representations.get(route),
+                    "physical_layer": e.metadata.get("aedt_effective_layer"),
                     "geometry": e.geometry,
                 }
                 for e in build_input.entities
@@ -1126,10 +1011,8 @@ def prepare_planar_geometry_input(
             build_input,
             metadata={**build_input.metadata, "aedt_junction_partitions": records},
         )
-        validate_geometry_input(build_input)
-    build_input, planned_surfaces = plan_surface_contribution_patches(
-        build_input,
-        route=route,  # type: ignore[arg-type]
+    build_input, planned_surfaces = _plan_surface_contribution_geometry(
+        build_input, representation_key=route
     )
     surfaces: list[dict[str, Any]] = []
     for surface in planned_surfaces:
@@ -1383,16 +1266,8 @@ def prepare_planar_geometry_input(
         resolved_surfaces, support_bindings, source_dbu_um=source_dbu_um
     )
 
-    if route == "A":
-        profile = source.get("route_a_thin_film")
-        if not isinstance(profile, Mapping):
-            raise ValueError(
-                "Route A planar EPR requires prepared thin-film profile provenance"
-            )
-        if profile.get("variant") not in {"substrate_face", "metal_gap_equivalent"}:
-            raise ValueError("Route A thin-film profile variant is invalid")
     digest_input = {
-        "route": route,
+        "modeling": modeling,
         "source": source,
         "junctions": [item.to_payload() for item in junction_tuple],
         "contribution_catalog": contribution_catalog,
@@ -1400,7 +1275,7 @@ def prepare_planar_geometry_input(
         "surface_bindings": resolved_surfaces,
     }
     return PreparedPlanarGeometry(
-        route=route,  # type: ignore[arg-type]
+        modeling=modeling,
         source=source,
         junctions=junction_tuple,
         contribution_catalog=contribution_catalog,
@@ -1408,7 +1283,7 @@ def prepare_planar_geometry_input(
         surface_bindings=tuple(resolved_surfaces),
         model_sha256=canonical_sha256(
             {
-                "route": route,
+                "modeling": modeling,
                 "source": source,
                 "junctions": [item.to_payload() for item in junction_tuple],
             }
@@ -1424,7 +1299,7 @@ def _junction_partition_plane(
     owners = [entities[end["source_entity_id"]] for end in record["ends"]]
     positions = [
         _route_a_sheet_z(source, owner)
-        if owner["representation"] == "surface_sheet"
+        if owner["representation"] in {"surface_sheet", "sheet"}
         else _entity_z_range(owner)[0]
         for owner in owners
     ]
@@ -1434,7 +1309,7 @@ def _junction_partition_plane(
         )
     for owner in owners:
         if (
-            owner["representation"] != "surface_sheet"
+            owner["representation"] not in {"surface_sheet", "sheet"}
             and _entity_z_range(owner)[1] <= positions[0]
         ):
             raise ValueError(

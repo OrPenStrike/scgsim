@@ -84,6 +84,8 @@ native boundary type from the shared layout.
 Both notebooks use Route B and the attributed `LiteratureCentral` interface
 assumptions. Search frequency, native stopping controls and loss assumptions
 are declared inputs, not a measured resonance or an accuracy recommendation.
+The source Route B choice is upstream of AEDT; the preparation below separately
+selects `modeling="solid"` for its snapshot's physical stack.
 
 ::: {.callout-note title="Plan for the reference run's cost"}
 The reference Palace Eigenmode run used 8 MPI processes × 1 OMP thread,
@@ -326,7 +328,7 @@ junction = planar_junction_from_port(
 )
 prepared = prepare_planar_geometry_input(
     snapshot.geometry_input, prepared_stack=snapshot.stack,
-    route="B", junctions=(junction,),
+    modeling="solid", junctions=(junction,),
 )
 surface_specs = []
 for record in prepared.contribution_catalog:
@@ -344,7 +346,7 @@ for record in prepared.contribution_catalog:
         loss_tangent=preset["loss_tangent"], source=preset["source"],
         preset=preset_name,
     ))
-sim = EigenmodeSim()
+sim = EigenmodeSim(modeling="solid")
 sim.set_plan(snapshot)
 sim.set_output_dir(output_root / run_id)
 sim.set_surface_epr(contributions=surface_specs)
@@ -355,7 +357,7 @@ sim.set_epr_request(EprAnalysisRequest(
     junction_ids=("jj",), bulk_domain_ids=None,
 ))
 sim.set_eigenmode(
-    project_name=run_id, design_name="SimplePadEigenmode", route="B",
+    project_name=run_id, design_name="SimplePadEigenmode",
     run_control=EigenmodeRunControl(
         setup_name="Setup1", minimum_frequency_ghz=1.0, num_modes=1,
         maximum_passes=10, maximum_delta_frequency_percent=1.0,

@@ -33,6 +33,8 @@ def canonical_handoff_paths(spec: AedtSpec) -> list[str]:
         paths.extend(f"saved/{item['path']}" for item in spec.saved_solution.members)
     elif not isinstance(spec, (HfssEprSpec, Q2dSpec, Q3dSpec)):
         paths.append("geometry/design.gds")
+        if spec.modeling is not None:
+            paths.append("geometry/source.gds")
     paths.extend(
         (
             "metadata/aedt_handoff_metadata.json",
@@ -83,3 +85,20 @@ def validate_geometry_source(
     expected_trace_source.pop("files")
     if trace.get("geometry_source") != expected_trace_source:
         raise RuntimeError("Q3D geometry trace mapping differs from the sealed spec")
+
+
+def validate_hfss_import_source(root: Path, raw_payload: Mapping, spec: AedtSpec) -> None:
+    """Bind explicit native import lineage to immutable original GDS bytes."""
+    if isinstance(spec, (HfssEprSpec, HfssEprAnalysisSpec, Q2dSpec, Q3dSpec)):
+        return
+    if spec.modeling is None:
+        return  # Historical inventories retain their original source contract.
+    gds = raw_payload["gds"]
+    if gds.get("source_path") != "geometry/source.gds" or gds.get("path") != "geometry/design.gds":
+        raise RuntimeError("HFSS source/import GDS paths are not canonical")
+    if file_sha256(root / "geometry/source.gds") != gds.get("source_sha256"):
+        raise RuntimeError("HFSS original GDS source identity differs")
+    keys = ("layer", "datatype", "layer_name", "physical_layer_id", "native_import_layer")
+    expected = [{key: item[key] for key in keys} for item in spec.effective_layer_imports]
+    if gds.get("import_layer_map") != expected:
+        raise RuntimeError("HFSS import layer mapping differs from declared source")

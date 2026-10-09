@@ -28,6 +28,7 @@ from scgsim.geometry.source._normalization import (
 )
 from scgsim.geometry.source._occurrence import (
     _entity_from_layer_record,
+    _occurrence_ground_polygons_for_entity,
     _occurrence_include_polygon,
     _occurrence_polygons_for_entity,
     _occurrence_port_polygon,
@@ -509,8 +510,17 @@ class GeometryPlan:
             ):
                 continue
             if record["metadata"]["source_occurrence_path"] != self.root_id:
-                raise ValueError(
-                    "composition ground planes must be authored on the Plan root"
+                from gdsfactory.pdk import get_layer_tuple
+                from gdsfactory.technology.layer_stack import LogicalLayer
+
+                bounds_ref = record["geometry"].get("plane_bounds_ref")
+                if bounds_ref not in regions or bounds_ref not in levels:
+                    raise ValueError("occurrence Ground requires its declared plane_bounds_ref")
+                source_layer = levels[bounds_ref].layer
+                if not isinstance(source_layer, LogicalLayer):
+                    raise ValueError("occurrence Ground bounds require a source logical layer")
+                regions[bounds_ref]["metadata"]["source_layer_datatype"] = list(
+                    get_layer_tuple(source_layer.layer)
                 )
             level = record["metadata"]["logical_layer_id"]
             if level in physical_planes:
@@ -615,23 +625,26 @@ class GeometryPlan:
                 for path in self._instances
             }
             for record in stack["layers"]:
-                if (
-                    record["geometry"].get("geometry_source", "gds_polygon")
-                    != "gds_polygon"
-                ):
-                    continue
+                geometry_source = record["geometry"].get("geometry_source", "gds_polygon")
                 path = record["metadata"]["source_occurrence_path"]
+                local_ground = geometry_source == "die_face_minus_ground_mask" and path != self.root_id
+                if geometry_source != "gds_polygon" and not local_ground:
+                    continue
                 cell, _, transform = self._instances[path]
                 if cell.name not in source_cells:
                     raise ValueError(
                         f"source occurrence {path!r} is absent from written GDS"
                     )
+                selector = (_occurrence_ground_polygons_for_entity if local_ground
+                            else _occurrence_polygons_for_entity)
                 record["geometry"]["source_occurrence_polygons_um"] = (
-                    _occurrence_polygons_for_entity(
+                    selector(
                         _entity_from_layer_record(record, materials=stack["materials"]),
                         cell=source_cells[cell.name],
                         transform=transform,
                         excluded_reference_indexes=child_reference_indexes[path],
+                        **({"plane_layer": stack["solution_regions"][record["geometry"]["plane_bounds_ref"]]
+                            ["metadata"]["source_layer_datatype"]} if local_ground else {}),
                     )
                 )
             for record in stack["layers"]:

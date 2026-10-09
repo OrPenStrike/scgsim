@@ -492,7 +492,7 @@ class ExpressionCacheConvergence:
 class PreparedPlanarGeometry:
     """Detached source request before any native AEDT object exists."""
 
-    route: Route
+    modeling: str | None
     source: Mapping[str, Any]
     junctions: tuple[PlanarJunction, ...]
     contribution_catalog: tuple[Mapping[str, Any], ...]
@@ -500,11 +500,20 @@ class PreparedPlanarGeometry:
     surface_bindings: tuple[Mapping[str, Any], ...]
     model_sha256: str
     source_sha256: str
+    route: Route | None = None
+    _historical_modeling: bool = field(default=False, repr=False, compare=False)
     _legacy_payload: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        if self.route not in {"A", "B"}:
-            raise ValueError("EPR supports only planar Route A or Route B")
+        if self._historical_modeling:
+            if self.route not in {"A", "B"} or self.modeling is not None:
+                raise ValueError(
+                    "historical planar geometry requires its original route basis"
+                )
+        elif self.modeling not in {"solid", "thin_film"} or self.route is not None:
+            raise ValueError(
+                "new planar geometry requires explicit modeling without route alias"
+            )
         junctions = tuple(self.junctions)
         catalog = tuple(self.contribution_catalog)
         contributions = tuple(self.contributions)
@@ -531,7 +540,7 @@ class PreparedPlanarGeometry:
         )
         expected_model = canonical_sha256(
             {
-                "route": self.route,
+                **self._modeling_identity,
                 "source": source,
                 "junctions": [item.to_payload() for item in self.junctions],
             }
@@ -540,7 +549,7 @@ class PreparedPlanarGeometry:
             raise ValueError("prepared planar model digest is inconsistent")
         expected = canonical_sha256(
             {
-                "route": self.route,
+                **self._modeling_identity,
                 "source": source,
                 "junctions": [item.to_payload() for item in self.junctions],
                 "contribution_catalog": self.contribution_catalog,
@@ -551,6 +560,14 @@ class PreparedPlanarGeometry:
         if self.source_sha256 != expected:
             raise ValueError("prepared planar source digest is inconsistent")
 
+    @property
+    def _modeling_identity(self) -> dict[str, Any]:
+        return (
+            {"route": self.route}
+            if self._historical_modeling
+            else {"modeling": self.modeling}
+        )
+
     def to_payload(self) -> dict[str, Any]:
         return {
             "schema_version": (
@@ -558,7 +575,7 @@ class PreparedPlanarGeometry:
                 if self._legacy_payload
                 else "scgsim.aedt.epr-planar.v2"
             ),
-            "route": self.route,
+            **self._modeling_identity,
             "source": detached(self.source),
             "junctions": [item.to_payload() for item in self.junctions],
             "contribution_catalog": [
@@ -585,6 +602,9 @@ class PreparedPlanarGeometry:
             "model_sha256",
             "source_sha256",
         }
+        if "modeling" in value:
+            expected.remove("route")
+            expected.add("modeling")
         schema = value.get("schema_version")
         if set(value) != expected or schema not in {
             "scgsim.aedt.epr-planar.v1",
@@ -592,7 +612,9 @@ class PreparedPlanarGeometry:
         }:
             raise ValueError("prepared planar payload is not canonical")
         return cls(
-            route=value["route"],
+            modeling=value.get("modeling"),
+            route=value.get("route"),
+            _historical_modeling="modeling" not in value,
             source=value["source"],
             junctions=tuple(
                 PlanarJunction.from_payload(item) for item in value["junctions"]
@@ -758,6 +780,14 @@ class EprResult:
                 raise ValueError("EPR result row status must be complete or partial")
             if "raw_integrals" in row and not isinstance(row["raw_integrals"], Mapping):
                 raise TypeError("EPR result row raw_integrals must be a mapping")
+            if (
+                isinstance(row.get("raw_integrals"), Mapping)
+                and "native_surface_references" in row["raw_integrals"]
+                and not isinstance(
+                    row["raw_integrals"]["native_surface_references"], Mapping
+                )
+            ):
+                raise TypeError("raw native_surface_references must be a mapping")
             if "raw_integral_evidence" in row:
                 raw_evidence = row["raw_integral_evidence"]
                 if (
@@ -838,6 +868,77 @@ class EprResult:
                         junction.get("capacitive_participation"),
                         "junction capacitive participation",
                     )
+            if "native_surface_references" in row:
+                references = row["native_surface_references"]
+                if isinstance(references, (str, bytes)) or not isinstance(
+                    references, Sequence
+                ):
+                    raise TypeError("native_surface_references must be a sequence")
+                if any(not isinstance(item, Mapping) for item in references):
+                    raise TypeError("native_surface_references must contain mappings")
+                reference_ids: set[str] = set()
+                required_reference_members = {
+                    "reference_id",
+                    "contribution_ids",
+                    "binding_ids",
+                    "selection_name",
+                    "face_ids",
+                    "owner_semantic_id",
+                    "source_polygon_id",
+                    "object_name",
+                    "native_object_id",
+                    "interface_kinds",
+                    "source_cap",
+                    "source_z_um",
+                    "source_supports",
+                    "incident_domains",
+                    "native_faces",
+                    "native_normal",
+                    "projection_normal",
+                    "native_area_m2",
+                    "face_list",
+                    "sampling_basis",
+                    "support_kind",
+                    "normal_integral_v2",
+                    "tangential_integral_v2",
+                    "area_m2",
+                    "expression_identities",
+                }
+                for reference in references:
+                    if not required_reference_members <= set(reference):
+                        raise ValueError(
+                            "native surface reference lacks canonical evidence"
+                        )
+                    reference_id = _text(
+                        reference["reference_id"], "native reference ID"
+                    )
+                    if reference_id in reference_ids:
+                        raise ValueError("native surface reference IDs repeat")
+                    reference_ids.add(reference_id)
+                    for name in (
+                        "normal_integral_v2",
+                        "tangential_integral_v2",
+                        "area_m2",
+                        "native_area_m2",
+                    ):
+                        _number(
+                            reference[name],
+                            f"native surface reference {name}",
+                            minimum=-math.inf,
+                        )
+                    expression_identities = reference["expression_identities"]
+                    if (
+                        not isinstance(expression_identities, Mapping)
+                        or set(expression_identities)
+                        != {"normal", "tangential", "area"}
+                        or any(
+                            not isinstance(value, Mapping)
+                            for value in expression_identities.values()
+                        )
+                    ):
+                        raise ValueError(
+                            "native surface reference expression evidence is invalid"
+                        )
         provenance = _freeze(
             self.provenance,
             verified=(

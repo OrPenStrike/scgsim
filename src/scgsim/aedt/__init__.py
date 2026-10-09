@@ -73,6 +73,7 @@ __all__ = [
     "NormalizedSurfaceEprTotal",
     "ObjectBinding",
     "PdkMaterial",
+    "PhysicalLayerSpec",
     "PlanarJunction",
     "PreparedPlanarGeometry",
     "Q2dConductorSpec",
@@ -101,3 +102,5 @@ __all__ = [
     "resolve_saved_solution",
     "show_epr",
 ]
+
+from .specs.modeling import PhysicalLayerSpec

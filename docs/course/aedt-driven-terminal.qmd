@@ -10,13 +10,33 @@ Continue from [CPW inputs](aedt-inputs.qmd). Terminal ports identify reference
 conductors explicitly. They use the same source GDS and PDK material mapping as
 Modal, but this model's reference assignment has its own native evidence and
 result meaning. A similar network curve would not make the two port models
-identical.
+identical. As in the Eigenmode lesson, replace the inputs page's legacy
+zero-thickness M1 sheet interval with the CPW source owner's explicit `NB_FILM`
+interval and lower contact side. This preserves the existing sheet plane and
+does not claim that c997 embeds the declaration.
 
 ```python
 from pathlib import Path
 from scgsim.aedt import (
-    FrequencySweepSpec, HfssDrivenSpec, HfssRunControl,
-    LengthMeshSpec, TerminalPort, prepare_handoff,
+    FrequencySweepSpec, HfssDrivenSpec, HfssRunControl, LayerImport,
+    LengthMeshSpec, PhysicalLayerSpec, TerminalPort, prepare_handoff,
+)
+
+metal_thickness_um = 0.2
+physical_layer_id = "orpen_sc_pdk:CpwFiniteGround:NB_FILM"
+physical_layer = PhysicalLayerSpec(
+    physical_layer_id=physical_layer_id,
+    kind="stack_film",
+    z_min_um=0.0,
+    z_max_um=metal_thickness_um,
+    contact_side="lower",
+)
+layer_imports = (
+    LayerImport(
+        1, 0, "D0_TOP_M1", 0.0, metal_thickness_um,
+        physical_layer_id=physical_layer_id,
+    ),
+    LayerImport(201, 0, "D0_SUBSTRATE", -500.0, 0.0),
 )
 
 ports = (
@@ -24,10 +44,11 @@ ports = (
     TerminalPort(2, "o2", "+X", ground_objects),
 )
 spec = HfssDrivenSpec(
-    mode="terminal", gds_path=source_gds,
+    mode="terminal", gds_path=source_gds, modeling="thin_film",
     project_name="public_cpw_terminal", design_name="CpwFiniteGroundTerminal",
     materials=materials, vacuum_material_id="vacuum",
     layer_imports=layer_imports, object_bindings=object_bindings,
+    physical_layers=(physical_layer,),
     ports=ports,
     run_control=HfssRunControl(
         "Setup1", "Fast20000", FrequencySweepSpec(3.0, 8.0, 20_000)

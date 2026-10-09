@@ -12,6 +12,11 @@ explicit body geometry under `scgsim.aedt.q3d.v3`. This source-free example
 declares the CPW outlines and their finite Z intervals directly. It does not
 import or convert the shared GDS.
 
+The source-free example preserves the existing AC/RL request contract. The
+current Solid/Thin-Film continuation targets terminal-free C/G; AC/RL native
+observations are deferred. The GeometryPlan-backed C/G example below is the
+source-backed path for that current scope.
+
 ```python
 from pathlib import Path
 from scgsim.aedt import (
@@ -54,6 +59,7 @@ nets = (
     Q3dNetSpec("Ground", "Ground", ("ground_upper", "ground_lower")),
 )
 spec = Q3dSpec(
+    modeling="solid",
     project_name="public_cpw_q3d",
     design_name="CpwFiniteGroundQ3d",
     materials=materials, vacuum_material_id="vacuum",
@@ -125,6 +131,7 @@ from scgsim.aedt import MatrixRunControl, prepare_q3d_from_geometry
 
 handoff = prepare_q3d_from_geometry(
     snapshot,
+    modeling="solid",
     output_dir=Path(".artifacts/public-xmon-q3d-cg"),
     project_name="public_xmon_q3d_cg",
     design_name="PublicXmonQ3dCg",
@@ -150,6 +157,11 @@ native bodies, holes, Z intervals, materials, Net assignments, Region and
 setup, then saved and released the project; a separate geometry preview was
 also inspected. It did not call `Analyze` or return C/G matrices. Source curves
 remain outside the current AEDT lowering contract.
+
+For a derived Ground body, preserve the child source occurrence, its outline
+and holes, caller-owned final Net, and recorded occurrence transform. Apply
+that transform once. Keep its physical Ground role separate from the final
+Net name and native Net type; do not infer it from a parent name or bounds.
 
 The accepted native build-only operation uses the existing CLI with a
 prepared Q3D v3 handoff: `python -m scgsim.aedt.run --handoff <run-dir>/metadata/aedt_handoff_metadata.json --execute --prepare-only`

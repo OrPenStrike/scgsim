@@ -311,14 +311,18 @@ def junction_voltage_operations(
 
 
 def create_verified_face_list(
-    app: Any, *, name: str, face_ids: Sequence[int]
+    app: Any, *, name: str, face_ids: Sequence[int], reuse_existing: bool = False
 ) -> dict[str, Any]:
+    """Bind native list identity and check created/restored wrapper membership."""
     ids = [int(value) for value in face_ids]
     if not ids or len(ids) != len(set(ids)) or any(value <= 0 for value in ids):
         raise ValueError("face list requires distinct positive native face ids")
-    if name in {str(item.name) for item in app.modeler.user_lists}:
+    existing = [item for item in app.modeler.user_lists if str(item.name) == name]
+    if existing and not reuse_existing:
         raise RuntimeError(f"HFSS face-list name already exists: {name!r}")
-    item = app.modeler.create_face_list(ids, name=name)
+    if len(existing) > 1:
+        raise RuntimeError(f"HFSS face-list name is ambiguous: {name!r}")
+    item = existing[0] if existing else app.modeler.create_face_list(ids, name=name)
     if (
         item is False
         or item is None
@@ -333,12 +337,18 @@ def create_verified_face_list(
         or native_id != item.props.get("ID")
     ):
         raise RuntimeError(f"HFSS face-list readback failed: {name!r}")
-    members = item.props.get("EntityList")
+    # PyAEDT exposes both created and restored EntityList membership as List.
+    members = item.props.get("List")
     if isinstance(members, (int, str)):
         members = [members]
     if [int(value) for value in members or ()] != ids:
         raise RuntimeError(f"HFSS face-list membership differs: {name!r}")
-    return {"name": name, "native_id": native_id, "face_ids": ids}
+    return {
+        "name": name, "native_id": native_id, "face_ids": ids,
+        "assignment_basis": (
+            "PyAEDT created/restored List property; not independent native membership"
+        ),
+    }
 
 
 def evaluate_named_expression(
@@ -402,6 +412,9 @@ def author_named_expression(
         adjacent_selection_name=adjacent_selection_name,
     )
     load_compiled_expressions(app, [compiled], evidence_dir)
+    # Loading attaches the native CLC readback to the authored expression.
+    # ``compiled`` is (expression_dict, definitions, evidence), not a list of
+    # per-expression records.
     return compiled[0]
 
 
@@ -414,6 +427,87 @@ def _clc_block(
     lines.extend(f"\t{operation}" for operation in operations)
     lines.append("$end 'Named_Expression'")
     return "\n".join(lines) + "\n"
+
+
+def _field_selection_operations(block: str) -> list[dict[str, str]]:
+    pattern = re.compile(r"(?m)^\s*(Enter[A-Za-z]+)\(([^\r\n]*)\)\s*$")
+    selections = []
+    for command, argument in pattern.findall(block):
+        argument = argument.strip()
+        if len(argument) >= 2 and argument[0] == argument[-1] and argument[0] in "'\"":
+            argument = argument[1:-1]
+        if command == "EnterAdjacentSurf":
+            command = "EnterAdjacentSurface"
+        selections.append({"command": command, "argument": argument})
+    return selections
+
+
+def _read_native_named_expressions(
+    app: Any,
+    *,
+    names: Sequence[str],
+    definitions: Sequence[tuple[str, str]],
+    evidence_dir: Path,
+) -> dict[str, Any]:
+    """Save and bind AEDT's actual CLC definitions for the loaded expressions."""
+
+    path = evidence_dir / "scgsim_epr_native_readback.clc"
+    if path.exists():
+        raise FileExistsError("native EPR expression readback already exists")
+    reporter = app.post.fields_calculator.ofieldsreporter
+    saved = reporter.SaveNamedExpressions(str(path), list(names), True)
+    if saved is False:
+        raise RuntimeError("HFSS native named-expression readback save returned false")
+    if not path.is_file() or path.stat().st_size == 0:
+        raise RuntimeError("HFSS native named-expression readback is missing or empty")
+    payload = path.read_bytes()
+    text = payload.decode("utf-8")
+    block_pattern = re.compile(
+        r"(?ms)^\$begin 'Named_Expression'\s*(.*?)^\$end 'Named_Expression'\s*$"
+    )
+    name_pattern = re.compile(r"(?m)^\s*Name\(['\"]([^'\"]+)['\"]\)\s*$")
+    native_definitions: dict[str, dict[str, Any]] = {}
+    serialized_definitions: dict[str, str] = {}
+    for match in block_pattern.finditer(text):
+        block = match.group(1)
+        serialized_block = match.group(0)
+        name_match = name_pattern.search(block)
+        if name_match is None:
+            raise RuntimeError(
+                "HFSS native expression readback lacks a definition name"
+            )
+        name = name_match.group(1)
+        if name in native_definitions:
+            if serialized_definitions[name] != serialized_block:
+                raise RuntimeError(
+                    f"HFSS native expression readback conflicts for {name!r}"
+                )
+            continue
+        serialized_definitions[name] = serialized_block
+        native_definitions[name] = {
+            "sha256": hashlib.sha256(block.encode("utf-8")).hexdigest(),
+            "field_selection_operations": _field_selection_operations(block),
+        }
+    if set(native_definitions) != set(names):
+        raise RuntimeError(
+            "HFSS native expression readback names differ from the loaded definitions"
+        )
+    for name, expected_block in definitions:
+        expected_selectors = _field_selection_operations(expected_block)
+        actual_selectors = native_definitions[name]["field_selection_operations"]
+        if expected_selectors != actual_selectors:
+            raise RuntimeError(
+                f"HFSS native field selection readback differs for {name!r}"
+            )
+    return {
+        "status": "native_clc_saved_and_field_selection_read_back",
+        "api": "FieldsReporter.SaveNamedExpressions",
+        "path": (Path("metadata/epr_expressions") / path.name).as_posix(),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "bytes": len(payload),
+        "definition_names": list(names),
+        "definitions": native_definitions,
+    }
 
 
 def compile_named_expression(
@@ -565,6 +659,29 @@ def load_compiled_expressions(
             f"HFSS batch named-expression load was partial or failed: "
             f"{len(present)}/{len(names)} present; missing={missing!r}; returned={result!r}"
         )
+    postload_readback_seconds = round(time.perf_counter() - started, 6)
+    readback_started = time.perf_counter()
+    native_expression_readback = _read_native_named_expressions(
+        app,
+        names=names,
+        definitions=definitions,
+        evidence_dir=evidence_dir,
+    )
+    native_definition_readback_seconds = time.perf_counter() - readback_started
+    for expression, blocks, _ in compiled:
+        expression["definition_status"] = "native_readback_verified"
+        expression["native_readback"] = {
+            "status": native_expression_readback["status"],
+            "api": native_expression_readback["api"],
+            "path": native_expression_readback["path"],
+            "sha256": native_expression_readback["sha256"],
+            "bytes": native_expression_readback["bytes"],
+            "expression_definition_names": [name for name, _ in blocks],
+            "definitions": {
+                name: native_expression_readback["definitions"][name]
+                for name, _ in blocks
+            },
+        }
     return {
         "library_sha256": hashlib.sha256(library_bytes).hexdigest(),
         "native_definition_count": len(names),
@@ -572,5 +689,9 @@ def load_compiled_expressions(
         "collision_check_seconds": round(collision_check_seconds, 6),
         "evidence_write_seconds": round(evidence_write_seconds, 6),
         "batch_import_seconds": round(batch_import_seconds, 6),
-        "postload_readback_seconds": round(time.perf_counter() - started, 6),
+        "postload_readback_seconds": postload_readback_seconds,
+        "native_definition_readback_seconds": round(
+            native_definition_readback_seconds, 6
+        ),
+        "native_expression_readback": native_expression_readback,
     }

@@ -15,6 +15,28 @@ from scgsim.aedt.runtime.native.common import (
 from scgsim.aedt.specs.q3d import Q3dBodySpec, Q3dSpec
 
 
+def q3d_terminal_segments(body: Q3dBodySpec, side: str) -> list[int]:
+    """Select one contiguous source exterior chain, never a hole or nearest edge."""
+    if side not in {"+X", "-X", "+Y", "-Y"}:
+        raise ValueError("Q3D Sheet terminals require an in-plane +/-X or +/-Y side")
+    ring = body.exterior_um
+    if ring[0] == ring[-1]:
+        ring = ring[:-1]
+    axis = 0 if side[-1] == "X" else 1
+    extreme = (max if side[0] == "+" else min)(point[axis] for point in ring)
+    selected = [
+        index
+        for index, point in enumerate(ring)
+        if point[axis] == extreme and ring[(index + 1) % len(ring)][axis] == extreme
+    ]
+    starts = [index for index in selected if (index - 1) % len(ring) not in selected]
+    if not selected or len(starts) != 1:
+        raise ValueError(
+            f"Q3D Sheet terminal {body.body_id!r}/{side} has no unambiguous exterior chain"
+        )
+    return selected
+
+
 def _hole_name(body_index: int, hole_index: int) -> str:
     return f"SCGSimQ3DHoleCut_{body_index:06d}_{hole_index:06d}"
 
@@ -109,12 +131,15 @@ def _construct_body(
     app: Any,
     body: Q3dBodySpec,
     *,
+    effective: dict[str, Any],
     temporary_names: tuple[str, ...],
     operations: list[dict[str, Any]],
 ) -> tuple[Any, dict[str, Any]]:
     phase = "outer_sheet"
     operations.append({"phase": phase, "operation": "create_covered_exterior"})
-    sheet = _make_sheet(app, body.exterior_um, name=body.body_id, z_um=body.z_min_um)
+    sheet = _make_sheet(
+        app, body.exterior_um, name=body.body_id, z_um=effective["effective_z_min_um"]
+    )
     operations[-1].update({"object_name": sheet.name, "returned": True})
 
     hole_records: list[dict[str, Any]] = []
@@ -122,7 +147,7 @@ def _construct_body(
         cutter_name = temporary_names[hole_index]
         phase = "hole_sheet"
         operations.append({"phase": phase, "operation": "create_covered_hole_cutter"})
-        _make_sheet(app, ring, name=cutter_name, z_um=body.z_min_um)
+        _make_sheet(app, ring, name=cutter_name, z_um=effective["effective_z_min_um"])
         operations[-1].update({"object_name": cutter_name, "returned": True})
 
         phase = "hole_subtraction"
@@ -153,8 +178,14 @@ def _construct_body(
             }
         )
 
+    if effective["representation"] == "sheet":
+        return app.modeler.get_object_from_name(body.body_id), {
+            "outer_sheet": {"object_name": body.body_id, "created": True},
+            "hole_subtractions": hole_records,
+            "effective_geometry": effective,
+        }
     phase = "positive_z_sweep"
-    span_um = body.z_max_um - body.z_min_um
+    span_um = effective["effective_z_max_um"] - effective["effective_z_min_um"]
     operation = {
         "phase": phase,
         "operation": "sweep_body_along_positive_z",
@@ -208,6 +239,13 @@ def _assign_material(app: Any, body: Q3dBodySpec, material: Any) -> str:
 
 def construct_q3d_bodies(app: Any, spec: Q3dSpec) -> list[dict[str, Any]]:
     """Build every declared body, inventory native identities, then assign materials."""
+    effective_bodies = {record["body_id"]: record for record in spec.effective_bodies}
+    for body in spec.bodies:
+        if (
+            effective_bodies[body.body_id]["representation"] == "sheet"
+            and not spec.materials[body.material_id].is_superconducting
+        ):
+            raise ValueError("Q3D ThinConductor requires a declared PDK superconductor")
     body_ids = [body.body_id for body in spec.bodies]
     cutter_names = tuple(
         _hole_name(body_index, hole_index)
@@ -240,6 +278,7 @@ def construct_q3d_bodies(app: Any, spec: Q3dSpec) -> list[dict[str, Any]]:
             _, construction = _construct_body(
                 app,
                 body,
+                effective=effective_bodies[body.body_id],
                 temporary_names=body_cutter_names,
                 operations=operations,
             )
@@ -270,8 +309,15 @@ def construct_q3d_bodies(app: Any, spec: Q3dSpec) -> list[dict[str, Any]]:
                     f"Q3D native body ID is invalid or duplicated: {native_id}"
                 )
             native_ids.add(native_id)
-            if native["native_object_type"] != "Solid":
-                raise RuntimeError(f"Q3D body is not a native Solid: {body.body_id!r}")
+            expected_type = (
+                "Sheet"
+                if effective_bodies[body.body_id]["representation"] == "sheet"
+                else "Solid"
+            )
+            if native["native_object_type"] != expected_type:
+                raise RuntimeError(
+                    f"Q3D body is not a native {expected_type}: {body.body_id!r}"
+                )
             native_face_ids = list(native["native_face_ids"])
             if any(face_id <= 0 for face_id in native_face_ids):
                 raise RuntimeError(
@@ -279,6 +325,7 @@ def construct_q3d_bodies(app: Any, spec: Q3dSpec) -> list[dict[str, Any]]:
                 )
             records[body.body_id]["body_binding"] = {
                 "body": body.to_payload(),
+                "effective_geometry": effective_bodies[body.body_id],
                 "native_object_id": native_id,
                 "object_name": body.body_id,
                 "native_object_type": native["native_object_type"],
@@ -292,7 +339,117 @@ def construct_q3d_bodies(app: Any, spec: Q3dSpec) -> list[dict[str, Any]]:
         for body in spec.bodies:
             current_body_id = body.body_id
             material = spec.materials[body.material_id]
-            observed_material = _assign_material(app, body, material)
+            effective = effective_bodies[body.body_id]
+            evidence.pop("thin_conductor_readback", None)
+            if effective["representation"] == "sheet":
+                boundary_name = f"{body.body_id}ThinConductor"
+                thickness = f"{effective['physical_thickness_um']:.17g}um"
+                boundary = app.assign_thin_conductor(
+                    assignment=body.body_id,
+                    material="pec",
+                    thickness=thickness,
+                    name=boundary_name,
+                )
+                if not boundary or boundary.name != boundary_name:
+                    raise RuntimeError(
+                        f"Q3D thin conductor assignment failed: {body.body_id!r}"
+                    )
+                # Sheet PEC belongs to ThinConductor, not the Solid Material property.
+                child = boundary.child_object
+                property_names = list(child.GetPropNames())
+                if (
+                    "Material" not in property_names
+                    or "Thickness" not in property_names
+                ):
+                    raise RuntimeError(
+                        f"Q3D ThinConductor native properties unavailable: {property_names!r}"
+                    )
+                native_id = records[body.body_id]["body_binding"]["native_object_id"]
+                readback = {
+                    "boundary_name": boundary_name,
+                    "native_object_id": native_id,
+                    "expected": {
+                        "material": "pec",
+                        "thickness": thickness,
+                        "thickness_um": effective["physical_thickness_um"],
+                        "assignment_ids": [native_id],
+                    },
+                    "observed": {},
+                }
+                # Retain each native return before the next query or comparison can fail.
+                evidence["thin_conductor_readback"] = readback
+                actual = readback["observed"]
+                actual["material"] = child.GetPropValue("Material")
+                actual["thickness"] = child.GetPropValue("Thickness")
+                actual["assignment_ids"] = list(
+                    app.oboundary.GetExcitationAssignment(boundary_name)
+                )
+                assigned = [int(value) for value in actual["assignment_ids"]]
+                raw_material = actual["material"]
+                if (
+                    isinstance(raw_material, (list, tuple))
+                    and len(raw_material) == 2
+                    and raw_material[0] == "Material:="
+                ):
+                    raw_material = raw_material[1]
+                if not isinstance(raw_material, str):
+                    raise RuntimeError(
+                        "Q3D ThinConductor Material has unknown native shape"
+                    )
+                boundary_material = raw_material.strip('"')
+                from ansys.aedt.core.generic.numbers_utils import Quantity
+
+                if not isinstance(actual["thickness"], str):
+                    raise RuntimeError(
+                        "Q3D ThinConductor Thickness is not a native length"
+                    )
+                quantity = Quantity(actual["thickness"])
+                if quantity.unit_system != "Length":
+                    raise RuntimeError(
+                        "Q3D ThinConductor Thickness is not a native length"
+                    )
+                measured_thickness_um = quantity.to("um").value
+                actual["thickness_um"] = measured_thickness_um
+                differs = {}
+                if boundary_material.casefold() != "pec":
+                    differs["material"] = {
+                        "expected": "pec",
+                        "observed": actual["material"],
+                    }
+                if measured_thickness_um != effective["physical_thickness_um"]:
+                    differs["thickness"] = {
+                        "expected_um": effective["physical_thickness_um"],
+                        "observed": actual["thickness"],
+                        "observed_um": measured_thickness_um,
+                    }
+                if assigned != [native_id]:
+                    differs["assignment_ids"] = {
+                        "expected": [native_id],
+                        "observed": actual["assignment_ids"],
+                    }
+                if differs:
+                    raise RuntimeError(
+                        f"Q3D thin conductor readback differs: {body.body_id!r}; "
+                        f"fields={differs!r}"
+                    )
+                records[body.body_id]["body_binding"]["thin_conductor"] = {
+                    "name": boundary_name,
+                    "bound_type": "ThinConductor",
+                    "material": boundary_material,
+                    "material_raw": actual["material"],
+                    "thickness": actual["thickness"],
+                    "thickness_um": measured_thickness_um,
+                    "native_assignment_ids_raw": actual["assignment_ids"],
+                    "native_object_ids": assigned,
+                }
+                observed_material = {
+                    "native_material_property": "not_applicable_sheet",
+                    "native_boundary_material_name": boundary_material,
+                }
+            else:
+                observed_material = {
+                    "native_material_name": _assign_material(app, body, material)
+                }
             observed.append(
                 {
                     "object_name": body.body_id,
@@ -301,7 +458,7 @@ def construct_q3d_bodies(app: Any, spec: Q3dSpec) -> list[dict[str, Any]]:
                     "kind": material.kind,
                     "is_superconducting": material.is_superconducting,
                     "requested_library_name": material.library_name,
-                    "observed": {"native_material_name": observed_material},
+                    "observed": observed_material,
                     "body_binding": records[body.body_id]["body_binding"],
                 }
             )
@@ -309,7 +466,13 @@ def construct_q3d_bodies(app: Any, spec: Q3dSpec) -> list[dict[str, Any]]:
     except Exception as exc:  # noqa: BLE001 -- keep the native primary error.
         evidence.update(
             {
-                "phase": operations[-1]["phase"] if operations else phase,
+                "phase": (
+                    phase
+                    if phase == "material_assignment"
+                    else operations[-1]["phase"]
+                    if operations
+                    else phase
+                ),
                 "body_id": current_body_id,
                 "operations": operations,
             }

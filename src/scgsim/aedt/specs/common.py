@@ -146,6 +146,7 @@ class LayerImport:
     layer_name: str
     z_min_um: float
     z_max_um: float
+    physical_layer_id: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "layer", _nonnegative_int(self.layer, "layer"))
@@ -164,6 +165,8 @@ class LayerImport:
 
     def to_payload(self) -> dict[str, Any]:
         return {
+            **({"physical_layer_id": self.physical_layer_id}
+               if self.physical_layer_id is not None else {}),
             "layer": self.layer,
             "datatype": self.datatype,
             "layer_name": self.layer_name,
@@ -383,7 +386,7 @@ def _normalize_gds_spec(spec: Any) -> tuple[set[str], set[str]]:
     imports = tuple(spec.layer_imports)
     if (
         not imports
-        or len({item.layer for item in imports}) != len(imports)
+        or len({(item.layer, item.datatype) for item in imports}) != len(imports)
         or len({item.layer_name for item in imports}) != len(imports)
         or any(
             other.layer_name.startswith(item.layer_name)

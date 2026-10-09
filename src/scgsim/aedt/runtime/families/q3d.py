@@ -30,7 +30,7 @@ from scgsim.aedt.runtime.native.common import (
     saved_setup_properties as _saved_setup_properties,
 )
 
-from scgsim.aedt.runtime.native.q3d_bodies import construct_q3d_bodies
+from scgsim.aedt.runtime.native.q3d_bodies import construct_q3d_bodies, q3d_terminal_segments
 
 from scgsim.aedt.specs.common import AedtResources, REQUIRED_AEDT_VERSION
 
@@ -113,6 +113,7 @@ def prepare_q3d(Q3d: Any, run_dir: Path, spec: Q3dSpec) -> PreparedQ3d:
     _setup_q3d(app, spec)
     if not app.save_project() or not project_path.is_file():
         raise RuntimeError("Q3D project was not saved before solve")
+    _verify_saved_q3d_sheet_terminals(app, nets)
     setup = _read_q3d_setup(app, spec)
     if spec.grounded_region_net is not None:
         region["grounded_region"] = _read_q3d_region_ground(app, spec, region)
@@ -642,6 +643,113 @@ def _read_q3d_region_ground(
     }
 
 
+def _assign_sheet_terminal(
+    app: Any, spec: Q3dSpec, object_name: str, side: str, name: str, net_name: str
+) -> dict[str, Any]:
+    """Bind authored exterior segments to actual Sheet edges and native excitation."""
+    body = next(body for body in spec.bodies if body.body_id == object_name)
+    effective = next(
+        record for record in spec.effective_bodies if record["body_id"] == object_name
+    )
+    segments = q3d_terminal_segments(body, side)
+    ring = body.exterior_um
+    if ring[0] == ring[-1]:
+        ring = ring[:-1]
+    obj = app.modeler.get_object_from_name(object_name)
+    edge_ids = []
+    source_bindings = []
+    for index in segments:
+        endpoints = {
+            (*ring[index], effective["effective_z_min_um"]),
+            (*ring[(index + 1) % len(ring)], effective["effective_z_min_um"]),
+        }
+        matches = [
+            edge
+            for edge in obj.edges
+            if {
+                tuple(float(value) for value in vertex.position)
+                for vertex in edge.vertices
+            }
+            == endpoints
+        ]
+        if len(matches) != 1:
+            raise RuntimeError(
+                f"Q3D Sheet terminal source segment {index} has no unique native edge"
+            )
+        edge_id = int(matches[0].id)
+        edge_ids.append(edge_id)
+        source_bindings.append(
+            {"source_segment_index": index, "native_edge_id": edge_id}
+        )
+    assignment = [
+        f"NAME:{name}",
+        "Edges:=",
+        edge_ids,
+        "Net:=",
+        net_name,
+        "TerminalType:=",
+        "ConstantVoltage",
+    ]
+    method = (
+        app.oboundary.AssignSource
+        if name == f"{net_name}Source"
+        else app.oboundary.AssignSink
+    )
+    stage = "assign_source_or_sink"
+    native_assignment = None
+    try:
+        method(assignment)
+        stage = "native_assignment_readback"
+        native_assignment = app.oboundary.GetExcitationAssignment(name)
+        assigned = [int(value) for value in native_assignment]
+        if assigned != edge_ids:
+            raise RuntimeError(
+                f"Q3D Sheet terminal native assignment differs: {name!r}"
+            )
+    except Exception as exc:  # noqa: BLE001 -- preserve the native primary error.
+        exc.add_note(
+            f"Q3D Sheet terminal stage={stage}; name={name!r}; net={net_name!r}; "
+            f"object={object_name!r}; side={side!r}; source_edges={source_bindings!r}; "
+            f"selected_native_edge_ids={edge_ids!r}; native_assignment={native_assignment!r}"
+        )
+        raise
+    return {
+        "name": name,
+        "object_name": object_name,
+        "side": side,
+        "native_edge_ids": assigned,
+        "source_edges": source_bindings,
+        "terminal_type": "ConstantVoltage",
+    }
+
+
+def _verify_saved_q3d_sheet_terminals(app: Any, nets: list[dict[str, Any]]) -> None:
+    """Read saved Sheet terminal properties only after the preparation Save succeeds."""
+    for net in nets:
+        for kind in ("source", "sink"):
+            terminal = net.get(kind)
+            if terminal is None or "native_edge_ids" not in terminal:
+                continue
+            try:
+                saved = app.design_properties["BoundarySetup"]["Boundaries"][
+                    terminal["name"]
+                ]
+                if (
+                    saved.get("Edges") != terminal["native_edge_ids"]
+                    or saved.get("Net") != net["name"]
+                    or saved.get("TerminalType") != terminal["terminal_type"]
+                ):
+                    raise RuntimeError(
+                        f"Q3D saved Sheet terminal assignment differs: {terminal['name']!r}"
+                    )
+            except Exception as exc:  # noqa: BLE001 -- preserve failed saved readback.
+                exc.add_note(
+                    f"Q3D Sheet terminal stage=after_preparation_save_readback; "
+                    f"net={net['name']!r}; terminal={terminal!r}"
+                )
+                raise
+
+
 def _assign_q3d_nets(app: Any, spec: Q3dSpec) -> list[dict[str, Any]]:
     directions = {"-X": 0, "-Y": 1, "-Z": 2, "+X": 3, "+Y": 4, "+Z": 5}
     records: list[dict[str, Any]] = []
@@ -668,51 +776,46 @@ def _assign_q3d_nets(app: Any, spec: Q3dSpec) -> list[dict[str, Any]]:
             sink_name = f"{net.name}Sink"
             source_direction = directions[net.source_side]
             sink_direction = directions[net.sink_side]
-            source = app.source(
-                net.source_object,
-                direction=source_direction,
-                name=source_name,
-                net_name=net.name,
-            )
-            sink = app.sink(
-                net.sink_object,
-                direction=sink_direction,
-                name=sink_name,
-                net_name=net.name,
-            )
-            if source is None or sink is None:
-                raise RuntimeError(
-                    f"Q3D source/sink assignment failed for {net.name!r}"
+            effective = {item["body_id"]: item for item in spec.effective_bodies}
+            for kind, object_name, side, direction, terminal_name in (
+                (
+                    "source",
+                    net.source_object,
+                    net.source_side,
+                    source_direction,
+                    source_name,
+                ),
+                ("sink", net.sink_object, net.sink_side, sink_direction, sink_name),
+            ):
+                if effective[object_name]["representation"] == "sheet":
+                    record[kind] = _assign_sheet_terminal(
+                        app, spec, object_name, side, terminal_name, net.name
+                    )
+                    continue
+                assign = app.source if kind == "source" else app.sink
+                boundary = assign(
+                    object_name,
+                    direction=direction,
+                    name=terminal_name,
+                    net_name=net.name,
                 )
-            source_faces = [
-                int(value)
-                for value in app.oboundary.GetExcitationAssignment(source_name)
-            ]
-            sink_faces = [
-                int(value) for value in app.oboundary.GetExcitationAssignment(sink_name)
-            ]
-            expected_source = int(
-                app.modeler._get_faceid_on_axis(net.source_object, source_direction)
-            )
-            expected_sink = int(
-                app.modeler._get_faceid_on_axis(net.sink_object, sink_direction)
-            )
-            if source_faces != [expected_source] or sink_faces != [expected_sink]:
-                raise RuntimeError(
-                    f"Q3D native source/sink assignment mismatch for {net.name!r}"
-                )
-            record["source"] = {
-                "name": source_name,
-                "object_name": net.source_object,
-                "side": net.source_side,
-                "native_face_ids": source_faces,
-            }
-            record["sink"] = {
-                "name": sink_name,
-                "object_name": net.sink_object,
-                "side": net.sink_side,
-                "native_face_ids": sink_faces,
-            }
+                if boundary is None:
+                    raise RuntimeError(f"Q3D {kind} assignment failed for {net.name!r}")
+                faces = [
+                    int(value)
+                    for value in app.oboundary.GetExcitationAssignment(terminal_name)
+                ]
+                expected = int(app.modeler._get_faceid_on_axis(object_name, direction))
+                if faces != [expected]:
+                    raise RuntimeError(
+                        f"Q3D native {kind} assignment mismatch for {net.name!r}"
+                    )
+                record[kind] = {
+                    "name": terminal_name,
+                    "object_name": object_name,
+                    "side": side,
+                    "native_face_ids": faces,
+                }
         records.append(record)
     if app.net_names != [net.name for net in spec.nets]:
         raise RuntimeError("Q3D native net order does not match the structured spec")

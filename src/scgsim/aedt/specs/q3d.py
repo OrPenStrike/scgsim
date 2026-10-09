@@ -11,6 +11,10 @@ from pathlib import Path
 
 from typing import Any, Literal
 
+from scgsim.aedt.specs.modeling import (
+    Modeling, PhysicalLayerSpec, _request_modeling, _modeling_payload, _effective_record, _source_record_payload, _verify_effective_records,
+)
+
 from scgsim.aedt.specs.common import (
     LOCKED_PYAEDT,
     LayerRole,
@@ -116,6 +120,7 @@ class Q3dBodySpec:
     material_id: str
     physical_role: LayerRole
     net_id: str | None
+    physical_layer_id: str | None = None
     source_entity_id: str | None = None
     source_polygon_id: str | None = None
     source_occurrence_path: str | None = None
@@ -171,6 +176,8 @@ class Q3dBodySpec:
 
     def to_payload(self) -> dict[str, Any]:
         payload = asdict(self)
+        if self.physical_layer_id is None:
+            payload.pop("physical_layer_id")
         payload["exterior_um"] = [list(point) for point in self.exterior_um]
         payload["holes_um"] = [
             [list(point) for point in hole] for hole in self.holes_um
@@ -272,6 +279,7 @@ def _q3d_geometry_source(
 class Q3dSpec:
     """One body-backed Q3D capacitance and optional AC R/L request (v3 only)."""
 
+    modeling: Modeling
     project_name: str
     design_name: str
     materials: Mapping[str, PdkMaterial]
@@ -280,6 +288,8 @@ class Q3dSpec:
     nets: tuple[Q3dNetSpec, ...]
     run_control: MatrixRunControl
     region_padding_um: tuple[float, float, float, float, float, float]
+    physical_layers: tuple[PhysicalLayerSpec, ...] = ()
+    _historical_modeling: bool = False
     solve_ac_rl: bool = True
     grounded_region_net: str | None = None
     aedt_version: str = REQUIRED_AEDT_VERSION
@@ -292,6 +302,7 @@ class Q3dSpec:
         return "q3d"
 
     def __post_init__(self) -> None:
+        _request_modeling(self)
         if self.schema_version != Q3D_SCHEMA_VERSION:
             raise ValueError("unsupported Q3D schema")
         materials = _normalize_common_spec(self)
@@ -357,8 +368,16 @@ class Q3dSpec:
                 )
         object.__setattr__(self, "nets", nets)
 
+    @property
+    def effective_bodies(self) -> tuple[dict[str, Any], ...]:
+        mapping = _request_modeling(self)
+        if mapping is None:
+            raise ValueError("historical requests have no new execution modeling map")
+        return tuple(_effective_record(item, mapping) for item in self.bodies)
+
     def to_payload(self) -> dict[str, Any]:
         payload = {
+            **_modeling_payload(self),
             "schema_version": self.schema_version,
             "mode": self.mode,
             "aedt": {"requested_version": self.aedt_version},
@@ -371,7 +390,8 @@ class Q3dSpec:
                 key: item.to_payload() for key, item in self.materials.items()
             },
             "vacuum_material_id": self.vacuum_material_id,
-            "bodies": [body.to_payload() for body in self.bodies],
+            "bodies": (list(self.effective_bodies) if self.modeling is not None
+                       else [body.to_payload() for body in self.bodies]),
             "nets": [net.to_payload() for net in self.nets],
             "run_control": self.run_control.to_payload(),
             "region_padding_um": list(self.region_padding_um),
@@ -384,13 +404,16 @@ class Q3dSpec:
 
     @classmethod
     def from_payload(
-        cls, payload: dict[str, Any], *, base_dir: Path | None = None
+        cls, payload: dict[str, Any], *, base_dir: Path | None = None, allow_historical_modeling: bool = False
     ) -> Q3dSpec:
         if payload.get("schema_version") != Q3D_SCHEMA_VERSION:
             raise ValueError("unsupported Q3D schema")
         if {"gds", "layer_imports", "object_bindings"} & set(payload):
             raise ValueError("Q3D v3 does not accept GDS-piece inputs")
-        return cls(
+        result = cls(
+            modeling=payload.get("modeling"),
+            physical_layers=tuple(PhysicalLayerSpec(**item) for item in payload.get("physical_layers", ())),
+            _historical_modeling=allow_historical_modeling and "modeling" not in payload,
             project_name=_project_name_from_payload(
                 payload.get("project", {}).get("name")
             ),
@@ -401,7 +424,7 @@ class Q3dSpec:
                 key: PdkMaterial(**item) for key, item in payload["materials"].items()
             },
             vacuum_material_id=payload["vacuum_material_id"],
-            bodies=tuple(Q3dBodySpec(**body) for body in payload["bodies"]),
+            bodies=tuple(Q3dBodySpec(**_source_record_payload(body)) for body in payload["bodies"]),
             nets=tuple(Q3dNetSpec(**net) for net in payload["nets"]),
             run_control=MatrixRunControl(**payload["run_control"]),
             region_padding_um=tuple(payload["region_padding_um"]),
@@ -411,3 +434,6 @@ class Q3dSpec:
             pyaedt_version=payload["pyaedt"]["locked_version"],
             geometry_source=payload.get("geometry_source"),
         )
+        if result.modeling is not None:
+            _verify_effective_records(payload["bodies"], result.effective_bodies)
+        return result
