@@ -62,18 +62,29 @@ def _stats(values: np.ndarray, included: np.ndarray, total: int) -> dict[str, An
             "max": None,
         }
 
-    def position(q: float) -> float:
+    # Reductions retain the original filtered order, including signed-zero ties.
+    minimum = float(np.min(finite))
+    maximum = float(np.max(finite))
+    positions = []
+    for q in (0.5, 0.95, 0.99):
         rank = (len(finite) - 1) * q
         lower = math.floor(rank)
         upper = min(lower + 1, len(finite) - 1)
-        working = np.array(finite, dtype=np.float64, copy=True)
-        endpoints = np.partition(working, (lower, upper))
+        positions.append((rank, lower, upper))
+    # Boolean filtering detached finite from caller storage. Reuse it when it
+    # already has the quantile dtype; otherwise convert once, as before.
+    working = finite.astype(np.float64, copy=False)
+    working.partition(
+        sorted({index for _, lower, upper in positions for index in (lower, upper)})
+    )
+
+    def position(rank: float, lower: int, upper: int) -> float:
         if lower == upper:
-            return float(endpoints[lower])
+            return float(working[lower])
         weight = Fraction.from_float(rank - lower)
         exact = (1 - weight) * Fraction.from_float(
-            float(endpoints[lower])
-        ) + weight * Fraction.from_float(float(endpoints[upper]))
+            float(working[lower])
+        ) + weight * Fraction.from_float(float(working[upper]))
         result = float(exact)
         if not math.isfinite(result):
             raise RuntimeError(
@@ -84,11 +95,11 @@ def _stats(values: np.ndarray, included: np.ndarray, total: int) -> dict[str, An
     return {
         "sample_count": int(len(finite)),
         "excluded_count": int(total - len(finite)),
-        "min": float(np.min(finite)),
-        "median": position(0.5),
-        "p95": position(0.95),
-        "p99": position(0.99),
-        "max": float(np.max(finite)),
+        "min": minimum,
+        "median": position(*positions[0]),
+        "p95": position(*positions[1]),
+        "p99": position(*positions[2]),
+        "max": maximum,
     }
 
 

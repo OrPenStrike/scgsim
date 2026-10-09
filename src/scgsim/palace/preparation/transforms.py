@@ -14,14 +14,7 @@ from typing import Any, Literal
 from scgsim.semantics.route_a import (
     apply_thin_film_profile,
     derive_thin_film_facts,
-    geometry_z_range as semantic_geometry_z_range,
-    group_z_ranges as semantic_group_z_ranges,
-    map_z as semantic_map_z,
-    map_stack_z_ranges as semantic_map_stack_z_ranges,
-    mapped_record as semantic_mapped_record,
     normalize_optional_profile,
-    record_geometry as semantic_record_geometry,
-    same_z as semantic_same_z,
     validate_single_face_metal_records,
 )
 from scgsim.geometry.models.input import GeometryBuildInput
@@ -289,38 +282,6 @@ def _validate_single_face_metal_records(
     validate_single_face_metal_records(
         semantic_ids, records=records, materials=materials
     )
-
-
-def _group_z_ranges(
-    faces: Sequence[tuple[str, str, float, float]],
-) -> list[tuple[float, float, list[str]]]:
-    return semantic_group_z_ranges(faces)
-
-
-def _map_stack_z_ranges(stack: dict[str, Any], facts: Mapping[str, Any]) -> None:
-    semantic_map_stack_z_ranges(stack, facts)
-
-
-def _record_geometry(record: Mapping[str, Any], context: str) -> dict[str, Any]:
-    return semantic_record_geometry(record, context)
-
-
-def _mapped_geometry(
-    geometry: Mapping[str, Any], facts: Mapping[str, Any], context: str
-) -> dict[str, Any]:
-    return semantic_mapped_record(geometry, facts, context)
-
-
-def _map_z(z_um: float, facts: Mapping[str, Any]) -> float:
-    return semantic_map_z(z_um, facts)
-
-
-def _geometry_z_range(geometry: Any, context: str) -> tuple[float, float]:
-    return semantic_geometry_z_range(geometry, context)
-
-
-def _same_z(left: float, right: float) -> bool:
-    return semantic_same_z(left, right)
 
 
 def _canonical_mapping_sha256(payload: Mapping[str, Any]) -> str:
