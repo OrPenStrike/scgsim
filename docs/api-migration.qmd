@@ -104,6 +104,13 @@ V1–V14 keep their existing contracts. V15 will bind the implemented module
 bytes and digest without claiming exhaustive transitive dependency coverage;
 its precise path list is owned by the frozen implementation inventory.
 
+The current continuation's candidate scope covers terminal-free Q3D C/G, HFSS
+Eigenmode with EPR/saved-field analysis, and HFSS Driven Terminal. Q3D AC/RL
+and HFSS Driven Modal are deferred from this continuation; that scope boundary
+does not remove their existing request or result contracts. The runtime
+contract below owns the occurrence-local Ground and field-side/thickness
+distinctions for these modeling paths.
+
 ## Geometry and compiler API
 
 The migration divides the baseline `scgsim.sgb` facade into two deliberate

@@ -57,7 +57,7 @@ from scgsim.aedt.epr.selection import surface_integral_groups
 
 from scgsim.aedt.runtime.native.common import detached_data, saved_setup_properties
 
-from scgsim.aedt.specs.hfss import HfssEprSpec
+from scgsim.aedt.specs.hfss import HfssEprAnalysisSpec, HfssEprSpec
 
 
 _SURFACE_ANALYSIS_SCOPE = {
@@ -1118,6 +1118,7 @@ def _author_epr_expressions(
         "sheet_binding_seconds": 0.0,
         "ordinary_compile_seconds": 0.0,
         "adjacent_compile_seconds": 0.0,
+        "native_definition_readback_seconds": 0.0,
     }
     expression_counts = {"ordinary": 0, "adjacent": 0}
     expression_stage_seconds = {
@@ -1413,6 +1414,7 @@ def _author_epr_expressions(
         "evidence_write_seconds",
         "batch_import_seconds",
         "postload_readback_seconds",
+        "native_definition_readback_seconds",
     ):
         phase_seconds[key] = batch[key]
     authoring_seconds = time.perf_counter() - authoring_started
@@ -1422,6 +1424,7 @@ def _author_epr_expressions(
         {
             "source_assignment": source_assignment,
             "postprocessing_variables": pp_observed,
+            "native_expression_readback": batch["native_expression_readback"],
         },
         {
             **{key: round(value, 6) for key, value in phase_seconds.items()},
@@ -1522,11 +1525,14 @@ def _create_setup(app: Any, spec: HfssEprSpec) -> None:
     setup.props["MinimumPasses"] = spec.run_control.minimum_passes
     setup.props["MinimumConvergedPasses"] = spec.run_control.minimum_converged_passes
     setup.props["PercentRefinement"] = spec.run_control.percent_refinement
+    # EPR needs fields in the adaptive solve and in the sealed analysis copy.
+    setup.props["SaveAnyFields"] = True
+    setup.props["SaveRadFieldsOnly"] = False
     if not setup.update():
         raise RuntimeError("HFSS EPR setup update failed")
 
 
-def _read_setup(app: Any, spec: HfssEprSpec) -> dict[str, Any]:
+def _read_setup(app: Any, spec: HfssEprSpec | HfssEprAnalysisSpec) -> dict[str, Any]:
     raw = saved_setup_properties(app, spec.run_control.setup_name)
     observed = {
         "minimum_frequency": raw.get("MinimumFrequency"),
@@ -1548,16 +1554,36 @@ def _read_setup(app: Any, spec: HfssEprSpec) -> dict[str, Any]:
         "minimum_converged_passes": spec.run_control.minimum_converged_passes,
         "percent_refinement": spec.run_control.percent_refinement,
     }
+    creating_setup = isinstance(spec, HfssEprSpec)
+    if creating_setup:
+        observed.update(
+            {
+                "save_any_fields": raw.get("SaveAnyFields"),
+                "save_radiated_fields_only": raw.get("SaveRadFieldsOnly"),
+            }
+        )
+        expected.update(
+            {
+                "save_any_fields": True,
+                "save_radiated_fields_only": False,
+            }
+        )
     if observed != expected:
         raise RuntimeError(f"HFSS EPR saved setup readback mismatch: {observed!r}")
     saved_field_properties = {
-        "basis": "AEDT 2024.2 native Eigenmode field handling; no setup-key verification",
+        "basis": (
+            "AEDT 2024.2 Eigenmode SaveAnyFields/SaveRadFieldsOnly setup readback"
+            if creating_setup
+            else "existing saved-field analysis does not re-author setup field policy"
+        ),
         "serialized": {
             key: raw[key]
             for key in ("SaveAnyFields", "SaveRadFieldsOnly")
             if key in raw
         },
-        "status": "verification_deferred_to_completed_saved_field_inventory",
+        "status": (
+            "verified" if creating_setup else "not_reauthored_existing_saved_solution"
+        ),
     }
     return {
         "name": spec.run_control.setup_name,

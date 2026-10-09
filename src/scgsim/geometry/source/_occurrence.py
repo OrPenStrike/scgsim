@@ -348,6 +348,37 @@ def _occurrence_polygons_for_entity(
     return [_occurrence_polygon_record(polygon, transform) for polygon in selected]
 
 
+
+def _occurrence_ground_polygons_for_entity(
+    entity: SemanticEntitySpec, *, cell: Any, transform: Sequence[float],
+    plane_layer: Sequence[int], excluded_reference_indexes: Sequence[int] = (),
+) -> list[dict[str, Any]]:
+    """Derive an occurrence's own positive Ground before its one affine map.
+
+    The explicit PDK plane layer supplies the actual local outline; registered
+    descendants supply neither that outline nor the local mask/include recipe.
+    """
+    from scgsim.geometry.source.adapter import _derived_ground_polygons
+
+    geometry = dict(entity.geometry)
+    geometry.pop("source_occurrence_polygons_um", None)
+    for key in ("selector_point_um",):
+        if key in geometry:
+            geometry[key] = _occurrence_inverse_point(transform, geometry[key])
+    for key in ("include_selector_points_um", "exclude_selector_points_um"):
+        if key in geometry:
+            geometry[key] = [_occurrence_inverse_point(transform, point)
+                             for point in geometry[key]]
+    polygons = _polygons_by_layer(cell, excluded_reference_indexes=excluded_reference_indexes)
+    plane = polygons.get(_gds_layer(plane_layer, entity.semantic_id), ())
+    if not plane:
+        raise ValueError(f"{entity.semantic_id} occurrence has no declared plane-bound geometry")
+    derived = _derived_ground_polygons(
+        replace(entity, geometry=geometry), polygons_by_layer=polygons,
+        cell_bounds_um={}, domain_bounds_by_semantic_id={}, plane_polygons=plane,
+    )
+    return [_occurrence_polygon_record(polygon, transform) for polygon in derived]
+
 def _occurrence_port_polygon(
     record: Mapping[str, Any],
     *,

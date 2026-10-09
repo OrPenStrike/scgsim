@@ -22,6 +22,7 @@ from scgsim.geometry.source._occurrence import (
     _fused_gdstk_components,
     _gds_polygons_for_entity,
     _is_record_sequence,
+    _occurrence_ground_polygons_for_entity,
     _occurrence_include_polygon,
     _occurrence_polygons_for_entity,
     _occurrence_port_polygon,
@@ -172,10 +173,6 @@ def build_gds_stack_geometry_input(
             geometry = record.get("geometry", {})
             if geometry.get("geometry_source") == "die_face_minus_ground_mask":
                 metadata = record.get("metadata", {})
-                if metadata.get("source_occurrence_path") != root_path:
-                    raise ValueError(
-                        "GeometryPlan derived ground plane must belong to root"
-                    )
                 level = metadata.get("logical_layer_id")
                 if level in physical_planes:
                     raise ValueError(
@@ -265,13 +262,21 @@ def build_gds_stack_geometry_input(
                 raise ValueError(
                     "GeometryPlan ground contribution lineage metadata differs"
                 )
-            if geometry.get("geometry_source", "gds_polygon") != "gds_polygon":
+            if geometry.get("geometry_source", "gds_polygon") != "gds_polygon" and not (
+                geometry.get("geometry_source") == "die_face_minus_ground_mask" and path != root_path
+            ):
                 continue
-            expected = _occurrence_polygons_for_entity(
+            local_ground = (geometry.get("geometry_source") == "die_face_minus_ground_mask"
+                            and path != root_path)
+            selector = (_occurrence_ground_polygons_for_entity if local_ground
+                        else _occurrence_polygons_for_entity)
+            expected = selector(
                 _entity_from_layer_record(record, materials=materials),
                 cell=source_cells[occurrence["cell_name"]],
                 transform=occurrence["transform"],
                 excluded_reference_indexes=child_reference_indexes[path],
+                **({"plane_layer": solution_regions[geometry["plane_bounds_ref"]]
+                    ["metadata"]["source_layer_datatype"]} if local_ground else {}),
             )
             if record["geometry"].get("source_occurrence_polygons_um") != expected:
                 raise ValueError(
@@ -708,12 +713,22 @@ def _entities_and_polygons_from_layer_record(
     entity = _entity_from_layer_record(record, materials=materials)
     geometry_source = str(entity.geometry.get("geometry_source", "gds_polygon"))
     if geometry_source == "die_face_minus_ground_mask":
-        entity_polygons = _derived_ground_polygons(
-            entity,
-            polygons_by_layer=polygons_by_layer,
-            cell_bounds_um=cell_bounds_um,
-            domain_bounds_by_semantic_id=domain_bounds_by_semantic_id,
-        )
+        occurrence_polygons = entity.geometry.get("source_occurrence_polygons_um")
+        if occurrence_polygons is not None:
+            entity_polygons = tuple(LayoutPolygonSpec(
+                polygon_id=f"{entity.semantic_id}__P{index:04d}",
+                layer=f"{record['layer']}/{record['datatype']}",
+                exterior=region["exterior"], holes=region["holes"],
+                object_name=entity.semantic_id, net_name=entity.net_id,
+                metadata={"source": "die_face_minus_ground_mask"},
+            ) for index, region in enumerate(occurrence_polygons))
+        else:
+            entity_polygons = _derived_ground_polygons(
+                entity,
+                polygons_by_layer=polygons_by_layer,
+                cell_bounds_um=cell_bounds_um,
+                domain_bounds_by_semantic_id=domain_bounds_by_semantic_id,
+            )
         if len(entity_polygons) > 1:
             return tuple(
                 _split_polygon_entity(entity, polygon, index)
@@ -856,6 +871,7 @@ def _derived_ground_polygons(
     polygons_by_layer: Mapping[tuple[int, int], tuple[Any, ...]],
     cell_bounds_um: Mapping[str, float],
     domain_bounds_by_semantic_id: Mapping[str, Mapping[str, Any]],
+    plane_polygons: Sequence[Any] | None = None,
 ) -> tuple[LayoutPolygonSpec, ...]:
     import gdstk
 
@@ -872,10 +888,13 @@ def _derived_ground_polygons(
         )
     else:
         mask_key = (int(mask_layer[0]), int(mask_layer[1]))
-    exterior = _rectangle_ring(
-        _ground_plane_bounds(entity, domain_bounds_by_semantic_id, cell_bounds_um)
-    )
-    base = (gdstk.Polygon(exterior),)
+    if plane_polygons is None:
+        exterior = _rectangle_ring(
+            _ground_plane_bounds(entity, domain_bounds_by_semantic_id, cell_bounds_um)
+        )
+        base = (gdstk.Polygon(exterior),)
+    else:
+        base = tuple(plane_polygons)
     without_mask = gdstk.boolean(
         base,
         _merged_gdstk_polygons(polygons_by_layer.get(mask_key, ())),
