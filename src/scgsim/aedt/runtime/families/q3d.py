@@ -97,9 +97,9 @@ def run_q3d(
             control.snapshot().get("intent") is None and control.ledger_error is None
         ):
             raise
-        return stopped_q3d_result(prepared, control.snapshot(), exc)
+        return termination_q3d_result(prepared, control.snapshot(), exc)
     if control is not None and control.snapshot().get("intent") is not None:
-        return stopped_q3d_result(prepared, control.snapshot(), None)
+        return termination_q3d_result(prepared, control.snapshot(), None)
     result = export_q3d(prepared)
     result["stop_control"] = (
         control.snapshot()
@@ -919,7 +919,7 @@ def _export_matrix_file(app: Any, path: Path, spec: Q3dSpec, problem: str) -> No
     )
 
 
-def stopped_q3d_result(
+def termination_q3d_result(
     prepared: PreparedQ3d, control: dict[str, Any], analysis_error: Exception | None
 ) -> dict[str, Any]:
     """Save first and retain independently available native artifacts, never physics completion."""
@@ -930,6 +930,7 @@ def stopped_q3d_result(
     result["save"] = {"ok": False, "attempted": True}
     workflow = {
         "control": control,
+        "mode": (control.get("intent") or {}).get("action"),
         "analysis": control["analysis_call"],
         "primary_error": (
             f"{type(analysis_error).__name__}: {analysis_error}"
@@ -940,7 +941,7 @@ def stopped_q3d_result(
     }
     if analysis_error is not None and getattr(analysis_error, "__notes__", None):
         workflow["primary_error_notes"] = list(analysis_error.__notes__)
-    result["normal_stop"] = workflow
+    result["termination"] = workflow
     if control["analysis_call"].get("native_return") is False:
         workflow["primary_error"] = "Q3D Analyze returned False"
         if analysis_error is not None:

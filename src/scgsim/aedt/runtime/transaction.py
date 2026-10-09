@@ -48,7 +48,10 @@ from scgsim.aedt.results.provenance import (
     validate_runtime_source,
 )
 
-from scgsim.aedt.runtime.control import request_q3d_stop_and_save
+from scgsim.aedt.runtime.control import (
+    request_q3d_abort_and_save,
+    request_q3d_stop_and_save,
+)
 
 from scgsim.aedt.runtime.families.hfss import run_hfss
 
@@ -91,10 +94,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Open local AEDT and solve the prepared handoff",
     )
-    parser.add_argument(
+    termination = parser.add_mutually_exclusive_group()
+    termination.add_argument(
         "--stop-and-save",
         action="store_true",
         help="Request normal stop and recorder save of an owned Linux-local Q3D solve",
+    )
+    termination.add_argument(
+        "--abort-and-save",
+        action="store_true",
+        help="Request immediate abort and recorder save of an owned Linux-local Q3D solve",
     )
     parser.add_argument(
         "--prepare-only",
@@ -118,15 +127,20 @@ def main(argv: list[str] | None = None) -> int:
         help="Override local solve RAM Limit Percentage",
     )
     args = parser.parse_args(argv)
-    if args.stop_and_save:
+    if args.stop_and_save or args.abort_and_save:
         if any((args.execute, args.prepare_only, args.analyze_epr)) or any(
             value is not None
             for value in (args.geometry_workers, args.cores, args.ram_limit_percent)
         ):
             parser.error(
-                "--stop-and-save is mutually exclusive with other actions and overrides"
+                "--stop-and-save/--abort-and-save are exclusive with other actions and overrides"
             )
-        state = request_q3d_stop_and_save(args.handoff)
+        request = (
+            request_q3d_stop_and_save
+            if args.stop_and_save
+            else request_q3d_abort_and_save
+        )
+        state = request(args.handoff)
         print(json.dumps(state, indent=2))
         return 0 if state["intent"]["rpc_status"] == "returned" else 1
     metadata_path = Path(args.handoff).resolve()
@@ -318,8 +332,8 @@ def _execute(
                     control_metadata=metadata_path,
                     runtime_source=receipt["runtime_source"],
                 )
-                if "normal_stop" in result:
-                    workflow = result["normal_stop"]
+                if "termination" in result:
+                    workflow = result["termination"]
                     intent = workflow["control"].get("intent")
                     failure = workflow["primary_error"]
                     if (
@@ -341,7 +355,15 @@ def _execute(
                         failure = intent.get("error", "Q3D stop RPC outcome is unknown")
                     if failure is None and not result["save"]["ok"]:
                         failure = result["save"]["error"]
-                    status = "normal_stop_saved" if failure is None else "failed"
+                    status = (
+                        (
+                            "abort_saved"
+                            if workflow["mode"] == "abort_and_save"
+                            else "normal_stop_saved"
+                        )
+                        if failure is None
+                        else "failed"
+                    )
         elif isinstance(spec, Q2dSpec):
             result = _solve_q2d(
                 owned_application_constructor(Q2d, desktop),
@@ -361,7 +383,7 @@ def _execute(
         if (
             not isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec))
             and not prepare_only
-            and not (result is not None and "normal_stop" in result)
+            and not (result is not None and "termination" in result)
         ):
             status = "completed"
     except Exception as exc:  # noqa: BLE001 -- receipt must record any solver failure.
@@ -380,23 +402,26 @@ def _execute(
             try:
                 preserve_desktop = (
                     result is not None
-                    and "normal_stop" in result
+                    and "termination" in result
                     and (
-                        result["normal_stop"]["control"]
+                        result["termination"]["control"]
                         .get("native_settlement", {})
                         .get("status")
                         != "inactive"
-                        or result["normal_stop"]["control"]
+                        or result["termination"]["control"]
                         .get("request_readback", {})
                         .get("status")
                         == "unavailable"
+                        or result["save"]["ok"] is not True
                     )
                 )
                 if preserve_desktop:
                     receipt["release"] = {
                         "ok": False,
-                        "reason": "native_not_confirmed_inactive",
-                        "preserved_desktop": result["normal_stop"]["control"][
+                        "reason": "save_failed"
+                        if result["save"].get("attempted") and not result["save"]["ok"]
+                        else "native_not_confirmed_inactive",
+                        "preserved_desktop": result["termination"]["control"][
                             "desktop"
                         ],
                         "ownership": "unresolved",
@@ -438,15 +463,16 @@ def _execute(
             receipt["solver_invoked"] = epr_solver_attempted
         if (
             result is not None
-            and "normal_stop" in result
-            and result["normal_stop"]["control"]
+            and "termination" in result
+            and result["termination"]["control"]
             .get("native_settlement", {})
             .get("status")
             == "inactive"
-            and result["normal_stop"]["control"]
+            and result["termination"]["control"]
             .get("request_readback", {})
             .get("status")
             != "unavailable"
+            and result["save"]["ok"] is True
             and receipt.get("release", {}).get("ok") is True
         ):
             # Seal real released bytes independently, but do not overwrite the
@@ -530,7 +556,7 @@ def _execute(
                         if failure is None:
                             failure = seal_error
                             receipt["error"] = failure
-        elif result is not None and "normal_stop" not in result:
+        elif result is not None and "termination" not in result:
             _record_ordinary_result_after_release(receipt, result)
         receipt["diagnostics"] = _read_physics_warnings(run_dir)
         receipt["status"] = status
@@ -545,6 +571,7 @@ def _execute(
             "epr_analysis_completed",
             "native_preparation_only",
             "normal_stop_saved",
+            "abort_saved",
         }
         else 1
     )
@@ -555,7 +582,7 @@ def _record_result_before_release(
 ) -> None:
     """Copy returned facts before releasing the one transaction-owned Desktop."""
 
-    if isinstance(spec, Q3dSpec) and "normal_stop" in result:
+    if isinstance(spec, Q3dSpec) and "termination" in result:
         for name in (
             "outputs",
             "connected",
@@ -566,7 +593,7 @@ def _record_result_before_release(
             "setup",
             "save",
             "solver_invoked",
-            "normal_stop",
+            "termination",
         ):
             receipt[name] = result[name]
     elif isinstance(spec, Q3dSpec) and result.get("solver_invoked") is False:

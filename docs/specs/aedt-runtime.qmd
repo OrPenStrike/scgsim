@@ -88,7 +88,7 @@ rewrite existing artifacts, or provide a legacy-name fallback.
 
 ## Receipt cohorts and source provenance
 
-For the Q3D stop-and-save candidate, new handoffs retain
+For the Q3D termination-and-save candidate, new handoffs retain
 `scgsim.aedt.handoff.v1` and
 `scgsim.aedt.handoff-manifest.v1`. Both records add
 `expected_receipt_schema: scgsim.aedt.receipt.v3`, and the initial receipt is
@@ -539,94 +539,91 @@ released its owned Desktop, and had a separate top/isometric geometry preview.
 It did not call `Analyze`, solve, or export C/G matrices. Normal Q3D
 `--execute` behavior is unchanged.
 
-#### Q3D user-requested stop and save — CONVERGING
+#### Q3D user-requested Stop/Abort and save — CONVERGING
 
-The candidate public function is
-`scgsim.aedt.request_q3d_stop_and_save(handoff)`. The receipt records stop
-intent separately from `rpc_status` and the raw native response. A
-`rpc_status=returned` means only that the native method returned normally; the
-raw response, including `False` or `None`, is not interpreted as interruption
-or success, and does not prove that saving or matrix export completed. The
-separate CLI form is:
+The candidate exposes two mutually exclusive operations:
+`scgsim.aedt.request_q3d_stop_and_save(handoff)` requests Clean Stop, allowing
+the current pass to finish, while
+`scgsim.aedt.request_q3d_abort_and_save(handoff)` requests Abort of current
+work. The current receipt uses one `termination` carrier with an explicit
+mode; it does not add a clean-only `normal_stop` alias. Existing sealed
+receipts and reader rules remain unchanged, with no conversion adapter. Their
+direct CLI actions are:
 
 ```sh
 python -m scgsim.aedt.run --handoff <run-dir>/metadata/aedt_handoff_metadata.json --stop-and-save
+python -m scgsim.aedt.run --handoff <run-dir>/metadata/aedt_handoff_metadata.json --abort-and-save
 ```
 
-Use this Q3D-only command instead of `--execute`. It is exclusive with
-`--prepare-only`, analyze/solve controls, and resource overrides such as
-`--cores` or `--ram-limit-percent`. The requester is a separate local Linux
-process and accepts only the exact exclusive Desktop created for the active
-transaction, bound by its process-creation identity (start time, boot identity,
-and UID), PID, port, full project, design, and setup. Unsupported platforms
-fail before Desktop attachment; the requester never chooses a default or
-latest Desktop.
+Use either request action instead of `--execute`; the two modes are mutually
+exclusive with each other and with `--prepare-only`, analyze/solve controls,
+and resource overrides such as `--cores` or `--ram-limit-percent`. Each mode
+uses the same private control ledger and stable lock. A requester is a separate
+local Linux process bound to the exact active transaction: Desktop creation
+identity (start time, boot identity, and UID), PID, port, full project, design,
+setup, runtime/input identity, and nonce. It never attaches to a default/latest
+Desktop. Repeating the committed mode is idempotent; a conflicting mode is
+refused without another native RPC.
+Unsupported platforms fail before Desktop attachment.
 
 On Linux, execute-mode stop-managed Q3D refuses PyAEDT documentation mode
 (`PYAEDT_DOC_GENERATION`) before creating a Desktop. That mode overrides the
-Desktop close flags required to preserve exclusive transaction ownership.
+Desktop close flags required for exclusive transaction ownership.
 
-The recorder registers control state at Analyze and keeps the blocking
-Analyze call. The requester serializes with Analyze settlement, commits one
-stop intent immediately before one PyAEDT `Desktop.stop_simulations(clean_stop=True)`
-call (`oDesktop.StopSimulations(True)` natively), and does not issue Stop when
-simulations are not running. Repeated requests return the stored outcome
-without another native RPC. The receipt keeps stop intent, RPC outcome,
-workflow state, and native Analyze outcome distinct. Neither an Analyze
-true/false return or exception nor a stop-RPC return, exception, or unknown
-outcome proves native inactivity.
-After Analyze settles, the recorder closes stop admission and makes one native
-`odesktop.AreThereSimulationsRunning(True)` observation on the owned Desktop,
-before any save or release. The `True` argument includes pending simulations;
-only native `False` confirms inactivity. Native `True`, an exception, or any
-unavailable/other response leaves inactivity unconfirmed.
+The recorder retains the blocking Analyze. Clean Stop calls PyAEDT
+`Desktop.stop_simulations(clean_stop=True)` (native
+`oDesktop.StopSimulations(True)`); Abort calls it with
+`clean_stop=False` to interrupt current work. The receipt records mode/intent,
+RPC outcome, and raw native response separately. A returned RPC is not an
+acknowledgment: its response is uninterpreted and proves neither interruption
+nor success. Neither the Analyze return/exception nor the Stop/Abort RPC
+proves native inactivity or successful saving.
 
-When inactivity is confirmed, stop/save finalization may proceed: the recorder
-attempts to save the existing project first, then
-independently attempts each requested matrix family and native convergence
-readback/export, releases the owned Desktop, and seals the post-release
-identities. Optional export absence or failure is recorded individually and
-does not suppress the project-save attempt or owned Desktop release. ACF
-restoration, stop, save/export, and release errors remain separately recorded.
-The terminal `normal_stop_saved` status requires committed user intent,
-`rpc_status=returned`, Analyze returning true, confirmed native inactivity,
-successful project save and release, and the post-release seal. The raw native
-stop response remains uninterpreted. This status describes the finalized
-stop-request/save workflow, not scientific completion or proof that the
-request caused termination; Analyze may finish naturally. Optional matrix and
-convergence exports are not prerequisites for this status; artifacts may be
-unavailable, and raw convergence output may exist while strict parsing cannot
-establish native convergence. No derived convergence flag is claimed.
+After Analyze settles, the recorder closes admission and makes one native
+`odesktop.AreThereSimulationsRunning(True)` observation. Its `True` argument
+includes running and pending simulations; only native `False` confirms
+inactivity. Active, unknown, or unavailable native state, or uncertain
+control-ledger closure/read/write/readback, fails the workflow and defers
+Save/export with
+`attempted=false` and `native_not_confirmed_inactive`, and preserves the owned
+Desktop through non-closing detach with `release.ok=false`. It does not
+fabricate a committed intent,
+`normal_stop_saved`, or `abort_saved` status, write a post-release seal, or
+clean up the preserved Desktop automatically. Later owner action remains
+explicit.
 
-If native state is active or unknown, or post-Analyze control-ledger closure,
-read, or write fails or its readback is uncertain/unavailable, the receipt is
-`FAILED`; project-save and optional export attempts are deferred with
-`attempted=false` and reason
-`native_not_confirmed_inactive`. A ledger failure does not fabricate a stop
-intent. No `normal_stop_saved` status or post-release seal is written. The
-receipt retains the actual primary and secondary failures, native observation
-or ledger error, and detach/preserved-ownership outcome. The recorder detaches
-without closing, aborting, killing, or quitting the owned Desktop; it does not
-release it or write a post-release seal. No polling, wait loop, additional
-stop, retry, or automatic cleanup of the preserved Desktop is performed;
-later owner action remains explicit. ACF restoration, RPC unknown/exception,
-Analyze false/exception, and save/release failures yield `FAILED`; an Analyze
-failure stays primary with stop fields preserved.
+With confirmed inactivity and known control-ledger state, the recorder first
+attempts the explicit transaction Save; a preparation-time save cannot satisfy
+this requirement. Requested available completed-result matrices and native
+convergence exports are then attempted and recorded independently. Any raw
+native files actually produced remain retained even if export/readback parsing
+fails, with availability and errors recorded truthfully. Optional outputs do
+not prove that an interrupted pass completed or promise recovery/completeness.
+The owned Desktop is closed/released only if this explicit Save succeeds. If
+Save fails, the receipt is `FAILED`; the recorder performs a non-closing
+detach with `release.ok=false` and reason `save_failed`. The project and
+Desktop remain preserved, actual recoverable artifacts and ownership/error
+evidence are retained, and no post-release seal or automatic cleanup occurs.
+A successful release is required before sealing the actual released
+identities.
 
-`normal_stop_saved` and `FAILED` receipts are not ordinary completed solver
-results: strict `resolve_results()` and Report behavior remain unchanged, with
-no new partial-result reader or Report API. RPC unknown/exception, Analyze
-false/exception, and save/release failure yield `FAILED`; stop fields are
-retained, with an Analyze failure remaining primary. The operation does not
-revise old runs,
-retry a stop RPC, or start another Analyze. If the requester fails after the
-RPC outcome becomes uncertain, that outcome remains unknown and is not
-automatically retried. A hung RPC can delay Analyze settlement; no timeout,
-abort, or host-kill finalization guarantee is claimed. The native operation is
-not yet observed. Ordinary Q3D runs without stop intent remain unchanged; on
-non-Linux platforms normal Q3D operation is unchanged.
-This Q3D-only addition does not change HFSS or Q2D behavior, or the Eigenmode
-EPR rule against automatic partial save/export recovery.
+The mode-specific `normal_stop_saved` and `abort_saved` statuses require the
+committed matching intent, returned RPC, Analyze returning true, confirmed
+native inactivity, successful explicit Save and Desktop release, and
+post-release seal. They describe only the finalized Stop/Abort-and-save
+workflow, not physics completion or proof that the request caused termination;
+Analyze can finish naturally. Analyze false/exception remains the primary
+failure with causality unknown; control-mode/intent, ACF restoration, RPC,
+Save/export, and release errors remain separately recorded. Optional export
+errors do not define the Stop/Abort-save workflow status or make it a completed
+solver result.
+Strict `resolve_results()` and Report behavior remain unchanged, with no new
+partial-result reader or Report API. No polling, wait loop, additional Stop/Abort, retry, or automatic cleanup is performed. The native
+Stop/Abort/save operations remain unobserved. These
+controls apply only to new executions registered by this runtime; old runs are
+not retrofitted. Ordinary Q3D without request intent, HFSS, Q2D, Eigenmode EPR,
+and non-Linux solver flows are unchanged. The Eigenmode EPR
+no-automatic-partial-save rule remains unchanged.
 
 The v3 handoff keeps the five ordinary allowed paths in their established
 order. A source-backed cohort appends `geometry/source.gds`,

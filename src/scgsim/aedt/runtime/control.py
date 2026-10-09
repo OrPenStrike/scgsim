@@ -34,7 +34,7 @@ _LOCK = "q3d_stop_control.lock"
 
 def _require_linux() -> None:
     if sys.platform != "linux":
-        raise RuntimeError("Q3D stop-and-save requires local Linux execution")
+        raise RuntimeError("Q3D termination-and-save requires local Linux execution")
 
 
 def _process_identity(pid: int) -> dict[str, Any]:
@@ -104,7 +104,7 @@ def _inputs(path: Path) -> tuple[dict[str, str], Q3dSpec]:
     spec_path = run_dir / "aedt_spec.json"
     spec = parse_aedt_spec(read_json(spec_path), base_dir=run_dir)
     if not isinstance(spec, Q3dSpec):
-        raise RuntimeError("stop-and-save is only supported for Q3D")
+        raise RuntimeError("termination-and-save is only supported for Q3D")
     return {
         "metadata_sha256": file_sha256(path),
         "spec_sha256": file_sha256(spec_path),
@@ -267,6 +267,21 @@ def request_q3d_stop_and_save(handoff: HandoffPlan | str | Path) -> dict[str, An
     Save/export/release occur later in the original recorder after Analyze settles.
     This call neither resumes a consumed cohort nor resolves a physics result.
     """
+    return _request_q3d_termination_and_save(handoff, clean_stop=True)
+
+
+def request_q3d_abort_and_save(handoff: HandoffPlan | str | Path) -> dict[str, Any]:
+    """Request ONE immediate abort; the recorder saves after confirmed inactivity.
+
+    Partial interrupted-pass data is not promised. This never resumes a cohort.
+    """
+    return _request_q3d_termination_and_save(handoff, clean_stop=False)
+
+
+def _request_q3d_termination_and_save(
+    handoff: HandoffPlan | str | Path, *, clean_stop: bool
+) -> dict[str, Any]:
+    action = "stop_and_save" if clean_stop else "abort_and_save"
     _require_linux()
     metadata_path = _metadata_path(handoff)
     path, lock = metadata_path.parent / _STATE, metadata_path.parent / _LOCK
@@ -293,6 +308,10 @@ def request_q3d_stop_and_save(handoff: HandoffPlan | str | Path) -> dict[str, An
             raise RuntimeError("Q3D stop requester must be a separate process")
         # Idempotence never attaches or repeats an RPC, even after recorder closure.
         if state["intent"] is not None:
+            if state["intent"]["action"] != action:
+                raise RuntimeError(
+                    "Q3D termination mode conflicts with the committed intent"
+                )
             return copy.deepcopy(state)
         if state["phase"] != "analysing" or receipt.get("status") != "running":
             raise RuntimeError("Q3D stop admission is closed")
@@ -355,13 +374,13 @@ def request_q3d_stop_and_save(handoff: HandoffPlan | str | Path) -> dict[str, An
         if not desktop.are_there_simulations_running:
             raise RuntimeError("Q3D owned Desktop has no active simulation to stop")
         state["intent"] = {
-            "action": "stop_and_save",
+            "action": action,
             "requester": _process_identity(os.getpid()),
             "rpc_status": "unknown",
         }
         _store(path, state)  # Intent is committed immediately before the single RPC.
         try:
-            response = desktop.stop_simulations(clean_stop=True)
+            response = desktop.stop_simulations(clean_stop=clean_stop)
             state["intent"].update(rpc_status="returned", native_response=response)
         except Exception as exc:
             state["intent"].update(
