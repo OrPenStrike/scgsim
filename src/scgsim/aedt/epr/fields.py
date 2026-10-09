@@ -311,14 +311,18 @@ def junction_voltage_operations(
 
 
 def create_verified_face_list(
-    app: Any, *, name: str, face_ids: Sequence[int]
+    app: Any, *, name: str, face_ids: Sequence[int], reuse_existing: bool = False
 ) -> dict[str, Any]:
+    """Bind native list identity and check created/restored wrapper membership."""
     ids = [int(value) for value in face_ids]
     if not ids or len(ids) != len(set(ids)) or any(value <= 0 for value in ids):
         raise ValueError("face list requires distinct positive native face ids")
-    if name in {str(item.name) for item in app.modeler.user_lists}:
+    existing = [item for item in app.modeler.user_lists if str(item.name) == name]
+    if existing and not reuse_existing:
         raise RuntimeError(f"HFSS face-list name already exists: {name!r}")
-    item = app.modeler.create_face_list(ids, name=name)
+    if len(existing) > 1:
+        raise RuntimeError(f"HFSS face-list name is ambiguous: {name!r}")
+    item = existing[0] if existing else app.modeler.create_face_list(ids, name=name)
     if (
         item is False
         or item is None
@@ -333,12 +337,18 @@ def create_verified_face_list(
         or native_id != item.props.get("ID")
     ):
         raise RuntimeError(f"HFSS face-list readback failed: {name!r}")
-    members = item.props.get("EntityList")
+    # PyAEDT exposes both created and restored EntityList membership as List.
+    members = item.props.get("List")
     if isinstance(members, (int, str)):
         members = [members]
     if [int(value) for value in members or ()] != ids:
         raise RuntimeError(f"HFSS face-list membership differs: {name!r}")
-    return {"name": name, "native_id": native_id, "face_ids": ids}
+    return {
+        "name": name, "native_id": native_id, "face_ids": ids,
+        "assignment_basis": (
+            "PyAEDT created/restored List property; not independent native membership"
+        ),
+    }
 
 
 def evaluate_named_expression(
@@ -457,8 +467,10 @@ def _read_native_named_expressions(
     )
     name_pattern = re.compile(r"(?m)^\s*Name\(['\"]([^'\"]+)['\"]\)\s*$")
     native_definitions: dict[str, dict[str, Any]] = {}
+    serialized_definitions: dict[str, str] = {}
     for match in block_pattern.finditer(text):
         block = match.group(1)
+        serialized_block = match.group(0)
         name_match = name_pattern.search(block)
         if name_match is None:
             raise RuntimeError(
@@ -466,7 +478,12 @@ def _read_native_named_expressions(
             )
         name = name_match.group(1)
         if name in native_definitions:
-            raise RuntimeError(f"HFSS native expression readback repeats {name!r}")
+            if serialized_definitions[name] != serialized_block:
+                raise RuntimeError(
+                    f"HFSS native expression readback conflicts for {name!r}"
+                )
+            continue
+        serialized_definitions[name] = serialized_block
         native_definitions[name] = {
             "sha256": hashlib.sha256(block.encode("utf-8")).hexdigest(),
             "field_selection_operations": _field_selection_operations(block),

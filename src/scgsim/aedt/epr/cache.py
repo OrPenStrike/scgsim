@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 
-import copy
-
 import hashlib
 
 import json
@@ -51,11 +49,20 @@ from scgsim.aedt.epr.models import (
     surface_evaluations,
 )
 
-from scgsim.aedt.epr.native import bind_inset_surface_selections
+from scgsim.aedt.epr.native import (
+    bind_inset_surface_selections,
+    bind_native_surface_references,
+)
 
 from scgsim.aedt.epr.selection import surface_integral_groups
 
 from scgsim.aedt.runtime.native.common import detached_data, saved_setup_properties
+
+from scgsim.aedt.runtime.native.hfss_eigenmode import (
+    create_eigenmode_setup,
+    read_eigenmode_setup,
+    submit_eigenmode_cache,
+)
 
 from scgsim.aedt.specs.hfss import HfssEprAnalysisSpec, HfssEprSpec
 
@@ -74,6 +81,9 @@ IntegralKind = Literal[
     "electric_normal",
     "electric_tangential",
     "masked_area",
+    "native_surface_reference_normal",
+    "native_surface_reference_tangential",
+    "native_surface_reference_area",
     "junction_voltage_real",
     "junction_voltage_imag",
 ]
@@ -85,6 +95,9 @@ _INTEGRAL_KINDS: tuple[IntegralKind, ...] = (
     "electric_normal",
     "electric_tangential",
     "masked_area",
+    "native_surface_reference_normal",
+    "native_surface_reference_tangential",
+    "native_surface_reference_area",
     "junction_voltage_real",
     "junction_voltage_imag",
 )
@@ -114,6 +127,12 @@ def _integral_target(purpose: str, selection: Mapping[str, Any]) -> IntegralTarg
         selection_kind, key = "volume", "semantic_id"
     elif kind in {"electric_normal", "electric_tangential", "masked_area"}:
         selection_kind, key = "surface_group", "group_id"
+    elif kind in {
+        "native_surface_reference_normal",
+        "native_surface_reference_tangential",
+        "native_surface_reference_area",
+    }:
+        selection_kind, key = "native_surface_reference", "reference_id"
     else:
         selection_kind, key = "junction_sheet", "junction_id"
     scope_id = selection.get(key)
@@ -174,7 +193,11 @@ def _canonical_integral(
 
 
 def _store_integral(
-    raw: dict[str, Any], *, target: IntegralTarget, value: dict[str, Any]
+    raw: dict[str, Any],
+    *,
+    target: IntegralTarget,
+    value: dict[str, Any],
+    expression_identity: Mapping[str, Any] | None = None,
 ) -> None:
     if target.kind == "effective_volume":
         raw["effective_domain_volumes_m3"][target.scope_id] = value
@@ -208,12 +231,76 @@ def _store_integral(
             raise RuntimeError("surface group expression provenance differs")
         raw["surface_group_provenance"][key] = selection
         raw["masked_areas_m2"][key] = value
+    elif target.kind in {
+        "native_surface_reference_normal",
+        "native_surface_reference_tangential",
+        "native_surface_reference_area",
+    }:
+        key = target.scope_id
+        selection = detached(target.selection)
+        references = raw["native_surface_references"]
+        record = references.setdefault(
+            key, {"selection": selection, "expression_identities": {}}
+        )
+        if record["selection"] != selection:
+            raise RuntimeError("native surface reference provenance differs")
+        component = {
+            "native_surface_reference_normal": "normal",
+            "native_surface_reference_tangential": "tangential",
+            "native_surface_reference_area": "area",
+        }[target.kind]
+        if component in record:
+            raise RuntimeError("native surface reference integral repeats")
+        if expression_identity is None:
+            raise RuntimeError("native surface reference lacks expression identity")
+        record[component] = value
+        record["expression_identities"][component] = detached(expression_identity)
     elif target.kind in {"junction_voltage_real", "junction_voltage_imag"}:
         record = raw["junction_integrals_v_m"].setdefault(target.scope_id, {})
         component = "real" if target.kind == "junction_voltage_real" else "imag"
         record[component] = value
     else:
         raise AssertionError(f"unsupported integral kind {target.kind!r}")
+
+
+def _attach_saved_native_surface_membership(
+    raw: dict[str, Any],
+    result_row: dict[str, Any],
+    references: list[dict[str, Any]],
+) -> None:
+    """Attach saved-project membership beside, not inside, expression data."""
+
+    membership_by_id: dict[str, dict[str, Any]] = {}
+    for reference in references:
+        reference_id = reference["reference_id"]
+        face_list = reference["face_list"]
+        saved_membership = face_list.get("saved_membership")
+        if not isinstance(saved_membership, Mapping):
+            raise RuntimeError(
+                f"native surface reference {reference_id!r} lacks saved membership"
+            )
+        membership_by_id[reference_id] = detached_data(saved_membership)
+
+    raw_references = raw.get("native_surface_references", {})
+    if not isinstance(raw_references, Mapping):
+        raise TypeError("raw native surface references are invalid")
+    for reference_id, record in raw_references.items():
+        membership = membership_by_id.get(reference_id)
+        if membership is None:
+            raise RuntimeError(
+                f"raw native surface reference {reference_id!r} was not saved"
+            )
+        record["saved_membership"] = detached_data(membership)
+
+    result_references = result_row.get("native_surface_references", ())
+    for reference in result_references:
+        reference_id = reference["reference_id"]
+        membership = membership_by_id.get(reference_id)
+        if membership is None:
+            raise RuntimeError(
+                f"result native surface reference {reference_id!r} was not saved"
+            )
+        reference["saved_membership"] = detached_data(membership)
 
 
 def _purpose_unit(kind: IntegralKind) -> str:
@@ -226,6 +313,13 @@ def _purpose_unit(kind: IntegralKind) -> str:
     if kind in {"electric_normal", "electric_tangential"}:
         return "V^2"
     if kind == "masked_area":
+        return "m^2"
+    if kind in {
+        "native_surface_reference_normal",
+        "native_surface_reference_tangential",
+    }:
+        return "V^2"
+    if kind == "native_surface_reference_area":
         return "m^2"
     if kind in {"junction_voltage_real", "junction_voltage_imag"}:
         return "V*m"
@@ -244,6 +338,7 @@ def _empty_raw_integrals() -> dict[str, Any]:
         "masked_areas_m2": {},
         "surface_granularity": "owner_interface_margin.v1",
         "surface_group_provenance": {},
+        "native_surface_references": {},
         "junction_integrals_v_m": {},
     }
 
@@ -468,6 +563,8 @@ def _adaptive_epr_result(
     spec: HfssEprSpec,
     history: dict[str, Any],
     convergence: dict[str, Any],
+    *,
+    native_surface_references: list[dict[str, Any]] | None = None,
 ) -> EprResult:
     frequency_traces = history["frequency_traces"]
     cache = history["cache_integral_traces"]
@@ -569,9 +666,18 @@ def _adaptive_epr_result(
                     raw,
                     target=target,
                     value=value,
+                    expression_identity={
+                        "name": item["expression"],
+                        "identity_sha256": item["expression_identity_sha256"],
+                        "purpose": item["purpose"],
+                    },
                 )
             row["raw_integrals"] = raw
             row["raw_integral_evidence"] = integral_evidence
+            if native_surface_references:
+                _attach_saved_native_surface_membership(
+                    raw, row, native_surface_references
+                )
             if unit_mismatches:
                 row["unit_mismatches"] = unit_mismatches
             frequency = frequencies.get(pass_id)
@@ -631,6 +737,10 @@ def _adaptive_epr_result(
                 row.update(
                     combine_epr_mode(spec.geometry, raw, request=spec.epr_request)
                 )
+                if native_surface_references:
+                    _attach_saved_native_surface_membership(
+                        raw, row, native_surface_references
+                    )
                 row["status"] = "complete"
             except (TypeError, ValueError, RuntimeError) as exc:
                 row["combination_error"] = f"{type(exc).__name__}: {exc}"
@@ -1185,6 +1295,58 @@ def _author_epr_expressions(
                     namespace=namespace,
                 )
             )
+    selected_contributions = (
+        {item.contribution_id for item in spec.geometry.contributions}
+        if request.surface_contribution_ids is None
+        else set(request.surface_contribution_ids)
+    )
+    requested_physical_surfaces = any(
+        item.contribution_id in selected_contributions
+        and item.interface_kind in {"MA", "MS", "SA"}
+        for item in spec.geometry.contributions
+    )
+    native_references: list[dict[str, Any]] = []
+    if spec.geometry.modeling == "solid" and requested_physical_surfaces:
+        native_references = bind_native_surface_references(
+            app, spec.geometry, native_geometry, request
+        )
+        if not native_references:
+            raise RuntimeError(
+                "selected Solid EPR contributions have no native face references"
+            )
+        for reference in native_references:
+            reference_id = reference["reference_id"]
+            reference_selection = {
+                **detached_data(reference),
+                "kind": "native_surface_reference",
+            }
+            for integral_kind, quantity in (
+                ("native_surface_reference_normal", "electric_normal"),
+                ("native_surface_reference_tangential", "electric_tangential"),
+                ("native_surface_reference_area", "masked_area"),
+            ):
+                operations = field_integral_operations(
+                    quantity=quantity,
+                    selection_name=reference["selection_name"],
+                    adjacent_side=False,
+                    normal_vector=(
+                        reference["projection_normal"]
+                        if quantity != "masked_area"
+                        else None
+                    ),
+                )
+                expressions.append(
+                    _timed_author(
+                        "native_surface_reference",
+                        purpose=f"{integral_kind}_{reference_id}",
+                        operations=operations,
+                        solution=solution,
+                        phase_degrees=0.0,
+                        dependencies=pp_observed,
+                        selection=reference_selection,
+                        namespace=namespace,
+                    )
+                )
     bindings = {
         str(item["binding_id"]): item for item in spec.geometry.surface_bindings
     }
@@ -1232,6 +1394,7 @@ def _author_epr_expressions(
                 inset_plan,
                 sheet_facts,
                 sheet_names,
+                modeling=spec.geometry.modeling,
             )
             phase_seconds["sheet_binding_seconds"] += time.perf_counter() - started
             member_components[member_key] = components
@@ -1425,6 +1588,7 @@ def _author_epr_expressions(
             "source_assignment": source_assignment,
             "postprocessing_variables": pp_observed,
             "native_expression_readback": batch["native_expression_readback"],
+            "native_surface_references": detached_data(native_references),
         },
         {
             **{key: round(value, 6) for key, value in phase_seconds.items()},
@@ -1461,17 +1625,13 @@ def _submit_epr_cache(
         selected_modes,
         spec.expression_convergence,
     )
-    setup = app.get_setup(spec.run_control.setup_name)
-    before = detached_data(setup.props)
-    properties = copy.deepcopy(before)
-    properties.pop("ExpressionCache", None)
-    properties["UseCacheFor"] = ["Pass"]
-    raw_args = setup._setup_dict_to_arg(
-        name=spec.run_control.setup_name, props=properties
-    )
     raw_cache = _native_expression_cache(items)
-    raw_args.append(raw_cache)
-    setup.omodule.EditSetup(spec.run_control.setup_name, raw_args)
+    submit_eigenmode_cache(
+        app,
+        spec.run_control,
+        expression_cache=raw_cache,
+        use_cache_for=["Pass"],
+    )
     return {
         "schema_version": "scgsim.aedt.epr-cache-request.v1",
         "setup_name": spec.run_control.setup_name,
@@ -1479,6 +1639,9 @@ def _submit_epr_cache(
         "items": items,
         "source_assignment": authoring["source_assignment"],
         "postprocessing_variables": authoring["postprocessing_variables"],
+        "native_surface_references": detached_data(
+            authoring["native_surface_references"]
+        ),
         "native_readback": {
             "status": "PENDING_SAVED_SETUP_READBACK",
             "reason": (
@@ -1513,66 +1676,16 @@ def _prepare_expressions_and_cache(
 
 
 def _create_setup(app: Any, spec: HfssEprSpec) -> None:
-    if app.setup_names:
-        raise RuntimeError("new EPR design must not inherit a setup")
-    setup = app.create_setup(spec.run_control.setup_name)
-    if setup is None:
-        raise RuntimeError("HFSS EPR setup creation failed")
-    setup.props["MinimumFrequency"] = f"{spec.run_control.minimum_frequency_ghz:g}GHz"
-    setup.props["NumModes"] = spec.run_control.num_modes
-    setup.props["MaxDeltaFreq"] = spec.run_control.maximum_delta_frequency_percent
-    setup.props["MaximumPasses"] = spec.run_control.maximum_passes
-    setup.props["MinimumPasses"] = spec.run_control.minimum_passes
-    setup.props["MinimumConvergedPasses"] = spec.run_control.minimum_converged_passes
-    setup.props["PercentRefinement"] = spec.run_control.percent_refinement
-    # EPR needs fields in the adaptive solve and in the sealed analysis copy.
-    setup.props["SaveAnyFields"] = True
-    setup.props["SaveRadFieldsOnly"] = False
-    if not setup.update():
-        raise RuntimeError("HFSS EPR setup update failed")
+    create_eigenmode_setup(app, spec.run_control)
 
 
 def _read_setup(app: Any, spec: HfssEprSpec | HfssEprAnalysisSpec) -> dict[str, Any]:
+    setup = read_eigenmode_setup(app, spec.run_control)
     raw = saved_setup_properties(app, spec.run_control.setup_name)
-    observed = {
-        "minimum_frequency": raw.get("MinimumFrequency"),
-        "num_modes": raw.get("NumModes"),
-        "maximum_delta_frequency_percent": raw.get("MaxDeltaFreq"),
-        "maximum_passes": raw.get("MaximumPasses"),
-        "minimum_passes": raw.get("MinimumPasses"),
-        "minimum_converged_passes": raw.get("MinimumConvergedPasses"),
-        "percent_refinement": raw.get("PercentRefinement"),
-    }
-    expected = {
-        "minimum_frequency": f"{spec.run_control.minimum_frequency_ghz:g}GHz",
-        "num_modes": spec.run_control.num_modes,
-        "maximum_delta_frequency_percent": (
-            spec.run_control.maximum_delta_frequency_percent
-        ),
-        "maximum_passes": spec.run_control.maximum_passes,
-        "minimum_passes": spec.run_control.minimum_passes,
-        "minimum_converged_passes": spec.run_control.minimum_converged_passes,
-        "percent_refinement": spec.run_control.percent_refinement,
-    }
     creating_setup = isinstance(spec, HfssEprSpec)
-    if creating_setup:
-        observed.update(
-            {
-                "save_any_fields": raw.get("SaveAnyFields"),
-                "save_radiated_fields_only": raw.get("SaveRadFieldsOnly"),
-            }
-        )
-        expected.update(
-            {
-                "save_any_fields": True,
-                "save_radiated_fields_only": False,
-            }
-        )
-    if observed != expected:
-        raise RuntimeError(f"HFSS EPR saved setup readback mismatch: {observed!r}")
     saved_field_properties = {
         "basis": (
-            "AEDT 2024.2 Eigenmode SaveAnyFields/SaveRadFieldsOnly setup readback"
+            "completed Eigenmode LastAdaptive Fields evidence is checked after solve"
             if creating_setup
             else "existing saved-field analysis does not re-author setup field policy"
         ),
@@ -1582,12 +1695,14 @@ def _read_setup(app: Any, spec: HfssEprSpec | HfssEprAnalysisSpec) -> dict[str, 
             if key in raw
         },
         "status": (
-            "verified" if creating_setup else "not_reauthored_existing_saved_solution"
+            "unexposed_pending_postsolve"
+            if creating_setup
+            else "not_reauthored_existing_saved_solution"
         ),
     }
     return {
-        "name": spec.run_control.setup_name,
-        "native": observed,
+        "name": setup["name"],
+        "native": setup["native"],
         "saved_fields": saved_field_properties,
     }
 

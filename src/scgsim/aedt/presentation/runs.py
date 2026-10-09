@@ -26,6 +26,7 @@ from scgsim.aedt.presentation.benchmark import display_benchmark
 
 from scgsim.aedt.presentation.epr import (
     _history_view,
+    _native_reference_html,
     _ranking_height,
     _show_view,
     _surface_hover,
@@ -373,6 +374,7 @@ def _physics_tables(
         )
         + "<p>Sidewalls uncomputed; requested margins are alternative evaluations. "
         "No total device Q or T1 is inferred.</p>"
+        + _native_reference_html(row, opened=show_details)
         + details(
             "Surface owner, interface, margin, and loss table",
             surface_table,
@@ -519,7 +521,8 @@ def display_resolved_run(
                                     )
                                 )
                             )
-                            + ".</p>",
+                            + ".</p>"
+                            + _native_reference_html(row, opened=show_details),
                             theme=theme,
                         )
                     )

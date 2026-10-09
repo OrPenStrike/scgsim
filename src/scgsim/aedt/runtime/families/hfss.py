@@ -31,6 +31,11 @@ from scgsim.aedt.runtime.native.common import (
     saved_setup_properties as _saved_setup_properties,
 )
 
+from scgsim.aedt.runtime.native.hfss_eigenmode import (
+    create_eigenmode_setup,
+    read_eigenmode_setup,
+)
+
 from scgsim.aedt.specs.common import (
     AedtResources,
     ModalPort,
@@ -408,24 +413,12 @@ def _face_for_side(
 
 
 def _setup(hfss: Any, spec: HfssSpec) -> None:
+    if isinstance(spec, HfssEigenmodeSpec):
+        create_eigenmode_setup(hfss, spec.run_control)
+        return
     if hfss.setup_names:
         raise RuntimeError("new V1 design must not inherit a setup")
     setup = hfss.create_setup(spec.run_control.setup_name)
-    if isinstance(spec, HfssEigenmodeSpec):
-        setup.props["MinimumFrequency"] = (
-            f"{spec.run_control.minimum_frequency_ghz:g}GHz"
-        )
-        setup.props["NumModes"] = spec.run_control.num_modes
-        setup.props["MaxDeltaFreq"] = spec.run_control.maximum_delta_frequency_percent
-        setup.props["MaximumPasses"] = spec.run_control.maximum_passes
-        setup.props["MinimumPasses"] = spec.run_control.minimum_passes
-        setup.props["MinimumConvergedPasses"] = (
-            spec.run_control.minimum_converged_passes
-        )
-        setup.props["PercentRefinement"] = spec.run_control.percent_refinement
-        if not setup.update():
-            raise RuntimeError("HFSS Eigenmode setup update failed")
-        return
     setup.props["SolveType"] = (
         "DrivenTerminal" if spec.mode == "terminal" else "DrivenModal"
     )
@@ -471,52 +464,32 @@ def _setup(hfss: Any, spec: HfssSpec) -> None:
 
 
 def _read_hfss_setup(hfss: Any, spec: HfssSpec) -> dict[str, Any]:
-    raw = _saved_setup_properties(hfss, spec.run_control.setup_name)
     if isinstance(spec, HfssEigenmodeSpec):
-        native = {
-            "minimum_frequency": raw.get("MinimumFrequency"),
-            "num_modes": raw.get("NumModes"),
-            "maximum_delta_frequency_percent": raw.get("MaxDeltaFreq"),
-            "maximum_passes": raw.get("MaximumPasses"),
-            "minimum_passes": raw.get("MinimumPasses"),
-            "minimum_converged_passes": raw.get("MinimumConvergedPasses"),
-            "percent_refinement": raw.get("PercentRefinement"),
-        }
-        expected = {
-            "minimum_frequency": f"{spec.run_control.minimum_frequency_ghz:g}GHz",
-            "num_modes": spec.run_control.num_modes,
-            "maximum_delta_frequency_percent": (
-                spec.run_control.maximum_delta_frequency_percent
-            ),
-            "maximum_passes": spec.run_control.maximum_passes,
-            "minimum_passes": spec.run_control.minimum_passes,
-            "minimum_converged_passes": spec.run_control.minimum_converged_passes,
-            "percent_refinement": spec.run_control.percent_refinement,
-        }
-    else:
-        frequencies = raw.get("MultipleAdaptiveFreqsSetup")
-        if not isinstance(frequencies, dict):
-            raise TypeError("HFSS Driven saved setup lacks broadband frequencies")
-        native = {
-            "solve_type": raw.get("SolveType"),
-            "low_frequency": frequencies.get("Low"),
-            "high_frequency": frequencies.get("High"),
-            "maximum_delta_s": raw.get("MaxDeltaS"),
-            "maximum_passes": raw.get("MaximumPasses"),
-            "minimum_passes": raw.get("MinimumPasses"),
-            "minimum_converged_passes": raw.get("MinimumConvergedPasses"),
-            "percent_refinement": raw.get("PercentRefinement"),
-        }
-        expected = {
-            "solve_type": "Broadband",
-            "low_frequency": f"{spec.run_control.sweep.start_ghz:g}GHz",
-            "high_frequency": f"{spec.run_control.sweep.stop_ghz:g}GHz",
-            "maximum_delta_s": spec.run_control.maximum_delta_s,
-            "maximum_passes": spec.run_control.maximum_passes,
-            "minimum_passes": spec.run_control.minimum_passes,
-            "minimum_converged_passes": spec.run_control.minimum_converged_passes,
-            "percent_refinement": spec.run_control.percent_refinement,
-        }
+        return read_eigenmode_setup(hfss, spec.run_control)
+    raw = _saved_setup_properties(hfss, spec.run_control.setup_name)
+    frequencies = raw.get("MultipleAdaptiveFreqsSetup")
+    if not isinstance(frequencies, dict):
+        raise TypeError("HFSS Driven saved setup lacks broadband frequencies")
+    native = {
+        "solve_type": raw.get("SolveType"),
+        "low_frequency": frequencies.get("Low"),
+        "high_frequency": frequencies.get("High"),
+        "maximum_delta_s": raw.get("MaxDeltaS"),
+        "maximum_passes": raw.get("MaximumPasses"),
+        "minimum_passes": raw.get("MinimumPasses"),
+        "minimum_converged_passes": raw.get("MinimumConvergedPasses"),
+        "percent_refinement": raw.get("PercentRefinement"),
+    }
+    expected = {
+        "solve_type": "Broadband",
+        "low_frequency": f"{spec.run_control.sweep.start_ghz:g}GHz",
+        "high_frequency": f"{spec.run_control.sweep.stop_ghz:g}GHz",
+        "maximum_delta_s": spec.run_control.maximum_delta_s,
+        "maximum_passes": spec.run_control.maximum_passes,
+        "minimum_passes": spec.run_control.minimum_passes,
+        "minimum_converged_passes": spec.run_control.minimum_converged_passes,
+        "percent_refinement": spec.run_control.percent_refinement,
+    }
     if native != expected:
         raise RuntimeError(f"HFSS saved setup readback mismatch: {native!r}")
     return {"name": spec.run_control.setup_name, "native": native}

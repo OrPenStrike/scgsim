@@ -208,6 +208,29 @@ version checks, receipts, and path/hash validation:
 | Q3D | explicit `modeling="solid"` or `modeling="thin_film"`; exact conductor Net membership; real Signal source/sink pairs for AC/RL; terminal-free C/G is supported; optional exact six-face Region ground seal | native capacitance and, when enabled, resistance/inductance matrices |
 | Q2D | explicit cross-section geometry and conductor/reference assignments | per-unit-length capacitance/conductance and resistance/inductance matrices |
 
+### Family-specific setup controls {#aedt-family-setup-controls}
+
+Public run-control models express caller intent; they do not expose a mutable
+AEDT setup-property dictionary. The private family mappings translate each
+typed control into that solver's native setup and saved-property readback.
+This contract remains bound to the existing AEDT 2024.2 and PyAEDT 1.3.0
+support profile; it introduces no additional version range.
+
+| Family | Public run control | Native setup mapping |
+|---|---|---|
+| HFSS Eigenmode, including EPR | `EigenmodeRunControl` | One private mapping in `scgsim.aedt.runtime.native.hfss_eigenmode` maps the seven controls to `MinimumFrequency`, `NumModes`, `MaxDeltaFreq`, `MaximumPasses`, `MinimumPasses`, `MinimumConvergedPasses`, and `PercentRefinement` for ordinary Eigenmode and EPR. |
+| HFSS Driven Modal and Terminal | `HfssRunControl` | The Driven-HFSS adaptive setup and frequency sweep are translated within the HFSS family; Modal and Terminal retain their distinct design and port semantics. |
+| Q3D | `MatrixRunControl` | Q3D owns its `Cap`, `AC`, and `DC` blocks and their enable states. |
+| Q2D | `MatrixRunControl` | Q2D owns its `CGDataBlock` and `RLDataBlock` controls. |
+
+The shared Q3D and Q2D request vocabulary does not make their native blocks
+interchangeable. Likewise, the shared native runtime owns Desktop lifecycle,
+ACF/resource handling, and access to the saved `AnalysisSetup` tree; raw
+property retrieval does not interpret solver fields or replace each family's
+own saved-setup reader. EPR adds its expression-cache items to the shared
+Eigenmode base setup and owns that extension, not a second adaptive-field
+mapping.
+
 No family may report completion from requested PyAEDT object properties alone.
 The receipt records direct AEDT state and hashes every resolved output. A
 resolver rejects unsupported families, partial output, mixed run identity,
@@ -696,17 +719,68 @@ physical sheet footprint: each contribution carries its own `field_side` and
 native side selection. Sharing a footprint does not merge their integrals or
 make the conductor's physical thickness the interface-film thickness.
 
+For an explicit Solid EPR request selecting MA, MS, or SA contributions, the
+specified path records a native-face reference for each selected contribution.
+It resolves the source-bound Solid owner and source cap from the constructed
+model. The required readback at the existing post-save checkpoint, before
+Analyze, is the matching native design `EntityList` record, with its native
+name, type, ID, and face IDs verified. Assignment-time `props.List` is cached
+property state, not independent native-member readback. The existing save is
+reused; this adds no save, solve, or getter. An earlier native attempt failed
+before Solve on the incorrect property read. A subsequent SimplePad Solid run
+completed native solve, save, and release; both of its two adaptive passes
+recorded six raw native-face references, with FaceList membership matching
+the saved design's `EntityList`. It did not converge at its two-pass maximum
+(delta 79.181). These observations establish neither accuracy nor
+incident-material equivalence. A separate mode 1, pass 2 saved-field analysis
+completed with `epr_analysis_completed`, `Analyze0`, save, and release; it
+retained six raw references and the saved-membership evidence. The 35 original
+sealed project members remained unchanged.
+
+For the current horizontal constant-section swept or box construction, native
+face centers identify the upper or lower source cap; this does not establish a
+general normal or face-orientation rule. The reference uses the existing normal
+and tangential quadratic integrands with `EnterSurface` on the face list and no
+Sheet `Adjacent` selector. Native normals define projection only and do not
+prove which incident material supplied the field. No nearest-point selection,
+normal-to-Sheet-side inference, or convenience selector resolves a reference.
+
+The distinct `native_surface_references` mapping is retained in each raw
+integral record and as a sequence on combined result rows. Each reference
+retains its identity, selected contribution IDs, native owner/face-list/face
+membership, source and native support, incident-domain and projection basis,
+normal and tangential integrals in V^2, native area in m^2, and expression
+identity evidence. Native reference support can differ from the masked Sheet
+support; SA records its actual dielectric-owner basis separately from the
+existing vacuum-formula basis. Presentation labels those supports separately
+beside the masked Sheet results so users can inspect their trends without
+assuming equivalence.
+
+References are raw measurements, not participation, loss, inverse-Q, or a
+universal material-side equivalence. They are not added to masked surface
+maps, energy or loss totals, or the normalization denominator. Margins do not
+create duplicate native-face references, and references add no convergence
+condition. Public `resolve_results()` and `show_all_results()` completed in a
+fresh kernel and presented the raw V^2/m^2 values and face membership. Report
+generation used no native operations and produced HTML with 12 Plotly figures;
+the existing Plotly JSON data and layout were unchanged, and all 56 original
+inputs remained preserved. Report generation does not establish accuracy or
+incident-material equivalence.
+
 Each required field quantity is evaluated in an explicitly bound setup,
 `LastAdaptive` solution, mode, frequency, phase, and excitation context. That
 context is read back with the value: a saved expression name or expression
 digest alone is not solution identity because an unevaluated calculator stack
 can follow later context changes. Both Route A and Route B currently use
-analysis non-model sheets and a normal-based rule to choose the native side or
-adjacent side from the source `field_side`. The stored `effective_domain_id` is
-binding metadata, not a native domain restriction and not proof that the
-selected field belongs to that material. `Smooth` and field magnitude are not
-substitutes for side selection. The latest native expression and side behavior
-remain unverified; no field-success claim is made.
+non-model analysis sheets for masked evaluations and the unmasked baseline.
+Their `Surface`/`Adjacent` selector is distinct from geometric normal
+projection, and the ThinFilm mapping remains empirical as described below.
+The stored `effective_domain_id` is binding metadata, not a native domain
+restriction and not proof that the selected field belongs to that material.
+`Smooth` and field magnitude are not substitutes for side selection. Solid
+native-face references are a separate raw measurement path using verified
+source-bound face lists. The recorded raw values do not establish
+incident-material field ownership or resolve the Sheet-side ambiguity.
 
 ### Mode binding and pass cache
 
@@ -1453,18 +1527,53 @@ than a native solver-domain restriction. In each source plane, preparation
 unites the complete physical support, applies a constant-distance inward
 offset for a positive margin, and only then intersects the result with the
 owner attribution. Margin zero uses the unoffset support intersection. The
-resulting contours become non-model integration sheets at the original field
-plane; model CAD, boundaries, and mesh are unchanged. Split components are
-integrated separately and summed; an empty intersection is an explicit zero.
+resulting contours become non-model integration sheets at the original
+field plane; the unmasked baseline is also a separate non-model integration
+sheet over the unoffset support, not a sample of a native model face. Model
+CAD, boundaries, and mesh are unchanged. Split components are integrated
+separately and summed; an empty intersection is an explicit zero.
 Native analysis-sheet names identify their physical owner/support,
 classification and field side, then `Unmasked` or the effective margin in
 nanometres. A `PartNN` suffix appears only when there are multiple pieces.
 When one geometry serves multiple contributions, its single sheet name
 identifies the complete shared membership rather than an arbitrary first
 contribution; full internal identities remain in preparation evidence.
-The original field-side normal and adjacent-side selection remain bound to each
-sheet. The same geometry construction serves preparation and saved-field
-analysis; the former point-to-edge calculator mask is not a fallback.
+ThinFilm Surface-EPR remains available under the supported PyAEDT 1.3.0 /
+AEDT 2024.2 profile with its current normal-based side selector. Interpret each
+standalone planar analysis sheet's `FacePrimitive.normal` as its
+`Adjacent`-side direction. Derive the requested material side from that
+binding's source contribution side/effective domain: for ThinFilm, a positive
+normal dot product with the requested side selects `Adjacent`, while an
+opposed direction selects `Surface`. The calculator selector chooses the
+one-sided field sample independently of geometric normal projection. Resolve
+each actual sheet independently, including insets and saved-copy reconstruction;
+do not transfer a base sheet's direction to an inset. Keep the projection
+`native_normal` distinct from this calculator selector. Solid mode and
+historical records retain the previous inverse selector convention and their
+original identity. Preserve the existing unavailable/ambiguous-normal failure
+behavior.
+
+This mapping is empirical, not a validated general native calculator-side
+query. The two observed unsolved Ground and Pad sheets support the current
+rule, but do not establish it for arbitrary AEDT versions or polygon orderings,
+non-model sheets, or sheets with holes. A ThinFilm Surface-EPR call emits a
+warning about this side-selection risk. Ansys documents `Adjacent` as using
+field data from the adjacent side of a sheet, while `Normal` computes a vector
+component along the surface unit normal ([Geometry Command](https://ansyshelp.ansys.com/public/Views/Secured/Electronics/v242/en/Subsystems/HFSS/Content/ReportsandPostProc/GeometryCommand.htm),
+[Normal Command](https://ansyshelp.ansys.com/public/Views/Secured/Electronics/v242/en/Subsystems/HFSS/Content/ReportsandPostProc/NormalCommand.htm)).
+These are distinct calculator operations and do not define a universal mapping
+from `FacePrimitive.normal` to the sampled material side. Flipping the
+projection normal changes the projected component's sign; it does not change
+which one-sided field `Surface` or `Adjacent` samples. Selecting the wrong
+material side can change the MA/MS integrals and the resulting participation
+or loss. These observations do not establish numerical accuracy, convergence,
+or speed, and add no new
+evidence for Solid mode. Inspect MA/MS/SA trends across margin, mode, and
+adaptive pass for consistency when those records are available. These trends
+have no automatic pass/fail interpretation; no equality, tolerance, or
+monotonicity requirement is imposed. The same geometry construction serves
+preparation and saved-field analysis; the former point-to-edge calculator
+mask is not a fallback.
 
 For a continuous physical planar patch, the mask is
 
@@ -1585,18 +1694,23 @@ $\operatorname{copysign}(p_L,\operatorname{Re}I_L)$, which is not invariant
 under arbitrary phase rotation. The junction contract does not silently add
 resistance, Kerr, or a Palace port result.
 
-For a new EPR solve, SCGSim sets `SaveAnyFields=True` and
-`SaveRadFieldsOnly=False` on the Eigenmode setup and reads those saved setup
-properties back. Saved-field analysis of an existing solution does not
-reauthor that setup policy. The setup readback does not replace the actual
-completed saved-field inventory, which remains required evidence. The run must
-save both the project and complete result directory,
-close the owned Desktop, archive immutable bytes, copy them to a
-working analysis location, reopen that copy, and perform analysis without any
-solve or export call. A missing result directory, unavailable expression
-definition, context mismatch, or guarded solver attempt fails closed. The
-analysis receipt keeps declared, planned, observed, and evaluated evidence
-separate and never rewrites the normal run receipt into success.
+EPR uses the same `EigenmodeRunControl` setup mapping and saved readback as an
+ordinary Eigenmode run; its only setup extension is the expression-cache
+configuration. Preparation reads back the seven Eigenmode control values. It
+does not author `SaveAnyFields` or `SaveRadFieldsOnly`; if AEDT serializes
+either property, it remains an observed value, while an absent property stays
+missing. Neither setup readback nor a requested policy proves that field data
+were saved.
+
+After the actual solve, EPR verifies the exact setup's `LastAdaptive` Fields
+solution. It then saves the project and complete result directory, releases the
+owned Desktop, and seals the saved bytes. Saved-field analysis opens a verified
+copy and validates the requested calculator definitions and saved-field
+evaluations there, without solving again. Analysis of an existing solution
+does not re-author setup properties. A missing result directory, unavailable
+expression definition, context mismatch, or guarded solver attempt fails
+closed. The analysis receipt keeps declared, planned, observed, and evaluated
+evidence separate and never rewrites the normal run receipt into success.
 
 Ordinary result resolution defaults to the last completed solver pass. A caller
 may explicitly select another recorded pass and mode, but a missing value never

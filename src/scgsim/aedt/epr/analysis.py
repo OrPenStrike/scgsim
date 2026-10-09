@@ -467,6 +467,86 @@ def _surface_contributions(
     return granularity or "per_binding.v1", surface_rows
 
 
+def _native_surface_reference_rows(
+    prepared: PreparedPlanarGeometry,
+    raw: Mapping[str, Any],
+    request: EprAnalysisRequest | None,
+) -> list[dict[str, Any]] | None:
+    """Detach measured native-face references without treating them as film EPR."""
+
+    selected = (
+        {item.contribution_id for item in prepared.contributions}
+        if request is None or request.surface_contribution_ids is None
+        else set(request.surface_contribution_ids)
+    )
+    expected_contributions = {
+        item.contribution_id
+        for item in prepared.contributions
+        if item.contribution_id in selected
+        and item.interface_kind in {"MA", "MS", "SA"}
+    }
+    references_requested = prepared.modeling == "solid" and bool(expected_contributions)
+    if "native_surface_references" not in raw:
+        # Keep previously serialized raw records readable without fabricating
+        # reference values that were not part of their original evidence.
+        return None
+    references = _exact_mapping(
+        raw["native_surface_references"], "native_surface_references"
+    )
+    if references_requested and not references:
+        raise ValueError("selected Solid EPR contributions lack native face references")
+
+    rows: list[dict[str, Any]] = []
+    associated_contributions: set[str] = set()
+    for reference_id, value in sorted(references.items()):
+        record = _exact_mapping(value, "native surface reference")
+        selection = _exact_mapping(
+            record.get("selection"), "native surface reference selection"
+        )
+        if (
+            selection.get("kind") != "native_surface_reference"
+            or selection.get("reference_id") != reference_id
+        ):
+            raise ValueError("native surface reference identity differs")
+        contribution_ids = selection.get("contribution_ids")
+        if (
+            isinstance(contribution_ids, (str, bytes))
+            or not isinstance(contribution_ids, (list, tuple))
+            or any(not isinstance(item, str) or not item for item in contribution_ids)
+        ):
+            raise TypeError("native surface reference contribution IDs are invalid")
+        associated_contributions.update(contribution_ids)
+        normal = _quantity(record.get("normal"), "native face normal integral", "V^2")
+        tangential = _quantity(
+            record.get("tangential"),
+            "native face tangential integral",
+            "V^2",
+            nonnegative=False,
+        )
+        area = _quantity(record.get("area"), "native face area integral", "m^2")
+        expression_identities = _exact_mapping(
+            record.get("expression_identities"),
+            "native surface reference expression identities",
+        )
+        if set(expression_identities) != {"normal", "tangential", "area"}:
+            raise ValueError("native surface reference expressions are incomplete")
+        row = {
+            **detached(selection),
+            "normal_integral_v2": normal,
+            "tangential_integral_v2": tangential,
+            "area_m2": area,
+            "expression_identities": detached(expression_identities),
+        }
+        if "saved_membership" in record:
+            row["saved_membership"] = detached(record["saved_membership"])
+        rows.append(row)
+    if references_requested and associated_contributions != expected_contributions:
+        raise ValueError(
+            "native face references do not cover selected EPR contributions"
+        )
+    return rows
+
+
 def combine_epr_mode(
     prepared: PreparedPlanarGeometry,
     raw: Mapping[str, Any],
@@ -585,6 +665,7 @@ def combine_epr_mode(
     granularity, surface_rows = _surface_contributions(
         prepared, raw, surface, masked_areas, request, normalization_j
     )
+    native_surface_references = _native_surface_reference_rows(prepared, raw, request)
 
     selected_domains = (
         set(domains)
@@ -593,7 +674,7 @@ def combine_epr_mode(
     )
     if not selected_domains <= set(domains):
         raise ValueError("EPR request selects an unknown bulk domain")
-    return {
+    result = {
         "schema_version": (
             "scgsim.aedt.epr-mode-energy.v1"
             if prepared._legacy_payload
@@ -613,6 +694,9 @@ def combine_epr_mode(
         "surface_contributions": surface_rows,
         "junctions": junction_rows,
     }
+    if native_surface_references is not None:
+        result["native_surface_references"] = native_surface_references
+    return result
 
 
 def combine_surface_epr_mode(
@@ -661,10 +745,14 @@ def combine_surface_epr_mode(
     _, surface_rows = _surface_contributions(
         prepared, raw, surface, masked_areas, request, normalization_j
     )
-    return {
+    result = {
         "normalization_energy_j": normalization_j,
         "surface_contributions": surface_rows,
     }
+    native_surface_references = _native_surface_reference_rows(prepared, raw, request)
+    if native_surface_references is not None:
+        result["native_surface_references"] = native_surface_references
+    return result
 
 
 def _surface_original_assumptions(surface: Mapping[str, Any]) -> dict[str, Any]:

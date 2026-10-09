@@ -507,9 +507,13 @@ class PreparedPlanarGeometry:
     def __post_init__(self) -> None:
         if self._historical_modeling:
             if self.route not in {"A", "B"} or self.modeling is not None:
-                raise ValueError("historical planar geometry requires its original route basis")
+                raise ValueError(
+                    "historical planar geometry requires its original route basis"
+                )
         elif self.modeling not in {"solid", "thin_film"} or self.route is not None:
-            raise ValueError("new planar geometry requires explicit modeling without route alias")
+            raise ValueError(
+                "new planar geometry requires explicit modeling without route alias"
+            )
         junctions = tuple(self.junctions)
         catalog = tuple(self.contribution_catalog)
         contributions = tuple(self.contributions)
@@ -558,8 +562,11 @@ class PreparedPlanarGeometry:
 
     @property
     def _modeling_identity(self) -> dict[str, Any]:
-        return ({"route": self.route} if self._historical_modeling
-                else {"modeling": self.modeling})
+        return (
+            {"route": self.route}
+            if self._historical_modeling
+            else {"modeling": self.modeling}
+        )
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -773,6 +780,14 @@ class EprResult:
                 raise ValueError("EPR result row status must be complete or partial")
             if "raw_integrals" in row and not isinstance(row["raw_integrals"], Mapping):
                 raise TypeError("EPR result row raw_integrals must be a mapping")
+            if (
+                isinstance(row.get("raw_integrals"), Mapping)
+                and "native_surface_references" in row["raw_integrals"]
+                and not isinstance(
+                    row["raw_integrals"]["native_surface_references"], Mapping
+                )
+            ):
+                raise TypeError("raw native_surface_references must be a mapping")
             if "raw_integral_evidence" in row:
                 raw_evidence = row["raw_integral_evidence"]
                 if (
@@ -853,6 +868,77 @@ class EprResult:
                         junction.get("capacitive_participation"),
                         "junction capacitive participation",
                     )
+            if "native_surface_references" in row:
+                references = row["native_surface_references"]
+                if isinstance(references, (str, bytes)) or not isinstance(
+                    references, Sequence
+                ):
+                    raise TypeError("native_surface_references must be a sequence")
+                if any(not isinstance(item, Mapping) for item in references):
+                    raise TypeError("native_surface_references must contain mappings")
+                reference_ids: set[str] = set()
+                required_reference_members = {
+                    "reference_id",
+                    "contribution_ids",
+                    "binding_ids",
+                    "selection_name",
+                    "face_ids",
+                    "owner_semantic_id",
+                    "source_polygon_id",
+                    "object_name",
+                    "native_object_id",
+                    "interface_kinds",
+                    "source_cap",
+                    "source_z_um",
+                    "source_supports",
+                    "incident_domains",
+                    "native_faces",
+                    "native_normal",
+                    "projection_normal",
+                    "native_area_m2",
+                    "face_list",
+                    "sampling_basis",
+                    "support_kind",
+                    "normal_integral_v2",
+                    "tangential_integral_v2",
+                    "area_m2",
+                    "expression_identities",
+                }
+                for reference in references:
+                    if not required_reference_members <= set(reference):
+                        raise ValueError(
+                            "native surface reference lacks canonical evidence"
+                        )
+                    reference_id = _text(
+                        reference["reference_id"], "native reference ID"
+                    )
+                    if reference_id in reference_ids:
+                        raise ValueError("native surface reference IDs repeat")
+                    reference_ids.add(reference_id)
+                    for name in (
+                        "normal_integral_v2",
+                        "tangential_integral_v2",
+                        "area_m2",
+                        "native_area_m2",
+                    ):
+                        _number(
+                            reference[name],
+                            f"native surface reference {name}",
+                            minimum=-math.inf,
+                        )
+                    expression_identities = reference["expression_identities"]
+                    if (
+                        not isinstance(expression_identities, Mapping)
+                        or set(expression_identities)
+                        != {"normal", "tangential", "area"}
+                        or any(
+                            not isinstance(value, Mapping)
+                            for value in expression_identities.values()
+                        )
+                    ):
+                        raise ValueError(
+                            "native surface reference expression evidence is invalid"
+                        )
         provenance = _freeze(
             self.provenance,
             verified=(

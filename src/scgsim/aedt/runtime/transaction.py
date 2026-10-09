@@ -11,6 +11,8 @@ import re
 
 import time
 
+import warnings
+
 from pathlib import Path
 
 from typing import Any
@@ -170,6 +172,33 @@ def _execute(
         )
     _require_pristine_run(run_dir, spec)
     cohort = _verify_prepared_cohort(run_dir, metadata, receipt, spec)
+    if isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec)):
+        geometry = spec.geometry
+        request = spec.epr_request
+        selected_surfaces = (
+            None if request is None else request.surface_contribution_ids
+        )
+        if (
+            geometry.modeling == "thin_film"
+            and request is not None
+            and any(
+                contribution.interface_kind != "MM"
+                and (
+                    selected_surfaces is None
+                    or contribution.contribution_id in selected_surfaces
+                )
+                for contribution in geometry.contributions
+            )
+        ):
+            warnings.warn(
+                "ThinFilm Surface-EPR uses FacePrimitive.normal as a geometric "
+                "direction, not native calculator-side readback. The "
+                "Surface/Adjacent mapping is empirical for pinned PyAEDT 1.3.0 / "
+                "AEDT 2024.2 and may select the wrong material side; ThinFilm "
+                "MA/MS participation and loss are not physically validated.",
+                UserWarning,
+                stacklevel=2,
+            )
     started = _utc_now()
     execution_started = time.perf_counter()
     receipt.update(

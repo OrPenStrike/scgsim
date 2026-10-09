@@ -11,13 +11,18 @@ import math
 
 import textwrap
 
+from collections.abc import Mapping
+
 from typing import Any
 
 from scgsim.presentation.notebook import (
     INTERFACE_COLORS,
     checked_theme,
+    details,
     display_text,
+    json_details,
     style_figure,
+    table,
 )
 
 from scgsim.aedt.epr.models import EprResult, detached
@@ -149,6 +154,111 @@ def _surface_metadata(surface: Any) -> dict[str, Any]:
     """Keep the full source record independently of a shortened hover display."""
 
     return detached(surface)
+
+
+def _native_reference_value(reference: Any, *keys: str) -> str:
+    for key in keys:
+        if key in reference:
+            value = reference[key]
+            if value is None:
+                return "null"
+            if isinstance(value, (Mapping, list, tuple)):
+                return json.dumps(detached(value), ensure_ascii=False, sort_keys=True)
+            return display_text(value)
+    return "not recorded"
+
+
+def _native_reference_table_data(
+    references: Any,
+) -> tuple[tuple[str, ...], list[tuple[str, ...]]]:
+    """Present raw native-face references without deriving participation or loss."""
+
+    headers = (
+        "Reference / contribution",
+        "Native owner / object",
+        "Interface / source cap / Z",
+        "Source supports / incident domains",
+        "Face List / faces",
+        "Projection / basis / support",
+        "Normal integral (V²)",
+        "Tangential integral (V²)",
+        "Native face area (m²)",
+        "Calculator area (m²)",
+    )
+    rows = []
+    for reference in references:
+        rows.append(
+            (
+                "Reference: "
+                + _native_reference_value(reference, "reference_id")
+                + "\nContributions: "
+                + _native_reference_value(reference, "contribution_ids", "binding_ids"),
+                "Owner: "
+                + _native_reference_value(
+                    reference, "owner_semantic_id", "source_polygon_id"
+                )
+                + "\nObject: "
+                + _native_reference_value(reference, "object_name", "native_object_id"),
+                "Interfaces: "
+                + _native_reference_value(reference, "interface_kinds")
+                + "\nCap: "
+                + _native_reference_value(reference, "source_cap")
+                + "\nSource Z (µm): "
+                + _native_reference_value(reference, "source_z_um"),
+                "Source: "
+                + _native_reference_value(reference, "source_supports")
+                + "\nIncident domains: "
+                + _native_reference_value(reference, "incident_domains"),
+                "Selection: "
+                + _native_reference_value(reference, "selection_name")
+                + "\nFace List: "
+                + _native_reference_value(reference, "face_list")
+                + "\nFace IDs: "
+                + _native_reference_value(reference, "face_ids", "native_faces"),
+                "Native normal: "
+                + _native_reference_value(reference, "native_normal")
+                + "\nProjection: "
+                + _native_reference_value(reference, "projection_normal")
+                + "\nBasis: "
+                + _native_reference_value(reference, "sampling_basis")
+                + "\nSupport: "
+                + _native_reference_value(reference, "support_kind"),
+                _native_reference_value(reference, "normal_integral_v2"),
+                _native_reference_value(reference, "tangential_integral_v2"),
+                _native_reference_value(reference, "native_area_m2"),
+                _native_reference_value(reference, "area_m2"),
+            )
+        )
+    return headers, rows
+
+
+def _native_reference_html(row: Any, *, opened: bool = False) -> str:
+    """Render recorded native references as separate, raw evidence."""
+
+    if "native_surface_references" not in row:
+        return ""
+    references = row["native_surface_references"]
+    note = (
+        "<p>These raw native-owner face references are separate from the masked "
+        "Sheet contributions; their supports may differ. Native face area and "
+        "calculator area are separate records. An SA reference identifies its "
+        "dielectric native owner separately from the existing vacuum-formula "
+        "basis. No participation, loss, or equivalence is inferred.</p>"
+    )
+    if references is None:
+        return note + "<p>The recorded native reference value is null.</p>"
+    if not references:
+        return note + "<p>The recorded native reference sequence is empty.</p>"
+    headers, rows = _native_reference_table_data(references)
+    return note + details(
+        "Native-face raw references",
+        table(headers, rows)
+        + json_details(
+            "Complete native-face reference records",
+            {"native_surface_references": detached(references)},
+        ),
+        opened=opened,
+    )
 
 
 def _ranking_height(count: int) -> int:
@@ -519,11 +629,15 @@ def _show_view(
     if len(selected) != 1:
         raise ValueError("show_epr requires one exact mode/pass selection")
     row = selected[0]
+    has_native_references = "native_surface_references" in row
+    native_references = row.get("native_surface_references")
     if row["status"] != "complete":
         frequency = _usable_frequency(row.get("frequency_hz"))
         return {
             "row": row,
             "complete": False,
+            "has_native_references": has_native_references,
+            "native_references": native_references,
             "frequency_text": (
                 f"; verified frequency {frequency:.6g} Hz"
                 if frequency is not None
@@ -542,6 +656,8 @@ def _show_view(
     return {
         "row": row,
         "complete": True,
+        "has_native_references": has_native_references,
+        "native_references": native_references,
         "surfaces": surfaces,
         "domains": domains,
         "junctions": junctions,
@@ -573,7 +689,7 @@ def show_epr(
     native_pass: int | None = None,
     theme: str = "light",
 ) -> Any:
-    """Show one exact pass/mode with separate surface, bulk, and junction axes."""
+    """Show one exact pass/mode with raw native references kept separate."""
 
     checked_theme(theme)
     view = _show_view(result, mode=mode, native_pass=native_pass)
@@ -581,8 +697,24 @@ def show_epr(
     from plotly import graph_objects as go
     from plotly.subplots import make_subplots
 
+    has_native_references = view["has_native_references"]
+    subplot_titles = ("Surface", "Bulk", "Junction")
+    specs = None
+    if has_native_references:
+        subplot_titles += (
+            "Native-face raw references · not participation or loss · support may differ",
+        )
+        specs = [
+            [{"type": "xy"}],
+            [{"type": "xy"}],
+            [{"type": "xy"}],
+            [{"type": "table"}],
+        ]
     figure = make_subplots(
-        rows=3, cols=1, subplot_titles=("Surface", "Bulk", "Junction")
+        rows=len(subplot_titles),
+        cols=1,
+        subplot_titles=subplot_titles,
+        specs=specs,
     )
     top_margin = 65
     if view["complete"]:
@@ -681,6 +813,35 @@ def show_epr(
             y=0.5,
             showarrow=False,
         )
+    if has_native_references:
+        native_references = view["native_references"]
+        headers, native_rows = _native_reference_table_data(native_references or ())
+        if native_rows:
+            columns = [list(column) for column in zip(*native_rows)]
+        else:
+            columns = [[] for _ in headers]
+        figure.add_trace(
+            go.Table(
+                header={"values": list(headers), "align": "left"},
+                cells={"values": columns, "align": "left"},
+            ),
+            row=4,
+            col=1,
+        )
+        if not native_rows:
+            empty_note = (
+                "The recorded native reference value is null."
+                if native_references is None
+                else "The recorded native reference sequence is empty."
+            )
+            figure.add_annotation(
+                text=html.escape(empty_note),
+                xref="paper",
+                yref="paper",
+                x=0.5,
+                y=0.08,
+                showarrow=False,
+            )
     title = f"EPR mode {row['mode']}" + (
         f" pass {row['native_pass']}" if "native_pass" in row else " saved field"
     )
@@ -702,6 +863,11 @@ def show_epr(
             ],
             "mode": row["mode"],
             "native_pass": row.get("native_pass"),
+            **(
+                {"native_surface_references": detached(view["native_references"])}
+                if has_native_references
+                else {}
+            ),
         },
     )
     for axis in ("xaxis", "xaxis2", "xaxis3"):
@@ -713,8 +879,9 @@ def show_epr(
             900 + top_margin - 65,
             _ranking_height(len(view.get("surfaces", ()))) + 320 + top_margin - 65,
         )
+        + (230 if has_native_references else 0)
         if view["complete"]
-        else 900,
+        else 900 + (230 if has_native_references else 0),
     )
     figure.update_layout(margin={"l": 180, "r": 20, "t": top_margin, "b": 125})
     figure.update_yaxes(automargin=False, tickfont={"size": 12}, row=1, col=1)
