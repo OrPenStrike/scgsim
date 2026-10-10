@@ -1,4 +1,4 @@
-"""Source-level planar EPR geometry preparation and junction ownership."""
+"""Shared body-first HFSS preparation. Source supports stay distinct from solver treatments and EPR junctions."""
 
 from __future__ import annotations
 
@@ -366,7 +366,12 @@ def _source_payload(
         or len(padding_records) != 1
     ):
         raise ValueError("EPR auto vacuum components disagree on Region identity")
-    padding = auto_vacuum_regions[0]["metadata"].get("vacuum_region_padding_um")
+    envelope_trace = auto_vacuum_regions[0]["metadata"].get("aedt_effective_envelope")
+    padding = (
+        envelope_trace["effective_padding_um"]
+        if isinstance(envelope_trace, Mapping)
+        else auto_vacuum_regions[0]["metadata"].get("vacuum_region_padding_um")
+    )
     if not isinstance(padding, Mapping) or set(padding) != {
         "x_plus_um",
         "x_minus_um",
@@ -400,10 +405,9 @@ def _source_payload(
     )
     if not isinstance(envelope_loop, Sequence) or len(envelope_loop) < 3:
         raise ValueError("EPR Region requires an auto vacuum envelope loop")
-    z_ranges = [
-        geometry_z_range(item["geometry"], item["semantic_id"])
-        for item in auto_vacuum_regions
-    ]
+    # Complement slabs omit dielectric and metal occupancy. Native Region
+    # encloses those bodies too, so its bounds belong to the complete envelope.
+    envelope_bounds = auto_vacuum_regions[0]["metadata"]["auto_vacuum_envelope_bounds_um"]
     native_region = {
         "method": "single_region_absolute_offset.v1",
         "outer_boundary_policy": "hfss_default.v1",
@@ -413,10 +417,12 @@ def _source_payload(
             item["semantic_id"] for item in auto_vacuum_regions
         ),
         "padding_um": padding_um,
+        **({"source_effective_envelope": _plain(envelope_trace)}
+           if isinstance(envelope_trace, Mapping) else {}),
         "envelope_outer_loop_um": _plain(envelope_loop),
         "z_range_um": [
-            min(item[0] for item in z_ranges),
-            max(item[1] for item in z_ranges),
+            envelope_bounds["z_min_um"],
+            envelope_bounds["z_max_um"],
         ],
     }
     return {
@@ -896,11 +902,52 @@ def precompute_inset_surfaces(
     return result
 
 
+def _prepared_lumped_supports(supports, source):
+    """Derive explicit support XY/Z from the same physical map as all bodies."""
+    from scgsim.aedt.specs.modeling import PhysicalLayerSpec, _ZMap
+
+    mapping = _ZMap(source["modeling"]["modeling"], tuple(
+        PhysicalLayerSpec(**item) for item in source["modeling"]["source_layers"]
+    ))
+    conductors = source["conductors"]
+    available = {item["semantic_id"] for item in conductors}
+    available.update(item["source_semantic_id"] for item in conductors)
+    records = []
+    for support in supports:
+        if not support.exterior:
+            raise ValueError(f"support {support.support_id!r} has no resolved original source polygon")
+        if support.contact_physical_layer_id not in mapping.layers:
+            raise ValueError(f"support {support.support_id!r} references an undeclared contact physical layer")
+        if not set((*support.terminal_a_entity_ids, *support.terminal_b_entity_ids)).issubset(available):
+            raise ValueError(f"support {support.support_id!r} has missing conductor ownership")
+        contacts = tuple(support.world_point(point) for point in support.contact_points_um)
+        if support.source_z_um is None:
+            raise ValueError("neutral support requires its original locator plane")
+        if any(point[2] != support.source_z_um for point in contacts):
+            raise ValueError("horizontal lumped support contacts differ from its original locator plane")
+        layer = mapping.layers[support.contact_physical_layer_id]
+        if not layer.z_min_um <= contacts[0][2] <= layer.z_max_um:
+            raise ValueError("lumped support source contact plane is outside its declared physical layer")
+        a, b, c, d, _, _ = support.source_transform
+        nx, ny, nz = support.normal
+        normal = (a * nx + b * ny, c * nx + d * ny, nz)
+        records.append({"support_id": support.support_id, "source": support.to_payload(),
+                        "effective": {"exterior": [list(support.world_point(point)) for point in support.exterior],
+                                      "holes": [[list(support.world_point(point)) for point in ring] for ring in support.holes],
+                                      "normal": list(normal), "z_um": mapping.map_z(support.source_z_um),
+                                      "contact_points_um": [[x, y, mapping.map_z(z)] for x, y, z in contacts],
+                                      "contact_physical_layer_id": support.contact_physical_layer_id}})
+    if len({item["support_id"] for item in records}) != len(records):
+        raise ValueError("neutral support IDs must be unique")
+    return records
+
+
 def prepare_planar_geometry_input(
     build_input: GeometryBuildInput,
     *,
     prepared_stack: Mapping[str, Any],
     modeling: Modeling,
+    lumped_rlcs: Sequence[Any] = (),
     junctions: Sequence[PlanarJunction] = (),
     contributions: Sequence[SurfaceEprSpec] = (),
     source_dbu_um: float | None = None,
@@ -931,6 +978,13 @@ def prepare_planar_geometry_input(
     source_dbu_um = float(source_dbu_um)
     validate_geometry_input(build_input)
     build_input, prepared_stack = _effective_geometry_input(build_input, prepared_stack, modeling)
+    from scgsim.aedt.epr.models import LumpedRlc
+
+    rlc_tuple = tuple(lumped_rlcs)
+    if any(not isinstance(item, LumpedRlc) for item in rlc_tuple):
+        raise TypeError("lumped_rlcs must contain LumpedRlc records")
+    if len({item.support_id for item in rlc_tuple}) != len(rlc_tuple):
+        raise ValueError("one support cannot own multiple RLC treatments")
     junction_tuple = tuple(junctions)
     contribution_tuple = tuple(contributions)
     if any(not isinstance(item, PlanarJunction) for item in junction_tuple):
@@ -1082,6 +1136,11 @@ def prepare_planar_geometry_input(
     source = _source_payload(
         build_input, prepared_stack, route=route, source_dbu_um=source_dbu_um
     )
+    if build_input.lumped_supports:
+        source["lumped_supports"] = _prepared_lumped_supports(build_input.lumped_supports, source)
+    support_ids = {item["support_id"] for item in source.get("lumped_supports", ())}
+    if any(item.support_id not in support_ids for item in rlc_tuple):
+        raise ValueError("RLC treatment references an undeclared neutral support")
     regions_by_id = {item["semantic_id"]: item for item in source["solution_regions"]}
     materials = source["materials"]
     support_bindings: list[dict[str, Any]] = []
@@ -1270,6 +1329,7 @@ def prepare_planar_geometry_input(
         "modeling": modeling,
         "source": source,
         "junctions": [item.to_payload() for item in junction_tuple],
+        **({"lumped_rlcs": [item.to_payload() for item in rlc_tuple]} if rlc_tuple else {}),
         "contribution_catalog": contribution_catalog,
         "contributions": [item.to_payload() for item in contribution_tuple],
         "surface_bindings": resolved_surfaces,
@@ -1278,6 +1338,7 @@ def prepare_planar_geometry_input(
         modeling=modeling,
         source=source,
         junctions=junction_tuple,
+        lumped_rlcs=rlc_tuple,
         contribution_catalog=contribution_catalog,
         contributions=contribution_tuple,
         surface_bindings=tuple(resolved_surfaces),
@@ -1286,6 +1347,7 @@ def prepare_planar_geometry_input(
                 "modeling": modeling,
                 "source": source,
                 "junctions": [item.to_payload() for item in junction_tuple],
+                **({"lumped_rlcs": [item.to_payload() for item in rlc_tuple]} if rlc_tuple else {}),
             }
         ),
         source_sha256=canonical_sha256(digest_input),

@@ -141,6 +141,151 @@ def analyze_epr(
     return resolve_epr_result(plan.run_dir / "results/epr/epr-result.json")
 
 
+def _assign_generic_rlcs(app: Any, spec: HfssEprSpec, geometry: dict[str, Any]) -> None:
+    """Electrical loads use neutral source supports, independently of JJ EPR."""
+    from scgsim.aedt.epr.geometry import _native_name
+    from scgsim.aedt.runtime.native.hfss_lumped import assign_rlc
+
+    supports = {
+        item["support_id"]: item for item in geometry.get("lumped_supports", ())
+    }
+    if spec.lumped_rlcs:
+        geometry["lumped_rlcs"] = []
+    for treatment in spec.lumped_rlcs:
+        support = supports[treatment.support_id]
+        try:
+            record = assign_rlc(
+                app,
+                app.modeler[support["object_name"]],
+                name=_native_name("rlc", treatment.support_id),
+                contact_points_um=support["effective"]["contact_points_um"],
+                topology=treatment.topology,
+                resistance_ohm=treatment.resistance_ohm,
+                inductance_h=treatment.inductance_h,
+                capacitance_f=treatment.capacitance_f,
+            )
+        except Exception as exc:
+            exc.add_note(
+                "generic RLC assignment: "
+                + json.dumps(
+                    {"source": treatment.to_payload(), "support": support},
+                    default=str,
+                    sort_keys=True,
+                )
+            )
+            raise
+        geometry["lumped_rlcs"].append(
+            {
+                "support_id": treatment.support_id,
+                "source": treatment.to_payload(),
+                **record,
+            }
+        )
+
+
+def _bind_saved_generic_rlcs(
+    app: Any, prepared: PreparedPlanarGeometry, geometry: dict[str, Any]
+) -> None:
+    from scgsim.aedt.epr.geometry import _native_name
+    from scgsim.aedt.runtime.native.hfss_lumped import rlc_record
+
+    supports = {
+        item["support_id"]: item for item in geometry.get("lumped_supports", ())
+    }
+    if prepared.lumped_rlcs:
+        geometry["lumped_rlcs"] = []
+    for treatment in prepared.lumped_rlcs:
+        support = supports[treatment.support_id]
+        record = rlc_record(
+            app.modeler[support["object_name"]],
+            name=_native_name("rlc", treatment.support_id),
+            contact_points_um=support["effective"]["contact_points_um"],
+            topology=treatment.topology,
+            resistance_ohm=treatment.resistance_ohm,
+            inductance_h=treatment.inductance_h,
+            capacitance_f=treatment.capacitance_f,
+        )
+        geometry["lumped_rlcs"].append(
+            {
+                "support_id": treatment.support_id,
+                "source": treatment.to_payload(),
+                **record,
+            }
+        )
+    _read_generic_rlcs(app, geometry)
+
+
+def _read_generic_rlcs(app: Any, geometry: dict[str, Any]) -> None:
+    from scgsim.aedt.runtime.native.hfss_lumped import read_rlc_parameters
+
+    records = geometry.get("lumped_rlcs", ())
+    if not records:
+        return
+    from scgsim.aedt.epr.native import _read_saved_hfss_design
+
+    digest, design = _read_saved_hfss_design(
+        Path(app.project_file), app.design_name, purpose="generic RLC"
+    )
+    boundaries = design["BoundarySetup"]["Boundaries"]
+    for record in records:
+        try:
+            read_rlc_parameters(app, record)
+            boundary = detached_data(boundaries[record["boundary"]])
+            record["saved_boundary"] = boundary
+            record["saved_project_sha256"] = digest
+            if boundary["BoundType"] != "Lumped RLC":
+                raise RuntimeError("saved generic RLC boundary type differs")
+            record["saved_model_units"] = design["ModelSetup"]["GeometryCore"]["Units"]
+            if record["saved_model_units"] != "um":
+                raise RuntimeError("saved generic RLC model units differ")
+            record["attached_contact_edges"] = []
+            positions = boundary["CurrentLine"]["GeometryPosition"]
+            observed = []
+            for position in positions:
+                if (
+                    position.get("IsAttachedToEntity") is False
+                    and position.get("PositionType") == "AbsolutePosition"
+                ):
+                    point = [float(position[axis + "Position"]) for axis in "XYZ"]
+                elif (
+                    position.get("IsAttachedToEntity") is True
+                    and position.get("PositionType") == "EdgeCenter"
+                ):
+                    edge_id = position["EntityID"]
+                    edges = [
+                        edge
+                        for edge in app.modeler[record["object_name"]].edges
+                        if int(edge.id) == edge_id
+                    ]
+                    if len(edges) != 1:
+                        raise RuntimeError(
+                            "saved generic RLC contact edge does not belong to its support"
+                        )
+                    point = list(edges[0].midpoint)
+                    record["attached_contact_edges"].append(
+                        {
+                            "edge_id": edge_id,
+                            "object_name": record["object_name"],
+                            "native_object_id": record["native_object_id"],
+                            "midpoint_um": point,
+                        }
+                    )
+                else:
+                    raise RuntimeError(
+                        "saved generic RLC line position kind is unsupported"
+                    )
+                observed.append(point)
+            record["saved_contact_points_um"] = observed
+            if observed != record["requested"]["contact_points_um"]:
+                raise RuntimeError("saved generic RLC directed contact line differs")
+        except Exception as exc:
+            exc.add_note(
+                "generic RLC readback: "
+                + json.dumps(record, default=str, sort_keys=True)
+            )
+            raise
+
+
 def prepare_epr_hfss(
     Hfss: Any,
     run_dir: Path,
@@ -174,6 +319,7 @@ def prepare_epr_hfss(
     app.modeler.model_units = "um"
     started = time.perf_counter()
     geometry = prepare_native_planar_geometry(app, bound.geometry)
+    _assign_generic_rlcs(app, bound, geometry)
     timings["geometry_seconds"] = round(time.perf_counter() - started, 6)
     timings["geometry_phases"] = geometry.pop("geometry_phases")
     started = time.perf_counter()
@@ -201,6 +347,7 @@ def prepare_epr_hfss(
     _read_saved_junction_lines(
         app, project_path, bound.design_name, bound.geometry, geometry
     )
+    _read_generic_rlcs(app, geometry)
     setup = _read_setup(app, bound)
     if bound.epr_request is not None:
         cache["serialized_readback"] = _read_cache(app, bound, cache["items"])
@@ -573,6 +720,7 @@ def analyze_saved_epr(
         raise RuntimeError("saved EPR field solution is unavailable on the workcopy")
     started = time.perf_counter()
     geometry = bind_saved_planar_geometry(app, spec.geometry)
+    _bind_saved_generic_rlcs(app, spec.geometry, geometry)
     _read_saved_junction_lines(
         app, project_path, spec.design_name, spec.geometry, geometry
     )

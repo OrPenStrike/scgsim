@@ -2101,6 +2101,55 @@ def _implicit_closed_enclosure(app: Any, source: Mapping[str, Any]) -> dict[str,
     }
 
 
+def _native_lumped_supports(
+    app: Any, prepared: PreparedPlanarGeometry, *, saved: bool = False
+) -> list[dict[str, Any]]:
+    """Bind neutral authored supports without inventing conductor electrodes."""
+    records = []
+    for support in prepared.source.get("lumped_supports", ()):
+        value = detached(support)
+        effective = value["effective"]
+        name = _native_name("lumped_support", value["support_id"])
+        if saved:
+            obj = app.modeler[name]
+        else:
+            obj = _polygon_sheet(app, effective, name=name, z_um=effective["z_um"])
+        evidence = _native_object_evidence(app, name)
+        if evidence["native_object_type"] != "Sheet" or len(obj.faces) != 1:
+            raise RuntimeError(
+                f"neutral support is not one native Sheet face: {value['support_id']!r}"
+            )
+        records.append({**value, **evidence, "object_name": obj.name})
+    return records
+
+
+def native_conductor_objects(
+    prepared: PreparedPlanarGeometry,
+    native: Mapping[str, Any],
+    entity_ids: Sequence[str],
+) -> list[str]:
+    """Resolve explicit source Entities to all their created conductor bodies."""
+    source_entities = prepared.source["conductors"]
+    names = []
+    for entity_id in entity_ids:
+        semantic_ids = {
+            item["semantic_id"]
+            for item in source_entities
+            if entity_id in {item["semantic_id"], item["source_semantic_id"]}
+        }
+        matches = [
+            item["object_name"]
+            for item in native["objects"]
+            if item["kind"] == "conductor" and item["semantic_id"] in semantic_ids
+        ]
+        if not matches:
+            raise RuntimeError(f"source conductor has no native bodies: {entity_id!r}")
+        for name in matches:
+            if name not in names:
+                names.append(name)
+    return names
+
+
 def prepare_native_planar_geometry(
     app: Any, prepared: PreparedPlanarGeometry
 ) -> dict[str, Any]:
@@ -2401,6 +2450,8 @@ def prepare_native_planar_geometry(
         **_prepared_modeling_identity(prepared),
         "source_sha256": prepared.source_sha256,
         "objects": bindings,
+        **({"lumped_supports": _native_lumped_supports(app, prepared)}
+           if source.get("lumped_supports") else {}),
         "junctions": junction_bindings,
         "surface_selections": surface_selections,
         "material_readback": material_readback,
@@ -2635,6 +2686,8 @@ def bind_saved_planar_geometry(
         **_prepared_modeling_identity(prepared),
         "source_sha256": prepared.source_sha256,
         "objects": objects,
+        **({"lumped_supports": _native_lumped_supports(app, prepared, saved=True)}
+           if source.get("lumped_supports") else {}),
         "junctions": junctions,
         "surface_selections": selections,
         "material_readback": _material_readback(

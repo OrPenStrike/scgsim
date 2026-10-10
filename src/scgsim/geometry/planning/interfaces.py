@@ -40,6 +40,7 @@ from scgsim.geometry.planning.domain import (
     _entity_loop_bounds,
     _entity_occupied_region,
     _required_host_solution_id,
+    _route_conductor_contact_footprints,
     _route_a_sheet_boundary_volume_ids_from_solutions,
     _route_a_sheet_plane_z_um_from_solutions,
     _solution_entities,
@@ -179,6 +180,58 @@ def recognize_route_interfaces(
     return tuple(records)
 
 
+def _same_declared_effective_sheet_plane(
+    lower: SemanticEntitySpec, upper: SemanticEntitySpec
+) -> bool:
+    """Identify one declared source film, without inferring layer or connectivity."""
+    traces = tuple(entity.metadata.get("aedt_effective_layer") for entity in (lower, upper))
+    if any(not isinstance(trace, Mapping) for trace in traces):
+        return False
+    left, right = traces
+    identity = left.get("physical_layer_id")
+    if (
+        not identity
+        or identity != right.get("physical_layer_id")
+        or left.get("representation") != "sheet"
+        or right.get("representation") != "sheet"
+        or not lower.net_id
+        or lower.net_id != upper.net_id
+    ):
+        return False
+    source_geometries = tuple(trace.get("source_geometry") for trace in traces)
+    if any(not isinstance(geometry, Mapping) for geometry in source_geometries):
+        return False
+    source_intervals = tuple(
+        _entity_z_range_um(replace(entity, geometry=geometry))
+        for entity, geometry in zip((lower, upper), source_geometries)
+    )
+    lower_z = _entity_z_range_um(lower)
+    upper_z = _entity_z_range_um(upper)
+    return source_intervals[0] == source_intervals[1] and lower_z == upper_z and lower_z[0] == lower_z[1]
+
+
+def _sheet_loops_share_positive_edge(lower: SemanticEntitySpec, upper: SemanticEntitySpec) -> bool:
+    """Exact positive-length lateral incidence, excluding a point-only touch."""
+    lower_loops = (lower.geometry["outer_loop"], *lower.geometry.get("hole_loops", ()))
+    upper_loops = (upper.geometry["outer_loop"], *upper.geometry.get("hole_loops", ()))
+    for left in lower_loops:
+        for right in upper_loops:
+            for start, end in _ring_edges(left):
+                dx, dy = end[0] - start[0], end[1] - start[1]
+                length_sq = dx * dx + dy * dy
+                if length_sq == 0:
+                    continue
+                for first, second in _ring_edges(right):
+                    if any((point[0] - start[0]) * dy - (point[1] - start[1]) * dx != 0
+                           for point in (first, second)):
+                        continue
+                    parameters = tuple(((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / length_sq
+                                       for point in (first, second))
+                    if min(1.0, max(parameters)) > max(0.0, min(parameters)):
+                        return True
+    return False
+
+
 def plan_conductor_contact_patches(
     build_input: GeometryBuildInput,
     *,
@@ -209,7 +262,7 @@ def plan_conductor_contact_patches(
         list[tuple[SemanticEntitySpec, Any, Mapping[str, float]]],
     ] = {}
 
-    for entity in _active_route_conductor_entities(build_input, route):
+    for entity in _route_conductor_contact_footprints(build_input, route):
         region = _entity_occupied_region(gdstk, entity)
         if not region:
             continue
@@ -224,6 +277,16 @@ def plan_conductor_contact_patches(
             for upper, upper_region, upper_bounds in bottom_faces.get(z_key, ()):
                 if lower.semantic_id == upper.semantic_id:
                     continue
+                overlap_region = None
+                if route == "_effective" and _same_declared_effective_sheet_plane(lower, upper):
+                    overlap_region = _boolean_gdstk_region(
+                        gdstk, lower_region, upper_region, "and"
+                    )
+                    # One collapsed source film may have a lateral seam between
+                    # distinct same-Net bodies. It has no horizontal MM area;
+                    # keep both source bodies and their actual boundary rings.
+                    if not overlap_region and _sheet_loops_share_positive_edge(lower, upper):
+                        continue
                 if not _bounds_overlap(lower_bounds, upper_bounds):
                     if _loops_touch_without_area(
                         lower.geometry["outer_loop"], upper.geometry["outer_loop"]
@@ -233,12 +296,13 @@ def plan_conductor_contact_patches(
                             "edge/point-only conductor contact"
                         )
                     continue
-                overlap_region = _boolean_gdstk_region(
-                    gdstk,
-                    lower_region,
-                    upper_region,
-                    "and",
-                )
+                if overlap_region is None:
+                    overlap_region = _boolean_gdstk_region(
+                        gdstk,
+                        lower_region,
+                        upper_region,
+                        "and",
+                    )
                 if not overlap_region:
                     if _loops_touch_without_area(
                         lower.geometry["outer_loop"], upper.geometry["outer_loop"]
@@ -422,9 +486,16 @@ def plan_mm_contact_records(
     record remains present for both Route A and Route B while its internal face
     is deliberately absent from solver physical groups.
     """
+    live_ids = {
+        entity.semantic_id
+        for entity in _route_conductor_contact_footprints(build_input, route)
+    }
+    # Component ownership retains the original Entity and every source polygon,
+    # rather than whichever temporary contact footprint was processed last.
     entities = {
         entity.semantic_id: entity
-        for entity in _active_route_conductor_entities(build_input, route)
+        for entity in build_input.entities
+        if entity.semantic_id in live_ids
     }
     contacts: list[
         tuple[InterfacePlanRecord, SemanticEntitySpec, SemanticEntitySpec]
@@ -608,6 +679,11 @@ def _validate_volumetric_conductor_contacts(
     """Reject ambiguous body overlap before a route can hide it as a PEC void."""
     import gdstk
 
+    footprint_regions: dict[str, list[Any]] = {}
+    for footprint in _route_conductor_contact_footprints(build_input, route):
+        footprint_regions.setdefault(footprint.semantic_id, []).extend(
+            _entity_occupied_region(gdstk, footprint)
+        )
     ordered = tuple(sorted(entities.values(), key=lambda entity: entity.semantic_id))
     normalized: list[
         tuple[
@@ -625,7 +701,7 @@ def _validate_volumetric_conductor_contacts(
             continue
         _resolve_contact_pad_attachment(pad, ordered)
     for index, lower in enumerate(ordered):
-        lower_region = _entity_occupied_region(gdstk, lower)
+        lower_region = tuple(footprint_regions[lower.semantic_id])
         lower_min, lower_max = _entity_z_range_um(lower)
         for upper in ordered[index + 1 :]:
             upper_min, upper_max = _entity_z_range_um(upper)
@@ -635,7 +711,7 @@ def _validate_volumetric_conductor_contacts(
             ):
                 continue
             overlap = _boolean_gdstk_region(
-                gdstk, lower_region, _entity_occupied_region(gdstk, upper), "and"
+                gdstk, lower_region, tuple(footprint_regions[upper.semantic_id]), "and"
             )
             if not overlap:
                 continue

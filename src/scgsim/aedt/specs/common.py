@@ -13,6 +13,8 @@ from pathlib import Path
 
 from typing import Any, Literal
 
+from scgsim.aedt.epr.models import LumpedRlc as LumpedRlc
+
 
 HfssDrivenMode = Literal["terminal", "modal"]
 
@@ -33,6 +35,8 @@ EPR_ANALYSIS_SCHEMA_VERSION = "scgsim.aedt.hfss-eigenmode-epr-analysis.v1"
 EPR_EIGENMODE_SCHEMA_VERSION_V2 = "scgsim.aedt.hfss-eigenmode-epr.v2"
 
 EPR_EIGENMODE_SCHEMA_VERSION_V3 = "scgsim.aedt.hfss-eigenmode-epr.v3"
+
+DRIVEN_GEOMETRY_SCHEMA_VERSION = "scgsim.aedt.hfss-driven-geometry.v1"
 
 EPR_ANALYSIS_SCHEMA_VERSION_V2 = "scgsim.aedt.hfss-eigenmode-epr-analysis.v2"
 
@@ -244,6 +248,51 @@ class ObjectBinding:
 
 
 @dataclass(frozen=True)
+class LumpedTerminalPort:
+    """Driven Terminal excitation on an explicit source support, not Region."""
+
+    index: int
+    name: str
+    support_id: str
+    signal_entity_ids: tuple[str, ...]
+    reference_entity_ids: tuple[str, ...]
+    impedance_ohm: float
+    renormalize: bool = False
+    deembed_um: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.index not in {1, 2}:
+            raise ValueError("two-port V1 uses port indices 1 and 2")
+        for key in ("name", "support_id"):
+            object.__setattr__(self, key, _text(getattr(self, key), key))
+        for key in ("signal_entity_ids", "reference_entity_ids"):
+            values = tuple(_text(value, key) for value in getattr(self, key))
+            if not values:
+                raise ValueError(f"{key} requires explicit conductor Entities")
+            object.__setattr__(self, key, values)
+        if isinstance(self.impedance_ohm, bool) or not isinstance(self.impedance_ohm, (int, float)):
+            raise TypeError("impedance_ohm must be explicitly numeric")
+        if self.deembed_um != 0:
+            raise NotImplementedError("Lumped Terminal supports deembed_um=0 only")
+        if not isinstance(self.renormalize, bool):
+            raise TypeError("renormalize must be bool")
+
+    def to_payload(self) -> dict[str, Any]:
+        return {"kind": "lumped", "index": self.index, "name": self.name,
+                "support_id": self.support_id, "signal_entity_ids": list(self.signal_entity_ids),
+                "reference_entity_ids": list(self.reference_entity_ids),
+                "impedance_ohm": self.impedance_ohm, "renormalize": self.renormalize,
+                "deembed_um": self.deembed_um}
+
+    @classmethod
+    def from_payload(cls, value: Mapping[str, Any]) -> LumpedTerminalPort:
+        record = dict(value)
+        if record.pop("kind") != "lumped":
+            raise ValueError("lumped terminal kind differs")
+        return cls(**record)
+
+
+@dataclass(frozen=True)
 class TerminalPort:
     """Driven Terminal port facts; references are meaningful only in this mode."""
 
@@ -252,6 +301,7 @@ class TerminalPort:
     side: Side
     reference_objects: tuple[str, ...]
     deembed_um: float = 0.0
+    signal_entity_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.index not in {1, 2}:
@@ -265,6 +315,8 @@ class TerminalPort:
         if not references:
             raise ValueError("terminal port requires explicit reference_objects")
         object.__setattr__(self, "reference_objects", references)
+        object.__setattr__(self, "signal_entity_ids", tuple(
+            _text(value, "signal_entity_id") for value in self.signal_entity_ids))
         deembed = _number(self.deembed_um, "deembed_um")
         if deembed < 0:
             raise ValueError("deembed_um must be >= 0")
@@ -277,6 +329,7 @@ class TerminalPort:
             "side": self.side,
             "reference_objects": list(self.reference_objects),
             "deembed_um": self.deembed_um,
+            **({"signal_entity_ids": list(self.signal_entity_ids)} if self.signal_entity_ids else {}),
         }
 
 

@@ -10,6 +10,12 @@ Continue from [CPW inputs](aedt-inputs.qmd) in the same session. Ordinary HFSS
 Eigenmode has no driven excitation ports. It searches for the requested modes
 using an explicit adaptive setup; it does not create a source-first Surface-EPR
 catalogue or saved-field analysis request merely because its name is Eigenmode.
+The Eigenmode API can include a generic linear RLC model element through
+`EigenmodeSim.add_lumped_rlc()`. This is distinct from a Josephson junction:
+it does not create a `PlanarJunction`, junction participation, or an EPR
+contribution. The loads are stored in `PreparedPlanarGeometry.lumped_rlcs`;
+`HfssEprSpec` projects the prepared values without becoming a second editable
+source. The EPR junction contract remains separate.
 The inputs page's equal-Z M1 mapping is a historical sheet request. This
 current Thin Film example adds the CPW source owner's explicit `NB_FILM`
 interval and lower contact side, preserving the existing sheet plane without

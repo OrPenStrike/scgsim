@@ -19,6 +19,9 @@ from scgsim.aedt.specs.modeling import (
 
 from scgsim.aedt.specs.common import (
     EIGENMODE_SCHEMA_VERSION,
+    DRIVEN_GEOMETRY_SCHEMA_VERSION,
+    LumpedRlc,
+    LumpedTerminalPort,
     EPR_ANALYSIS_SCHEMA_VERSION,
     EPR_ANALYSIS_SCHEMA_VERSION_V2,
     EPR_EIGENMODE_SCHEMA_VERSION,
@@ -527,6 +530,10 @@ class HfssEprSpec:
     expression_convergence: Any = None
 
     @property
+    def lumped_rlcs(self) -> tuple[LumpedRlc, ...]:
+        return self.geometry.lumped_rlcs
+
+    @property
     def mode(self) -> Literal["eigenmode"]:
         return "eigenmode"
 
@@ -594,6 +601,7 @@ class HfssEprSpec:
             "project": {"name": self.project_name, "design": self.design_name},
             "run_control": self.run_control.to_payload(),
             "geometry": self.geometry.to_payload(),
+
             "epr": (
                 None if self.epr_request is None else self.epr_request.to_payload()
             ),
@@ -645,13 +653,14 @@ class HfssEprSpec:
         project = payload.get("project")
         if not isinstance(project, dict):
             raise TypeError("project must be a JSON object")
+        geometry = PreparedPlanarGeometry.from_payload(payload.get("geometry"))
         return cls(
             modeling=payload.get("modeling"),
             physical_layers=tuple(PhysicalLayerSpec(**item) for item in payload.get("physical_layers", ())),
             _historical_modeling=allow_historical_modeling and "modeling" not in payload,
             project_name=_project_name_from_payload(project.get("name")),
             design_name=_text(project.get("design"), "project.design"),
-            geometry=PreparedPlanarGeometry.from_payload(payload.get("geometry")),
+            geometry=geometry,
             run_control=EigenmodeRunControl(**run),
             epr_request=(
                 None
@@ -914,4 +923,103 @@ class LengthMeshSpec:
         }
 
 
-HfssSpec = HfssDrivenSpec | HfssEigenmodeSpec | HfssEprSpec | HfssEprAnalysisSpec
+@dataclass(frozen=True)
+class HfssDrivenGeometrySpec:
+    """Body-first Driven Terminal request; supports never masquerade as GDS."""
+
+    modeling: Modeling
+    project_name: str
+    design_name: str
+    geometry: Any
+    ports: tuple[TerminalPort | LumpedTerminalPort, ...]
+    run_control: HfssRunControl
+    physical_layers: tuple[PhysicalLayerSpec, ...] = ()
+    aedt_version: str = REQUIRED_AEDT_VERSION
+    pyaedt_version: str = LOCKED_PYAEDT
+    _historical_modeling: bool = False
+
+    @property
+    def mode(self) -> Literal["terminal"]:
+        return "terminal"
+
+    def __post_init__(self) -> None:
+        from scgsim.aedt.epr.models import PreparedPlanarGeometry
+
+        if not isinstance(self.geometry, PreparedPlanarGeometry):
+            raise TypeError("geometry must be PreparedPlanarGeometry")
+        if self.geometry.modeling != self.modeling:
+            raise ValueError("request and prepared geometry modeling differ")
+        if self.geometry.junctions or self.geometry.lumped_rlcs or self.geometry.contributions:
+            raise ValueError("Driven geometry cannot contain Eigenmode treatments or EPR requests")
+        declared = tuple(PhysicalLayerSpec(**item) for item in self.geometry.source["modeling"]["source_layers"])
+        if self.physical_layers and self.physical_layers != declared:
+            raise ValueError("request physical layers differ from prepared source map")
+        object.__setattr__(self, "physical_layers", declared)
+        _request_modeling(self)
+        if self.aedt_version != REQUIRED_AEDT_VERSION or self.pyaedt_version != LOCKED_PYAEDT:
+            raise ValueError("V1 requires AEDT 2024.2 and PyAEDT 1.3.0")
+        object.__setattr__(self, "project_name", _project_filename(self.project_name, "project_name").stem)
+        object.__setattr__(self, "design_name", _text(self.design_name, "design_name"))
+        if not isinstance(self.run_control, HfssRunControl):
+            raise TypeError("run_control must be HfssRunControl")
+        ports = tuple(self.ports)
+        if tuple(port.index for port in ports) != (1, 2) or len({port.name for port in ports}) != 2:
+            raise ValueError("V1 requires unique ordered ports 1 and 2")
+        supports = {item["support_id"]: item for item in self.geometry.source.get("lumped_supports", ())}
+        conductor_ids = {item["semantic_id"] for item in self.geometry.source["conductors"]}
+        conductor_ids.update(item["source_semantic_id"] for item in self.geometry.source["conductors"])
+        for port in ports:
+            if isinstance(port, LumpedTerminalPort):
+                support = supports.get(port.support_id)
+                if support is None:
+                    raise ValueError(f"terminal support {port.support_id!r} is missing")
+                original = support["source"]
+                if (port.signal_entity_ids != tuple(original["terminal_a_entity_ids"])
+                        or port.reference_entity_ids != tuple(original["terminal_b_entity_ids"])):
+                    raise ValueError("lumped terminal ownership differs from ordered source contacts")
+            elif isinstance(port, TerminalPort):
+                if not port.signal_entity_ids or not set(port.signal_entity_ids).issubset(conductor_ids):
+                    raise ValueError("body-first Wave requires explicit source Signal Entities")
+                if not set(port.reference_objects).issubset(conductor_ids):
+                    raise ValueError("Wave references must bind source conductor Entities")
+                padding = self.geometry.source["native_region"]["padding_um"]
+                # Match the existing native Region order, without extending Wave support.
+                index = {"+X": 0, "-X": 1, "+Y": 2, "-Y": 3, "+Z": 4, "-Z": 5}[port.side]
+                if padding[index] != 0:
+                    raise ValueError("Wave port side requires zero Region padding")
+            else:
+                raise TypeError("Driven Terminal requires Wave or Lumped terminal records")
+        if all(isinstance(port, TerminalPort) for port in ports):
+            if {port.side for port in ports} != {"-X", "+X"}:
+                raise ValueError("Wave V1 requires -X/+X port sides")
+            if ports[0].reference_objects != ports[1].reference_objects:
+                raise ValueError("Wave ports must share ordered reference conductors")
+        object.__setattr__(self, "ports", ports)
+
+    def to_payload(self) -> dict[str, Any]:
+        return {**_modeling_payload(self), "schema_version": DRIVEN_GEOMETRY_SCHEMA_VERSION,
+                "mode": self.mode, "aedt": {"requested_version": self.aedt_version},
+                "pyaedt": {"locked_version": self.pyaedt_version, "official_source": OFFICIAL_PYAEDT_SOURCE_URL},
+                "project": {"name": self.project_name, "design": self.design_name},
+                "geometry": self.geometry.to_payload(), "ports": [port.to_payload() for port in self.ports],
+                "run_control": self.run_control.to_payload()}
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> HfssDrivenGeometrySpec:
+        from scgsim.aedt.epr.models import PreparedPlanarGeometry
+
+        if payload.get("schema_version") != DRIVEN_GEOMETRY_SCHEMA_VERSION or payload.get("mode") != "terminal":
+            raise ValueError("unsupported body-first Driven schema")
+        if set(payload) != {"modeling", "physical_layers", "schema_version", "mode", "aedt", "pyaedt", "project", "geometry", "ports", "run_control"}:
+            raise ValueError("body-first Driven payload members are not canonical")
+        run = dict(payload["run_control"])
+        run["sweep"] = FrequencySweepSpec(**run["sweep"])
+        return cls(modeling=payload["modeling"], project_name=payload["project"]["name"],
+                   design_name=payload["project"]["design"], geometry=PreparedPlanarGeometry.from_payload(payload["geometry"]),
+                   ports=tuple(LumpedTerminalPort.from_payload(item) if item.get("kind") == "lumped"
+                               else TerminalPort(**item) for item in payload["ports"]),
+                   run_control=HfssRunControl(**run), physical_layers=tuple(PhysicalLayerSpec(**item) for item in payload["physical_layers"]),
+                   aedt_version=payload["aedt"]["requested_version"], pyaedt_version=payload["pyaedt"]["locked_version"])
+
+
+HfssSpec = HfssDrivenGeometrySpec | HfssDrivenSpec | HfssEigenmodeSpec | HfssEprSpec | HfssEprAnalysisSpec

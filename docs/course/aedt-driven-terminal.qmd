@@ -87,3 +87,17 @@ rather than treating this output as the modal integration-line model.
 Use [Modal](aedt-driven-modal.qmd) when the intended model calls for explicit
 integration lines. The [runtime contract](../specs/aedt-runtime.qmd) owns
 failure behavior and the bounded two-port interface.
+
+### Wave and Lumped Terminal ports
+
+The example above uses Wave `TerminalPort` inputs. A Lumped excitation uses a
+separate `LumpedTerminalPort` declaration with explicit source-backed support,
+terminal and reference assignments and a required `impedance_ohm`. The two
+port kinds have distinct native models, so a Lumped request does not fall back
+to Wave-port creation. Generic Series/Parallel RLC model elements belong to
+the Eigenmode model's `PreparedPlanarGeometry.lumped_rlcs` collection; they
+are separate from a Driven Terminal's scalar port impedance and from
+Josephson-junction/EPR models. The runtime reference describes source-backed
+support identity and the body-first path. In that body-first route,
+`TerminalPort.signal_entity_ids` is required so the declared Signal and its
+references are explicit; the existing GDS reference binding is unchanged.

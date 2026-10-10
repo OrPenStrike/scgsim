@@ -433,6 +433,39 @@ def display_resolved_run(
         )
     )
 
+    lumped = resolved._lumped_boundaries
+    if lumped:
+        summaries = []
+        for record in lumped:
+            request = record["requested"]
+            if "topology" in request:
+                treatment = f"{request['topology']} R={request['resistance_ohm']} ohm; L={request['inductance_h']} H; C={request['capacitance_f']} F (None disabled)"
+            else:
+                treatment = f"Lumped Terminal {request['impedance_ohm']} ohm; renormalize={request['renormalize']}; deembed={request['deembed_um']} um"
+            summaries.append(
+                (
+                    record.get("support_id", request.get("support_id")),
+                    record["boundary"],
+                    treatment,
+                )
+            )
+        display(
+            HTML(
+                section(
+                    "Source-bound lumped elements",
+                    table(
+                        ("Support", "Native boundary", "Authored treatment"), summaries
+                    )
+                    + json_details(
+                        "Source and native assignment evidence",
+                        {"boundaries": list(lumped)},
+                        opened=show_details,
+                    ),
+                    theme=theme,
+                )
+            )
+        )
+
     headings = tuple(rows[0]) if rows else ()
     primary_table = (
         table(headings, [tuple(row.get(key, "") for key in headings) for row in rows])
