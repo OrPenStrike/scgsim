@@ -202,11 +202,49 @@ version checks, receipts, and path/hash validation:
 
 | Family | Required model semantics | Required returned data |
 |---|---|---|
-| HFSS Driven Terminal | explicit `modeling="solid"` or `modeling="thin_film"`; terminal ports with explicit reference conductors | ordered terminal S-parameters and Touchstone |
+| HFSS Driven Terminal | explicit `modeling="solid"` or `modeling="thin_film"`; existing Wave `TerminalPort` or separately declared `LumpedTerminalPort` with explicit signal/reference identity | ordered terminal S-parameters and Touchstone |
 | HFSS Driven Modal | explicit `modeling="solid"` or `modeling="thin_film"`; modal ports with exact integration lines | ordered modal S-parameters, impedance, and Touchstone |
-| HFSS Eigenmode | explicit `modeling="solid"` or `modeling="thin_film"`; the existing runtime remains port-free, with explicit mode count and search frequency; the EPR frontend separately declares linearized Lumped RLC junction sheets as model elements, not driven excitation ports | ordinary real mode frequency, native Q, and convergence evidence; EPR history and saved-field results use their separate result contract |
+| HFSS Eigenmode | explicit `modeling="solid"` or `modeling="thin_film"`; the existing runtime remains port-free, with explicit mode count and search frequency; generic RLC model elements are distinct from `PlanarJunction` and EPR junction records | ordinary real mode frequency, native Q, and convergence evidence; EPR history and saved-field results use their separate result contract |
 | Q3D | explicit `modeling="solid"` or `modeling="thin_film"`; exact conductor Net membership; real Signal source/sink pairs for AC/RL; terminal-free C/G is supported; optional exact six-face Region ground seal | native capacitance and, when enabled, resistance/inductance matrices |
 | Q2D | explicit cross-section geometry and conductor/reference assignments | per-unit-length capacitance/conductance and resistance/inductance matrices |
+
+### Shared lumped support and terminal RLC {#hfss-shared-lumped-support}
+
+This HFSS lumped-element scope is `CONVERGING`. It adds generic circuit
+elements while preserving the existing Wave Terminal and Josephson-junction
+contracts.
+
+`LumpedSupport` and `set_lumped_supports()` declare source-backed support
+geometry in the caller's model snapshot. The body-first workflow uses
+`HfssDrivenGeometrySpec` with `mode="terminal"` and schema
+`hfss-driven-geometry.v1`, through `prepare_hfss_driven_from_geometry()`.
+`body_first_driven_terminal` names the preparation workflow, not the spec mode.
+The geometry request carries no RLC field. Existing Wave
+`TerminalPort.signal_entity_ids` remains optional in
+legacy payloads; it is required when using the body-first route, whose
+frontend declares the Signal and references explicitly. The legacy GDS
+reference binding is unchanged.
+
+Keep a source metal body distinct from a nonmetal support/locator sheet. The
+locator's actual nonmetal `source_level` determines its plane; the separate
+`contact_physical_layer_id` binds the M1 physical contact and effective Z. Do
+not infer a film thickness from a material name or hard-code 100 nm.
+
+`TerminalPort` remains the existing Wave-port input. `LumpedTerminalPort` is a
+separate Driven Terminal input with explicit support, terminal and reference
+assignment and a required `impedance_ohm`. It has no RLC-network field. A value
+such as 50 ohm is an operation input, not a package default. There is no
+conversion from a Lumped request to a Wave port.
+
+`LumpedRlc` requires an explicit `series` or `parallel` topology. Its R, L and
+C components are independently selected; `None` disables the corresponding
+component. The single source of these loads is
+`PreparedPlanarGeometry.lumped_rlcs`. `EigenmodeSim.add_lumped_rlc()` adds to
+that model-owned collection; `HfssEprSpec` only projects the prepared list and
+does not introduce a second editable copy. The model-source hash includes the
+RLC records. This generic linear network is not a Josephson junction and does
+not create a `PlanarJunction`, junction participation, or an EPR contribution.
+Existing junction and saved-field EPR result contracts remain separate.
 
 ### Family-specific setup controls {#aedt-family-setup-controls}
 

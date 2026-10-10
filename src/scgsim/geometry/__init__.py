@@ -18,6 +18,7 @@ from scgsim.geometry.models.input import (
     SourceCurveSpec,
     VacuumRegionSpec,
 )
+from scgsim.geometry.models.lumped import LumpedSupport
 from scgsim.geometry.models.regions import PortSheetOverlapRecord, PortSheetRegionRecord
 from scgsim.geometry.source.adapter import (
     build_gds_stack_geometry_input,
@@ -40,6 +41,7 @@ __all__ = [
     "GeometryPlanSnapshot",
     "InputSummary",
     "LayoutPolygonSpec",
+    "LumpedSupport",
     "PathInput",
     "PolygonRing",
     "PortSheetOverlapRecord",

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 
+import json
 import math
 
 import re
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from itertools import pairwise
 
@@ -39,12 +40,13 @@ from scgsim.aedt.runtime.native.hfss_eigenmode import (
 from scgsim.aedt.specs.common import (
     AedtResources,
     ModalPort,
+    LumpedTerminalPort,
     REQUIRED_AEDT_VERSION,
     SURFACE_APPROXIMATION_LEVEL,
     TerminalPort,
 )
 
-from scgsim.aedt.specs.hfss import HfssDrivenSpec, HfssEigenmodeSpec, HfssSpec
+from scgsim.aedt.specs.hfss import HfssDrivenGeometrySpec, HfssDrivenSpec, HfssEigenmodeSpec, HfssSpec
 
 
 @dataclass(frozen=True)
@@ -54,16 +56,17 @@ class PreparedHfss:
     app: Any
     request: BoundAedtRequest
     project_path: Path
-    materials: list[dict[str, Any]]
+    materials: list[dict[str, Any]] | dict[str, Any]
     region: dict[str, Any]
     mesh: dict[str, Any]
     ports: list[dict[str, Any]]
     setup: dict[str, Any]
+    geometry: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.request, BoundAedtRequest):
             raise TypeError("PreparedHfss requires a bound AEDT request")
-        for name in ("materials", "region", "mesh", "ports", "setup"):
+        for name in ("materials", "region", "mesh", "ports", "setup", "geometry"):
             object.__setattr__(self, name, detached_data(getattr(self, name)))
 
 
@@ -108,15 +111,32 @@ def prepare_hfss(Hfss: Any, run_dir: Path, spec: HfssSpec) -> PreparedHfss:
     if app.desktop_class.aedt_version_id != REQUIRED_AEDT_VERSION:
         raise RuntimeError("HFSS did not bind the owned AEDT 2024.2 desktop")
     app.modeler.model_units = "um"
-    materials = _import_and_bind(app, spec)
-    region = _create_region(app, spec)
-    mesh = _assign_mesh(app, spec)
-    ports = _assign_ports(app, spec)
+    geometry: dict[str, Any] = {}
+    if isinstance(spec, HfssDrivenGeometrySpec):
+        from scgsim.aedt.epr.native import prepare_native_planar_geometry
+
+        geometry = prepare_native_planar_geometry(app, spec.geometry)
+        materials = geometry["material_readback"]
+        region = geometry["closed_enclosure"]
+        mesh = {
+            "status": "not_requested",
+            "reason": "body-first request uses native adaptive mesh",
+        }
+        ports = _assign_body_terminal_ports(app, spec, geometry)
+    else:
+        materials = _import_and_bind(app, spec)
+        region = _create_region(app, spec)
+        mesh = _assign_mesh(app, spec)
+        ports = _assign_ports(app, spec)
     _setup(app, spec)
     if not app.save_project() or not project_path.is_file():
         raise RuntimeError("HFSS project was not saved before native port readback")
     setup = _read_hfss_setup(app, spec)
-    ports = _bind_port_evidence(app, spec, ports)
+    ports = (
+        _bind_body_terminal_evidence(app, spec, geometry, ports)
+        if isinstance(spec, HfssDrivenGeometrySpec)
+        else _bind_port_evidence(app, spec, ports)
+    )
     return PreparedHfss(
         app,
         request,
@@ -126,6 +146,7 @@ def prepare_hfss(Hfss: Any, run_dir: Path, spec: HfssSpec) -> PreparedHfss:
         mesh,
         ports,
         setup,
+        geometry,
     )
 
 
@@ -195,6 +216,7 @@ def export_hfss(prepared: PreparedHfss) -> dict[str, Any]:
         "ports": detached_data(prepared.ports),
         "mesh": detached_data(prepared.mesh),
         "materials": detached_data(prepared.materials),
+        **({"geometry": detached_data(prepared.geometry)} if prepared.geometry else {}),
         "region": detached_data(prepared.region),
         "setup": detached_data(prepared.setup),
         "convergence": convergence,
@@ -283,6 +305,242 @@ def _assign_mesh(hfss: Any, spec: HfssSpec) -> dict[str, Any]:
                 "native": native,
             }
     return result
+
+
+def _assign_body_terminal_ports(
+    hfss: Any, spec: HfssDrivenGeometrySpec, geometry: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Use authored Entities and supports; AutoIdentify does not author ownership."""
+    from scgsim.aedt.epr.native import native_conductor_objects
+    from scgsim.aedt.runtime.native.hfss_lumped import assign_terminal_lumped
+
+    supports = {
+        item["support_id"]: item for item in geometry.get("lumped_supports", ())
+    }
+    records = []
+    for port in spec.ports:
+        record: dict[str, Any] = {}
+        try:
+            signal_ids = port.signal_entity_ids
+            reference_ids = (
+                port.reference_entity_ids
+                if isinstance(port, LumpedTerminalPort)
+                else port.reference_objects
+            )
+            signals = native_conductor_objects(spec.geometry, geometry, signal_ids)
+            references = native_conductor_objects(
+                spec.geometry, geometry, reference_ids
+            )
+            if isinstance(port, LumpedTerminalPort):
+                support = supports[port.support_id]
+                record = assign_terminal_lumped(
+                    hfss,
+                    hfss.modeler[support["object_name"]],
+                    name=port.name,
+                    reference_objects=references,
+                    impedance_ohm=port.impedance_ohm,
+                    renormalize=port.renormalize,
+                    deembed_um=port.deembed_um,
+                )
+                record["support"] = detached_data(support)
+            else:
+                region = hfss.modeler["Region"]
+                faces = [
+                    (int(face.id), tuple(float(value) for value in face.center))
+                    for face in region.faces
+                ]
+                face_id = _face_for_side(faces, port.side)
+                before = set(hfss.oboundary.GetExcitationsOfType("Terminal"))
+                boundary = hfss.wave_port(
+                    face_id,
+                    reference=references,
+                    name=port.name,
+                    renormalize=False,
+                    deembed=f"{port.deembed_um:g}um",
+                    terminals_rename=False,
+                )
+                terminals = sorted(
+                    set(hfss.oboundary.GetExcitationsOfType("Terminal")) - before
+                )
+                if boundary is False or boundary is None or len(terminals) != 1:
+                    raise RuntimeError(
+                        f"body-first Wave Terminal assignment failed: {port.name!r}"
+                    )
+                record = {
+                    "boundary": boundary.name,
+                    "terminal_excitation": terminals[0],
+                    "face_id": face_id,
+                    "native_terminal_names": terminals,
+                    "face_center_um": list(dict(faces)[face_id]),
+                    "assignment_api": "wave_port",
+                }
+            records.append(
+                {
+                    "index": port.index,
+                    "kind": "lumped"
+                    if isinstance(port, LumpedTerminalPort)
+                    else "wave",
+                    "requested": port.to_payload()
+                    if isinstance(port, LumpedTerminalPort)
+                    else {
+                        "index": port.index,
+                        "name": port.name,
+                        "side": port.side,
+                        "reference_objects": list(port.reference_objects),
+                        "signal_entity_ids": list(signal_ids),
+                        "renormalize": False,
+                        "deembed_um": port.deembed_um,
+                    },
+                    "source_binding": {
+                        "signal_entity_ids": list(signal_ids),
+                        "reference_entity_ids": list(reference_ids),
+                        "signal_objects": signals,
+                        "reference_objects": references,
+                    },
+                    **record,
+                }
+            )
+        except Exception as exc:
+            exc.add_note(
+                "body-first Terminal assignment: "
+                + json.dumps(
+                    {
+                        "port_index": port.index,
+                        "port_name": port.name,
+                        "record": record,
+                    },
+                    default=str,
+                    sort_keys=True,
+                )
+            )
+            raise
+    return records
+
+
+def _bind_body_terminal_evidence(
+    hfss: Any,
+    spec: HfssDrivenGeometrySpec,
+    geometry: dict[str, Any],
+    ports: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Read saved terminal edges and their source-bound actual conductor owners."""
+    boundaries = hfss.design_properties["BoundarySetup"]["Boundaries"]
+    reference_ids = _native_terminal_reference_ids(hfss)
+    reference_names = [hfss.oeditor.GetObjectNameByID(value) for value in reference_ids]
+    for record, port in zip(ports, spec.ports, strict=True):
+        try:
+            terminal_name = record["terminal_excitation"]
+            native_terminal = boundaries[terminal_name]
+            native_boundary = boundaries[record["boundary"]]
+            edges = [int(value) for value in native_terminal["Edges"]]
+            owners = []
+            edge_records = []
+            for edge_id in edges:
+                matches = [
+                    item["object_name"]
+                    for item in geometry["objects"]
+                    if item["kind"] == "conductor"
+                    and edge_id
+                    in {
+                        int(edge.id) for edge in hfss.modeler[item["object_name"]].edges
+                    }
+                ]
+                if len(matches) != 1:
+                    raise RuntimeError(
+                        f"native Terminal edge owner is ambiguous: {edge_id}"
+                    )
+                edge_records.append(
+                    {
+                        "edge_id": edge_id,
+                        "object_name": matches[0],
+                        "native_object_id": int(hfss.modeler[matches[0]].id),
+                    }
+                )
+                if matches[0] not in owners:
+                    owners.append(matches[0])
+            native = {
+                "saved_boundary": detached_data(native_boundary),
+                "saved_terminal": detached_data(native_terminal),
+                "terminal_edges": edge_records,
+                "signal_objects": owners,
+                "reference_conductor_ids": reference_ids,
+                "reference_conductors": reference_names,
+                "boundary_properties": _native_oo_properties(
+                    hfss, f"Excitations\\{record['boundary']}"
+                ),
+                "terminal_properties": _native_oo_properties(
+                    hfss, f"Excitations\\{record['boundary']}\\{terminal_name}"
+                ),
+            }
+            record["native"] = native
+            if not owners or not set(owners).issubset(
+                record["source_binding"]["signal_objects"]
+            ):
+                raise RuntimeError(
+                    f"native Terminal signal ownership differs: {port.name!r}"
+                )
+            if not set(record["source_binding"]["reference_objects"]).issubset(
+                reference_names
+            ):
+                raise RuntimeError(f"native Terminal references differ: {port.name!r}")
+            expected_type = (
+                "Lumped Port" if isinstance(port, LumpedTerminalPort) else "Wave Port"
+            )
+            if (
+                native_boundary["BoundType"] != expected_type
+                or native["terminal_properties"].get("Port Name") != port.name
+            ):
+                raise RuntimeError(
+                    f"saved Terminal family/parent differs: {port.name!r}"
+                )
+            if [int(value) for value in native_boundary["Faces"]] != [
+                record["face_id"]
+            ]:
+                raise RuntimeError(
+                    f"saved Terminal support assignment differs: {port.name!r}"
+                )
+            renorm = port.renormalize if isinstance(port, LumpedTerminalPort) else False
+            _require_native_properties(
+                native["boundary_properties"],
+                {
+                    "Type": expected_type,
+                    "Renorm All Terminals": renorm,
+                    "Deembed": not isinstance(port, LumpedTerminalPort),
+                },
+                port.name,
+            )
+            impedance = (
+                port.impedance_ohm if isinstance(port, LumpedTerminalPort) else 50
+            )
+            _require_native_properties(
+                native["terminal_properties"],
+                {"Terminal Renormalizing Impedance": f"{impedance:g}ohm"},
+                terminal_name,
+            )
+        except Exception as exc:
+            exc.add_note(
+                "saved body-first Terminal readback: "
+                + json.dumps(
+                    {
+                        "port_index": port.index,
+                        "port_name": port.name,
+                        "record": record,
+                    },
+                    default=str,
+                    sort_keys=True,
+                )
+            )
+            raise
+    expected_references = {
+        name
+        for record in ports
+        for name in record["source_binding"]["reference_objects"]
+    }
+    if set(reference_names) != expected_references:
+        raise RuntimeError(
+            "body-first global native Terminal reference inventory differs"
+        )
+    return ports
 
 
 def _assign_ports(hfss: Any, spec: HfssSpec) -> list[dict[str, Any]]:

@@ -174,15 +174,21 @@ def _prepare_auto_vacuum_solution_regions(
 
     auto_metadata = dict(auto_region.metadata)
     auto_padding = _auto_vacuum_padding(auto_metadata, auto_region.semantic_id)
-    auto_bounds = _auto_vacuum_envelope_bounds(build_input, route=route)
-    auto_bounds = {
-        "x_min_um": auto_bounds["x_min_um"] - auto_padding["x_minus_um"],
-        "y_min_um": auto_bounds["y_min_um"] - auto_padding["y_minus_um"],
-        "x_max_um": auto_bounds["x_max_um"] + auto_padding["x_plus_um"],
-        "y_max_um": auto_bounds["y_max_um"] + auto_padding["y_plus_um"],
-        "z_min_um": auto_bounds["z_min_um"] - auto_padding["z_minus_um"],
-        "z_max_um": auto_bounds["z_max_um"] + auto_padding["z_plus_um"],
-    }
+    declared_effective = auto_metadata.get("aedt_effective_envelope")
+    if route == "_effective" and isinstance(declared_effective, Mapping):
+        # Prepared coordinate-map facts own this complete enclosure. The
+        # original padding recipe remains source provenance, not a second map.
+        auto_bounds = dict(declared_effective["effective_bounds_um"])
+    else:
+        auto_bounds = _auto_vacuum_envelope_bounds(build_input, route=route)
+        auto_bounds = {
+            "x_min_um": auto_bounds["x_min_um"] - auto_padding["x_minus_um"],
+            "y_min_um": auto_bounds["y_min_um"] - auto_padding["y_minus_um"],
+            "x_max_um": auto_bounds["x_max_um"] + auto_padding["x_plus_um"],
+            "y_max_um": auto_bounds["y_max_um"] + auto_padding["y_plus_um"],
+            "z_min_um": auto_bounds["z_min_um"] - auto_padding["z_minus_um"],
+            "z_max_um": auto_bounds["z_max_um"] + auto_padding["z_plus_um"],
+        }
     if not auto_bounds["x_min_um"] < auto_bounds["x_max_um"]:
         raise ValueError("auto VACUUM_REGION has non-positive padded x extent")
     if not auto_bounds["y_min_um"] < auto_bounds["y_max_um"]:
@@ -374,6 +380,7 @@ def _prepare_auto_vacuum_solution_regions(
                         "is_auto_vacuum_region": True,
                         "auto_vacuum_group_id": auto_region.semantic_id,
                         "auto_vacuum_envelope_outer_loop": envelope_loop,
+                        "auto_vacuum_envelope_bounds_um": dict(auto_bounds),
                         "auto_vacuum_component_index": component_index,
                         "auto_vacuum_z_range_um": (float(z_start), float(z_end)),
                         "auto_vacuum_subtracting_entity_ids": tuple(
@@ -821,6 +828,41 @@ def _active_route_conductor_entities(
         and entity.route_representations.get(route) is not None
         and "outer_loop" in entity.geometry
     )
+
+
+def _route_conductor_contact_footprints(
+    build_input: GeometryBuildInput,
+    route: RouteLiteral,
+) -> tuple[SemanticEntitySpec, ...]:
+    """Recognize effective contacts on each declared source polygon.
+
+    Temporary footprints retain parent Entity identity and original holes;
+    they neither replace source bodies nor invent a bounding exterior.
+    """
+    if route != "_effective":
+        return _active_route_conductor_entities(build_input, route)
+    polygons = {polygon.polygon_id: polygon for polygon in build_input.polygons}
+    footprints: list[SemanticEntitySpec] = []
+    for entity in build_input.entities:
+        if _is_solution_entity(entity) or entity.route_representations.get(route) is None:
+            continue
+        if "outer_loop" in entity.geometry:
+            footprints.append(entity)
+            continue
+        for polygon_id in entity.polygon_ids:
+            polygon = polygons[polygon_id]
+            footprints.append(
+                replace(
+                    entity,
+                    polygon_ids=(polygon_id,),
+                    geometry={
+                        **entity.geometry,
+                        "outer_loop": polygon.exterior,
+                        "hole_loops": polygon.holes,
+                    },
+                )
+            )
+    return tuple(footprints)
 
 
 def _entity_loop_bounds(entity: SemanticEntitySpec) -> Mapping[str, float]:

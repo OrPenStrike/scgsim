@@ -10,6 +10,7 @@ from .epr.models import (
     NativeExpressionDefinition,
     NormalizedSurfaceEprTotal,
     PlanarJunction,
+    LumpedRlc,
     PreparedPlanarGeometry,
     SavedSolution,
     SurfaceEprSpec,
@@ -17,6 +18,7 @@ from .epr.models import (
 from .epr.workflow import analyze_epr
 from .preparation.geometry import (
     prepare_hfss_eigenmode_from_geometry,
+    prepare_hfss_driven_from_geometry,
     prepare_q3d_from_geometry,
 )
 from .preparation.handoff import HandoffPlan, prepare_handoff
@@ -32,11 +34,13 @@ from .specs.common import (
     ObjectBinding,
     PdkMaterial,
     TerminalPort,
+    LumpedTerminalPort,
 )
 from .specs.hfss import (
     EigenmodeRunControl,
     FrequencySweepSpec,
     HfssDrivenSpec,
+    HfssDrivenGeometrySpec,
     HfssRunControl,
     HfssEigenmodeSpec,
     HfssEprAnalysisSpec,
@@ -60,6 +64,10 @@ __all__ = [
     "HandoffPlan",
     "HfssDrivenMode",
     "HfssDrivenSpec",
+    "HfssDrivenGeometrySpec",
+    "LumpedSupport",
+    "LumpedRlc",
+    "LumpedTerminalPort",
     "HfssEigenmodeSpec",
     "HfssEprAnalysisSpec",
     "HfssEprSpec",
@@ -94,6 +102,7 @@ __all__ = [
     "plot_epr_result",
     "prepare_handoff",
     "prepare_hfss_eigenmode_from_geometry",
+    "prepare_hfss_driven_from_geometry",
     "prepare_planar_geometry_input",
     "prepare_q3d_from_geometry",
     "reanalyze_epr",
@@ -104,3 +113,5 @@ __all__ = [
 ]
 
 from .specs.modeling import PhysicalLayerSpec
+
+from scgsim.geometry.models.lumped import LumpedSupport

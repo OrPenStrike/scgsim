@@ -24,6 +24,7 @@ from scgsim.aedt.epr.geometry import validate_geometry_workers
 from scgsim.aedt.epr.models import (
     EprAnalysisRequest,
     ExpressionCacheConvergence,
+    LumpedRlc,
     PreparedPlanarGeometry,
     detached,
 )
@@ -54,7 +55,9 @@ from scgsim.aedt.specs.common import (
 
 from scgsim.aedt.specs.modeling import Modeling
 
-from scgsim.aedt.specs.hfss import EigenmodeRunControl, HfssEprSpec
+from scgsim.aedt.specs.hfss import (EigenmodeRunControl, HfssEprSpec,
+                                     HfssDrivenGeometrySpec, HfssRunControl)
+from scgsim.aedt.specs.common import LumpedTerminalPort, TerminalPort
 
 
 def prepare_q3d_from_geometry(
@@ -104,12 +107,15 @@ def prepare_hfss_eigenmode_from_geometry(
     run_control: EigenmodeRunControl,
     output_dir: str | Path,
     epr_request: EprAnalysisRequest | None = None,
+    lumped_rlcs: Sequence[LumpedRlc] | None = None,
     expression_convergence: ExpressionCacheConvergence | None = None,
     geometry_workers: int | None = None,
     resources: AedtResources | None = None,
 ) -> HandoffPlan:
     """Prepare one portable body-first Eigenmode handoff without GDS."""
 
+    if lumped_rlcs is not None:
+        geometry = geometry.with_lumped_rlcs(lumped_rlcs)
     spec = HfssEprSpec(
         modeling=modeling,
         project_name=project_name,
@@ -119,6 +125,32 @@ def prepare_hfss_eigenmode_from_geometry(
         epr_request=epr_request,
         expression_convergence=expression_convergence,
     )
+    return _prepare_body_hfss_handoff(
+        spec=spec, geometry=geometry, output_dir=output_dir,
+        workflow="epr" if epr_request is not None else "body_first_eigenmode",
+        geometry_workers=geometry_workers, resources=resources,
+    )
+
+
+def prepare_hfss_driven_from_geometry(
+    *, modeling: Modeling, geometry: PreparedPlanarGeometry,
+    project_name: str, design_name: str, run_control: HfssRunControl,
+    ports: Sequence[TerminalPort | LumpedTerminalPort], output_dir: str | Path,
+    geometry_workers: int | None = None, resources: AedtResources | None = None,
+) -> HandoffPlan:
+    """Prepare a body-first Driven Terminal request with explicit port treatment."""
+    spec = HfssDrivenGeometrySpec(
+        modeling=modeling, geometry=geometry, project_name=project_name,
+        design_name=design_name, run_control=run_control, ports=tuple(ports),
+    )
+    return _prepare_body_hfss_handoff(
+        spec=spec, geometry=geometry, output_dir=output_dir,
+        workflow="body_first_driven_terminal", geometry_workers=geometry_workers, resources=resources,
+    )
+
+
+def _prepare_body_hfss_handoff(*, spec, geometry, output_dir, workflow, geometry_workers, resources):
+    """One canonical portable cohort writer for body-first HFSS requests."""
     validate_geometry_workers(geometry_workers)
     if resources is not None and not isinstance(resources, AedtResources):
         raise TypeError("resources must be AedtResources or None")
@@ -154,7 +186,6 @@ def prepare_hfss_eigenmode_from_geometry(
         "spec": spec_path.name,
         "receipt": "metadata/aedt_run_receipt.json",
     }
-    workflow = "epr" if epr_request is not None else "body_first_eigenmode"
     metadata = {
         "schema_version": "scgsim.aedt.handoff.v2",
         "expected_receipt_schema": RECEIPT_V3,

@@ -64,7 +64,7 @@ from scgsim.aedt.runtime.native.common import (
 
 from scgsim.aedt.specs.common import AedtResources, LOCKED_PYAEDT, REQUIRED_AEDT_VERSION
 
-from scgsim.aedt.specs.hfss import HfssDrivenSpec, HfssEigenmodeSpec, HfssEprAnalysisSpec, HfssEprSpec
+from scgsim.aedt.specs.hfss import HfssDrivenGeometrySpec, HfssDrivenSpec, HfssEigenmodeSpec, HfssEprAnalysisSpec, HfssEprSpec
 
 from scgsim.aedt.specs.parse import AedtSpec, parse_aedt_spec
 
@@ -150,13 +150,13 @@ def _execute(
     spec = parse_aedt_spec(_object(read_json(spec_path), "spec"), base_dir=run_dir)
     resources = _execution_resources(metadata, spec, cores, ram_limit_percent)
     if (
-        not isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec, Q2dSpec, Q3dSpec))
+        not isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec, HfssDrivenGeometrySpec, Q2dSpec, Q3dSpec))
         and spec.gds_path.resolve() != (run_dir / "geometry/design.gds").resolve()
     ):
         raise RuntimeError("prepared spec must use geometry/design.gds")
     valid_flags = (
         (
-            isinstance(spec, (HfssEprSpec, HfssDrivenSpec, HfssEigenmodeSpec, Q3dSpec))
+            isinstance(spec, (HfssEprSpec, HfssDrivenGeometrySpec, HfssDrivenSpec, HfssEigenmodeSpec, Q3dSpec))
             and not analyze_epr
         )
         or (isinstance(spec, HfssEprAnalysisSpec) and analyze_epr and not prepare_only)
@@ -340,6 +340,7 @@ def _execute(
                 "mesh": prepared.mesh,
                 "ports": prepared.ports,
                 "setup": prepared.setup,
+                **({"geometry": prepared.geometry} if prepared.geometry else {}),
                 "save": {"ok": True},
                 "solver_invoked": False,
             }
@@ -359,7 +360,7 @@ def _execute(
             status = "completed"
     except Exception as exc:  # noqa: BLE001 -- receipt must record any solver failure.
         failure = f"{type(exc).__name__}: {exc}"
-        if isinstance(spec, Q3dSpec):
+        if isinstance(spec, (Q3dSpec, HfssDrivenGeometrySpec, HfssEprSpec)):
             # Body notes retain source attribution/native context in the existing
             # failed-receipt error, after the primary exception.
             notes = getattr(exc, "__notes__", ())
@@ -394,7 +395,7 @@ def _execute(
             receipt["solver_invoked"] = epr_solver_attempted
         if (
             result is not None
-            and isinstance(spec, (Q3dSpec, HfssDrivenSpec, HfssEigenmodeSpec))
+            and isinstance(spec, (Q3dSpec, HfssDrivenGeometrySpec, HfssDrivenSpec, HfssEigenmodeSpec))
             and prepare_only
         ):
             if receipt.get("release") == {"ok": True}:
@@ -480,7 +481,7 @@ def _record_result_before_release(
     """Copy returned facts before releasing the one transaction-owned Desktop."""
 
     if (
-        isinstance(spec, (Q3dSpec, HfssDrivenSpec, HfssEigenmodeSpec))
+        isinstance(spec, (Q3dSpec, HfssDrivenGeometrySpec, HfssDrivenSpec, HfssEigenmodeSpec))
         and result.get("solver_invoked") is False
     ):
         for name in (
@@ -494,7 +495,7 @@ def _record_result_before_release(
             "solver_invoked",
         ):
             receipt[name] = result[name]
-        for name in ("nets", "ports", "mesh"):
+        for name in ("nets", "ports", "mesh", "geometry"):
             if name in result:
                 receipt[name] = result[name]
     elif isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec)):
@@ -520,6 +521,8 @@ def _record_result_before_release(
             receipt["benchmark"] = result["benchmark"]
     else:
         receipt["save"] = result["save"]
+        if "geometry" in result:
+            receipt["geometry"] = result["geometry"]
         if "benchmark" in result:
             receipt["benchmark"] = result["benchmark"]
 
@@ -635,7 +638,7 @@ def _canonical_metadata_files(
                 raise RuntimeError("analysis handoff saved paths are not canonical")
             expected[key] = value
     if (schema == "scgsim.aedt.handoff.v2") != (
-        workflow in {"body_first_eigenmode", "epr", "epr_analysis"}
+        workflow in {"body_first_driven_terminal", "body_first_eigenmode", "epr", "epr_analysis"}
     ):
         raise RuntimeError("handoff metadata workflow is inconsistent")
     if files != expected:
@@ -654,7 +657,7 @@ def _verify_prepared_hashes(
         raise RuntimeError("receipt source paths are not canonical")
     if file_sha256(spec_path) != _text(source.get("spec_sha256"), "source.spec_sha256"):
         raise RuntimeError("prepared spec hash mismatch")
-    if isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec)):
+    if isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec, HfssDrivenGeometrySpec)):
         expected_source_keys = {
             "spec",
             "spec_sha256",
@@ -704,7 +707,7 @@ def _verify_prepared_cohort(
     manifest = _object(read_json(manifest_path), "handoff manifest")
     expected_manifest_schema = (
         "scgsim.aedt.handoff-manifest.v2"
-        if isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec))
+        if isinstance(spec, (HfssEprAnalysisSpec, HfssEprSpec, HfssDrivenGeometrySpec))
         else "scgsim.aedt.handoff-manifest.v1"
     )
     if manifest.get("schema_version") != expected_manifest_schema:

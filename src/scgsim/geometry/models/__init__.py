@@ -39,6 +39,7 @@ from scgsim.geometry.models.input import (
     SourceCurveSpec,
     VacuumRegionSpec,
 )
+from scgsim.geometry.models.lumped import LumpedSupport
 from scgsim.geometry.models.regions import PortSheetOverlapRecord, PortSheetRegionRecord
 from scgsim.geometry.models.tags import (
     BackendEntityTagRecord,
@@ -88,6 +89,7 @@ __all__ = [
     "InterfaceKindLiteral",
     "InterfacePlanRecord",
     "LayoutPolygonSpec",
+    "LumpedSupport",
     "MMContactRecord",
     "PathInput",
     "PointPlanRecord",

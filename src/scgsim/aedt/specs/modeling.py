@@ -259,6 +259,41 @@ def _effective_geometry_input(build_input: Any, stack: Any, modeling: Modeling):
         if record is not None:
             record["geometry"] = geometry
             record["metadata"] = {**record.get("metadata", {}), "aedt_effective_layer": trace}
+    # The source vacuum recipe already declares the full enclosure. Map its
+    # endpoints once; a local film collapse must not recompute that enclosure
+    # from shorter effective bodies plus the original source padding.
+    from scgsim.geometry.planning.domain import _auto_vacuum_envelope_bounds
+
+    effective_input = replace(build_input, entities=tuple(entities))
+    for index, entity in enumerate(entities):
+        if not entity.metadata.get("is_auto_vacuum_region"):
+            continue
+        body_bounds = _auto_vacuum_envelope_bounds(effective_input, route="_effective")
+        bounds = {**entity.geometry["domain_bounds_um"],
+                  "z_min_um": entity.geometry["z_min_um"],
+                  "z_max_um": entity.geometry["z_max_um"]}
+        padding = {
+            f"{axis}_minus_um": body_bounds[f"{axis}_min_um"] - bounds[f"{axis}_min_um"]
+            for axis in ("x", "y", "z")
+        }
+        padding.update({
+            f"{axis}_plus_um": bounds[f"{axis}_max_um"] - body_bounds[f"{axis}_max_um"]
+            for axis in ("x", "y", "z")
+        })
+        envelope = {
+            "source_geometry": detached(entity.metadata["aedt_effective_layer"]["source_geometry"]),
+            "source_padding_um": detached(entity.metadata["vacuum_region_padding_um"]),
+            "effective_bounds_um": bounds,
+            "effective_body_bounds_um": body_bounds,
+            "effective_padding_um": padding,
+        }
+        entities[index] = replace(entity, metadata={**entity.metadata,
+                                                    "aedt_effective_envelope": envelope})
+        record = records.get(entity.metadata.get("source_semantic_id", entity.semantic_id))
+        if record is not None:
+            record["metadata"] = {**record.get("metadata", {}),
+                                  "aedt_effective_envelope": envelope}
+
     trace = {**mapping.to_payload(), "source_entity_layers": bindings,
              "source_stack_sha256": canonical_sha256(detached(stack))}
     effective_stack["metadata"] = {**effective_stack.get("metadata", {}), "aedt_modeling": trace}

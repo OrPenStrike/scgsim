@@ -1,4 +1,4 @@
-"""Detached EPR request, prepared geometry, saved-solution, and result records."""
+"""Detached HFSS geometry/treatments and EPR records. Saved model identity includes every authored electrical treatment."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import math
 
 from collections.abc import Mapping, Sequence
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from pathlib import Path
 
@@ -98,6 +98,39 @@ def canonical_sha256(value: Any) -> str:
         detached(value), ensure_ascii=True, separators=(",", ":"), sort_keys=True
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+@dataclass(frozen=True)
+class LumpedRlc:
+    """Electrical treatment of a neutral support; None disables a component."""
+
+    support_id: str
+    topology: Literal["series", "parallel"]
+    resistance_ohm: float | None = None
+    inductance_h: float | None = None
+    capacitance_f: float | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "support_id", _text(self.support_id, "support_id"))
+        if self.topology not in {"series", "parallel"}:
+            raise ValueError("lumped topology must be series or parallel")
+        for key in ("resistance_ohm", "inductance_h", "capacitance_f"):
+            value = getattr(self, key)
+            if value is not None:
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise TypeError(f"{key} must be numeric or None")
+                object.__setattr__(self, key, float(value))
+        if all(getattr(self, key) is None for key in ("resistance_ohm", "inductance_h", "capacitance_f")):
+            raise ValueError("lumped RLC requires an enabled component")
+
+    def to_payload(self) -> dict[str, Any]:
+        return {"support_id": self.support_id, "topology": self.topology,
+                "resistance_ohm": self.resistance_ohm, "inductance_h": self.inductance_h,
+                "capacitance_f": self.capacitance_f}
+
+    @classmethod
+    def from_payload(cls, value: Mapping[str, Any]) -> LumpedRlc:
+        return cls(**dict(value))
 
 
 @dataclass(frozen=True)
@@ -503,6 +536,7 @@ class PreparedPlanarGeometry:
     route: Route | None = None
     _historical_modeling: bool = field(default=False, repr=False, compare=False)
     _legacy_payload: bool = field(default=False, repr=False, compare=False)
+    lumped_rlcs: tuple[LumpedRlc, ...] = ()
 
     def __post_init__(self) -> None:
         if self._historical_modeling:
@@ -514,6 +548,10 @@ class PreparedPlanarGeometry:
             raise ValueError(
                 "new planar geometry requires explicit modeling without route alias"
             )
+        rlcs = tuple(self.lumped_rlcs)
+        if any(not isinstance(item, LumpedRlc) for item in rlcs):
+            raise TypeError("lumped_rlcs must contain LumpedRlc records")
+        object.__setattr__(self, "lumped_rlcs", rlcs)
         junctions = tuple(self.junctions)
         catalog = tuple(self.contribution_catalog)
         contributions = tuple(self.contributions)
@@ -532,6 +570,19 @@ class PreparedPlanarGeometry:
         )
         object.__setattr__(self, "contributions", contributions)
         source = _freeze(self.source)
+        if "lumped_supports" in source:
+            from scgsim.geometry.models.lumped import LumpedSupport
+            from scgsim.aedt.epr.geometry import _prepared_lumped_supports
+
+            supports = tuple(LumpedSupport.from_payload(item["source"]) for item in source["lumped_supports"])
+            derived = _prepared_lumped_supports(supports, source)
+            if detached(source["lumped_supports"]) != derived:
+                raise ValueError("serialized effective support geometry differs from its source map")
+        support_ids = {item["support_id"] for item in source.get("lumped_supports", ())}
+        if any(item.support_id not in support_ids for item in rlcs):
+            raise ValueError("RLC treatment references an undeclared neutral support")
+        if len({item.support_id for item in rlcs}) != len(rlcs):
+            raise ValueError("one support cannot own multiple RLC treatments")
         object.__setattr__(self, "source", source)
         object.__setattr__(
             self,
@@ -543,6 +594,7 @@ class PreparedPlanarGeometry:
                 **self._modeling_identity,
                 "source": source,
                 "junctions": [item.to_payload() for item in self.junctions],
+                **self._rlc_payload,
             }
         )
         if self.model_sha256 != expected_model:
@@ -552,6 +604,7 @@ class PreparedPlanarGeometry:
                 **self._modeling_identity,
                 "source": source,
                 "junctions": [item.to_payload() for item in self.junctions],
+                **self._rlc_payload,
                 "contribution_catalog": self.contribution_catalog,
                 "contributions": [item.to_payload() for item in self.contributions],
                 "surface_bindings": self.surface_bindings,
@@ -559,6 +612,25 @@ class PreparedPlanarGeometry:
         )
         if self.source_sha256 != expected:
             raise ValueError("prepared planar source digest is inconsistent")
+
+    @property
+    def _rlc_payload(self) -> dict[str, Any]:
+        return ({"lumped_rlcs": [item.to_payload() for item in self.lumped_rlcs]}
+                if self.lumped_rlcs else {})
+
+    def with_lumped_rlcs(self, treatments: Sequence[LumpedRlc]) -> PreparedPlanarGeometry:
+        """Bind treatment before execution; saved analysis retains this model identity."""
+        records = tuple(treatments)
+        if any(not isinstance(item, LumpedRlc) for item in records):
+            raise TypeError("treatments must contain LumpedRlc records")
+        model = {**self._modeling_identity, "source": self.source,
+                 "junctions": [item.to_payload() for item in self.junctions],
+                 **({"lumped_rlcs": [item.to_payload() for item in records]} if records else {})}
+        identity = {**model, "contribution_catalog": self.contribution_catalog,
+                    "contributions": [item.to_payload() for item in self.contributions],
+                    "surface_bindings": self.surface_bindings}
+        return replace(self, lumped_rlcs=records, model_sha256=canonical_sha256(model),
+                       source_sha256=canonical_sha256(identity))
 
     @property
     def _modeling_identity(self) -> dict[str, Any]:
@@ -578,6 +650,7 @@ class PreparedPlanarGeometry:
             **self._modeling_identity,
             "source": detached(self.source),
             "junctions": [item.to_payload() for item in self.junctions],
+            **self._rlc_payload,
             "contribution_catalog": [
                 detached(item) for item in self.contribution_catalog
             ],
@@ -605,6 +678,8 @@ class PreparedPlanarGeometry:
         if "modeling" in value:
             expected.remove("route")
             expected.add("modeling")
+        if "lumped_rlcs" in value:
+            expected.add("lumped_rlcs")
         schema = value.get("schema_version")
         if set(value) != expected or schema not in {
             "scgsim.aedt.epr-planar.v1",
@@ -612,6 +687,7 @@ class PreparedPlanarGeometry:
         }:
             raise ValueError("prepared planar payload is not canonical")
         return cls(
+            lumped_rlcs=tuple(LumpedRlc.from_payload(item) for item in value.get("lumped_rlcs", ())),
             modeling=value.get("modeling"),
             route=value.get("route"),
             _historical_modeling="modeling" not in value,

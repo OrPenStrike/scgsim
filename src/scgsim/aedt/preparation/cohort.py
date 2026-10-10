@@ -9,7 +9,7 @@ from pathlib import Path
 
 from scgsim.aedt._io import file_sha256, read_json
 
-from scgsim.aedt.specs.hfss import HfssEprAnalysisSpec, HfssEprSpec
+from scgsim.aedt.specs.hfss import HfssEprAnalysisSpec, HfssEprSpec, HfssDrivenGeometrySpec
 
 from scgsim.aedt.specs.parse import AedtSpec
 
@@ -31,7 +31,7 @@ def canonical_handoff_paths(spec: AedtSpec) -> list[str]:
     paths = ["run_aedt.sh", "aedt_spec.json"]
     if isinstance(spec, HfssEprAnalysisSpec):
         paths.extend(f"saved/{item['path']}" for item in spec.saved_solution.members)
-    elif not isinstance(spec, (HfssEprSpec, Q2dSpec, Q3dSpec)):
+    elif not isinstance(spec, (HfssEprSpec, HfssDrivenGeometrySpec, Q2dSpec, Q3dSpec)):
         paths.append("geometry/design.gds")
         if spec.modeling is not None:
             paths.append("geometry/source.gds")
@@ -89,7 +89,7 @@ def validate_geometry_source(
 
 def validate_hfss_import_source(root: Path, raw_payload: Mapping, spec: AedtSpec) -> None:
     """Bind explicit native import lineage to immutable original GDS bytes."""
-    if isinstance(spec, (HfssEprSpec, HfssEprAnalysisSpec, Q2dSpec, Q3dSpec)):
+    if isinstance(spec, (HfssEprSpec, HfssEprAnalysisSpec, HfssDrivenGeometrySpec, Q2dSpec, Q3dSpec)):
         return
     if spec.modeling is None:
         return  # Historical inventories retain their original source contract.

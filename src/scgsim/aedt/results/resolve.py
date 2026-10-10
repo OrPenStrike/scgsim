@@ -10,6 +10,7 @@ import math
 import re
 
 from dataclasses import dataclass
+from decimal import Decimal
 
 from pathlib import Path
 
@@ -49,7 +50,7 @@ from scgsim.aedt.runtime.benchmark import BENCHMARK_RELATIVE
 
 from scgsim.aedt.specs.common import ModalPort
 
-from scgsim.aedt.specs.hfss import HfssDrivenSpec, HfssEigenmodeSpec, HfssEprSpec
+from scgsim.aedt.specs.hfss import HfssDrivenGeometrySpec, HfssDrivenSpec, HfssEigenmodeSpec, HfssEprSpec
 
 from scgsim.aedt.specs.parse import parse_aedt_spec
 
@@ -88,6 +89,7 @@ class ResolvedRun:
     _setup_name: str | None = None
     _epr_requested: bool = False
     _epr_result: EprResult | None = None
+    _lumped_boundaries: tuple[dict[str, Any], ...] = ()
 
     def _verified_output(self, path: Path) -> Path:
         root = self.receipt_path.parent.parent
@@ -224,6 +226,8 @@ def _captured_fields(
         "_epr_requested": isinstance(spec, HfssEprSpec)
         and spec.epr_request is not None,
         "_epr_result": epr_result,
+        "_lumped_boundaries": tuple(receipt.get("geometry", {}).get("lumped_rlcs", ()))
+        + tuple(item for item in receipt.get("ports", ()) if item.get("kind") == "lumped"),
     }
 
 
@@ -297,7 +301,7 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
     spec = parse_aedt_spec(read_json(spec_path), base_dir=root, allow_historical_modeling=True)
     if receipt_schema in {RECEIPT_V2, RECEIPT_V3}:
         _validate_completion_cohort(root, receipt, spec)
-    if isinstance(spec, HfssEprSpec):
+    if isinstance(spec, (HfssEprSpec, HfssDrivenGeometrySpec)):
         expected_source = {
             "spec",
             "spec_sha256",
@@ -330,6 +334,9 @@ def resolve_results(run_dir: str | Path) -> ResolvedRun:
     ):
         raise RuntimeError("AEDT receipt mode is invalid")
     if isinstance(spec, HfssEprSpec):
+        _validate_lumped_readback(receipt, spec.geometry)
+        if spec.lumped_rlcs:
+            _validate_eigenmode_readback(receipt, spec)
         if receipt.get("workflow_status") != "completed":
             raise RuntimeError("body-first Eigenmode receipt is not a completed solve")
         if not isinstance(receipt.get("geometry"), dict) or not isinstance(
@@ -608,7 +615,7 @@ def _validate_completion_cohort(root: Path, receipt: dict[str, Any], spec: Any) 
         )
     metadata = read_json(metadata_path)
     manifest = read_json(manifest_path)
-    epr = isinstance(spec, HfssEprSpec)
+    epr = isinstance(spec, (HfssEprSpec, HfssDrivenGeometrySpec))
     expected_manifest_schema = (
         "scgsim.aedt.handoff-manifest.v2" if epr else "scgsim.aedt.handoff-manifest.v1"
     )
@@ -629,7 +636,9 @@ def _validate_completion_cohort(root: Path, receipt: dict[str, Any], spec: Any) 
     }
     if mode not in {"q2d", "q3d"} and not epr:
         expected_files["gds"] = "geometry/design.gds"
-    if epr and metadata.get("workflow") not in {"body_first_eigenmode", "epr"}:
+    if isinstance(spec, HfssDrivenGeometrySpec) and metadata.get("workflow") != "body_first_driven_terminal":
+        raise RuntimeError("body-first Driven Terminal preparation workflow is invalid")
+    if isinstance(spec, HfssEprSpec) and metadata.get("workflow") not in {"body_first_eigenmode", "epr"}:
         raise RuntimeError("body-first Eigenmode preparation workflow is invalid")
     if metadata.get("files") != expected_files:
         raise RuntimeError(f"completed {version} preparation file map is not canonical")
@@ -812,7 +821,10 @@ def _validate_readback(root: Path, receipt: dict[str, Any], spec: Any) -> None:
             "completed receipt is missing a two-port Touchstone readback"
         )
     if spec.mode == "terminal":
-        _validate_terminal_native_evidence(ports, spec)
+        if isinstance(spec, HfssDrivenGeometrySpec):
+            _validate_body_terminal_readback(receipt, spec)
+        else:
+            _validate_terminal_native_evidence(ports, spec)
     else:
         _validate_modal_native_evidence(ports, spec)
     _validate_hfss_setup_and_convergence(root, receipt, spec)
@@ -1816,11 +1828,16 @@ def _validate_normalized_matrices(
 
 
 def _validate_eigenmode_readback(
-    receipt: dict[str, Any], spec: HfssEigenmodeSpec
+    receipt: dict[str, Any], spec: HfssEigenmodeSpec | HfssEprSpec
 ) -> None:
-    if receipt.get("ports") != []:
-        raise RuntimeError("HFSS Eigenmode receipt must not contain ports")
     readback = receipt.get("result_readback")
+    if isinstance(spec, HfssEprSpec):
+        # Body-first loads belong to geometry; this producer has no ports field.
+        if "ports" in receipt:
+            raise RuntimeError("body-first Eigenmode receipt must not contain ports")
+        readback = readback.get("final_modes") if isinstance(readback, dict) else None
+    elif receipt.get("ports") != []:
+        raise RuntimeError("HFSS Eigenmode receipt must not contain ports")
     values = readback.get("eigenmodes") if isinstance(readback, dict) else None
     if not isinstance(values, dict):
         raise TypeError("completed receipt has no Eigenmode result readback")
@@ -1932,6 +1949,258 @@ def _validate_modal_native_evidence(ports: Any, spec: HfssDrivenSpec) -> None:
             )
         ):
             raise RuntimeError("completed receipt modal native evidence mismatch")
+
+
+def _validate_lumped_readback(receipt: dict[str, Any], prepared: Any) -> None:
+    """Bind current generic loads/supports; historical empty treatment is unchanged."""
+    from scgsim.aedt.epr.models import detached
+    from scgsim.aedt.runtime.native.hfss_lumped import rlc_scalar_si
+
+    supports = prepared.source.get("lumped_supports", ())
+    if not supports and not prepared.lumped_rlcs:
+        return
+    geometry = receipt.get("geometry")
+    if (
+        not isinstance(geometry, dict)
+        or geometry.get("source_sha256") != prepared.source_sha256
+    ):
+        raise RuntimeError("native support source identity differs")
+    native_supports = geometry.get("lumped_supports")
+    if not isinstance(native_supports, list) or len(native_supports) != len(supports):
+        raise RuntimeError("native support inventory differs")
+    by_id = {}
+    for requested, native in zip(supports, native_supports, strict=True):
+        requested = detached(requested)
+        if (
+            any(
+                native.get(key) != requested[key]
+                for key in ("support_id", "source", "effective")
+            )
+            or native.get("native_object_type") != "Sheet"
+            or not isinstance(native.get("native_object_id"), int)
+            or len(native.get("native_face_ids", ())) != 1
+        ):
+            raise RuntimeError("native neutral support attribution differs")
+        by_id[native["support_id"]] = native
+    records = geometry.get("lumped_rlcs", [])
+    if len(records) != len(prepared.lumped_rlcs):
+        raise RuntimeError("generic RLC inventory differs")
+    for treatment, record in zip(prepared.lumped_rlcs, records, strict=True):
+        support = by_id[treatment.support_id]
+        expected = {
+            "topology": treatment.topology,
+            "native_topology": {"series": "Serial", "parallel": "Parallel"}[
+                treatment.topology
+            ],
+            "contact_points_um": support["effective"]["contact_points_um"],
+            "resistance_ohm": treatment.resistance_ohm,
+            "inductance_h": treatment.inductance_h,
+            "capacitance_f": treatment.capacitance_f,
+        }
+        if (
+            record.get("support_id") != treatment.support_id
+            or record.get("source") != treatment.to_payload()
+            or record.get("requested") != expected
+            or record.get("object_name") != support["object_name"]
+            or record.get("native_object_id") != support["native_object_id"]
+            or record.get("native_face_ids") != support["native_face_ids"]
+        ):
+            raise RuntimeError("generic RLC source/native identity differs")
+        assignment = record.get("assignment", {})
+        if assignment.get("covered_objects") != [
+            support["object_name"]
+        ] or assignment.get("covered_faces") != sorted(support["native_face_ids"]):
+            raise RuntimeError("generic RLC assignment differs")
+        saved = record.get("saved_boundary", {})
+        positions = saved.get("CurrentLine", {}).get("GeometryPosition", ())
+        if (
+            saved.get("BoundType") != "Lumped RLC"
+            or record.get("saved_model_units") != "um"
+            or len(positions) != 2
+            or not _sha256_text(record.get("saved_project_sha256", ""))
+            or record.get("saved_contact_points_um") != expected["contact_points_um"]
+        ):
+            raise RuntimeError("saved generic RLC directed line evidence differs")
+        for point, position in zip(
+            record["saved_contact_points_um"], positions, strict=True
+        ):
+            if (
+                position.get("IsAttachedToEntity") is False
+                and position.get("PositionType") == "AbsolutePosition"
+            ):
+                if [float(position[axis + "Position"]) for axis in "XYZ"] != point:
+                    raise RuntimeError("saved generic RLC absolute position differs")
+            elif (
+                position.get("IsAttachedToEntity") is True
+                and position.get("PositionType") == "EdgeCenter"
+            ):
+                contacts = [
+                    item
+                    for item in record.get("attached_contact_edges", ())
+                    if item.get("edge_id") == position.get("EntityID")
+                ]
+                if (
+                    len(contacts) != 1
+                    or contacts[0].get("midpoint_um") != point
+                    or contacts[0].get("object_name") != support["object_name"]
+                    or contacts[0].get("native_object_id")
+                    != support["native_object_id"]
+                ):
+                    raise RuntimeError(
+                        "saved generic RLC attached edge identity unavailable"
+                    )
+            else:
+                raise RuntimeError("saved generic RLC line position kind unsupported")
+        properties = record.get("native_properties", {})
+        if properties.get("RLC Type") != expected["native_topology"]:
+            raise RuntimeError("generic RLC native topology differs")
+        for key, enable, prop in (
+            ("resistance_ohm", "Use Resist", "Resistance"),
+            ("inductance_h", "Use Induct", "Inductance"),
+            ("capacitance_f", "Use Cap", "Capacitance"),
+        ):
+            raw = properties.get(enable)
+            if raw in (True, "true", "True", 1):
+                enabled = True
+            elif raw in (False, "false", "False", 0):
+                enabled = False
+            else:
+                raise RuntimeError("generic RLC enable readback unavailable")
+            value = expected[key]
+            if enabled != (value is not None):
+                raise RuntimeError("generic RLC enable differs")
+            if enabled:
+                observed = rlc_scalar_si(properties.get(prop), key)
+                if observed != Decimal(str(value)) or observed != Decimal(
+                    record["normalized_values_si"][key]
+                ):
+                    raise RuntimeError("generic RLC native component value differs")
+
+
+def _validate_body_terminal_readback(
+    receipt: dict[str, Any], spec: HfssDrivenGeometrySpec
+) -> None:
+    from scgsim.aedt.specs.common import LumpedTerminalPort
+
+    geometry = receipt.get("geometry", {})
+    if geometry.get("source_sha256") != spec.geometry.source_sha256:
+        raise RuntimeError("body-first Terminal geometry source differs")
+    _validate_lumped_readback(receipt, spec.geometry)
+    conductors = spec.geometry.source["conductors"]
+    objects = geometry.get("objects", [])
+
+    def names(entity_ids: Any) -> list[str]:
+        result = []
+        for entity_id in entity_ids:
+            ids = {
+                item["semantic_id"]
+                for item in conductors
+                if entity_id in {item["semantic_id"], item["source_semantic_id"]}
+            }
+            matches = [
+                item["object_name"]
+                for item in objects
+                if item["kind"] == "conductor" and item["semantic_id"] in ids
+            ]
+            if not matches:
+                raise RuntimeError(
+                    "body-first Terminal source Entity has no native bodies"
+                )
+            result.extend(name for name in matches if name not in result)
+        return result
+
+    global_references = {
+        name
+        for port in spec.ports
+        for name in names(
+            port.reference_entity_ids
+            if isinstance(port, LumpedTerminalPort)
+            else port.reference_objects
+        )
+    }
+    for record, port in zip(receipt["ports"], spec.ports, strict=True):
+        reference_ids = (
+            port.reference_entity_ids
+            if isinstance(port, LumpedTerminalPort)
+            else port.reference_objects
+        )
+        expected = {
+            "signal_entity_ids": list(port.signal_entity_ids),
+            "reference_entity_ids": list(reference_ids),
+            "signal_objects": names(port.signal_entity_ids),
+            "reference_objects": names(reference_ids),
+        }
+        native = record.get("native", {})
+        requested = (
+            port.to_payload()
+            if isinstance(port, LumpedTerminalPort)
+            else {
+                "index": port.index,
+                "name": port.name,
+                "side": port.side,
+                "reference_objects": list(port.reference_objects),
+                "signal_entity_ids": list(port.signal_entity_ids),
+                "renormalize": False,
+                "deembed_um": port.deembed_um,
+            }
+        )
+        if record.get("requested") != requested:
+            raise RuntimeError("body-first Terminal authored treatment differs")
+        if isinstance(port, LumpedTerminalPort):
+            support = next(
+                item
+                for item in geometry["lumped_supports"]
+                if item["support_id"] == port.support_id
+            )
+            if (
+                record.get("support") != support
+                or record.get("object_name") != support["object_name"]
+            ):
+                raise RuntimeError("body-first Lumped support identity differs")
+        if (
+            record.get("index") != port.index
+            or record.get("boundary") != port.name
+            or record.get("source_binding") != expected
+            or not native.get("signal_objects")
+            or not set(native["signal_objects"]).issubset(expected["signal_objects"])
+            or set(native.get("reference_conductors", ())) != global_references
+        ):
+            raise RuntimeError("body-first Terminal native ownership differs")
+        terminal = native.get("saved_terminal", {})
+        boundary = native.get("saved_boundary", {})
+        expected_type = (
+            "Lumped Port" if isinstance(port, LumpedTerminalPort) else "Wave Port"
+        )
+        if (
+            boundary.get("BoundType") != expected_type
+            or native.get("terminal_properties", {}).get("Port Name") != port.name
+        ):
+            raise RuntimeError("body-first Terminal native family differs")
+        if [int(value) for value in boundary.get("Faces", ())] != [
+            record.get("face_id")
+        ]:
+            raise RuntimeError("body-first Terminal native support face differs")
+        edges = native.get("terminal_edges", [])
+        if not edges or [item["edge_id"] for item in edges] != [
+            int(value) for value in terminal.get("Edges", ())
+        ]:
+            raise RuntimeError("body-first Terminal native edge assignment differs")
+        if set(item["object_name"] for item in edges) != set(native["signal_objects"]):
+            raise RuntimeError("body-first Terminal contact ownership differs")
+        properties = native.get("boundary_properties", {})
+        terminal_properties = native.get("terminal_properties", {})
+        renorm = port.renormalize if isinstance(port, LumpedTerminalPort) else False
+        impedance = port.impedance_ohm if isinstance(port, LumpedTerminalPort) else 50
+        if (
+            properties.get("Type") != expected_type
+            or properties.get("Renorm All Terminals") != renorm
+            or properties.get("Deembed") != (not isinstance(port, LumpedTerminalPort))
+            or terminal_properties.get("Terminal Renormalizing Impedance")
+            != f"{impedance:g}ohm"
+        ):
+            raise RuntimeError(
+                "body-first Terminal native electrical treatment differs"
+            )
 
 
 def _validate_terminal_native_evidence(ports: Any, spec: HfssDrivenSpec) -> None:

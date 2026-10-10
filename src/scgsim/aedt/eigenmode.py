@@ -25,6 +25,7 @@ from .epr.models import (
     EprResult,
     ExpressionCacheConvergence,
     PlanarJunction,
+    LumpedRlc,
     PreparedPlanarGeometry,
     SurfaceEprSpec,
 )
@@ -54,6 +55,7 @@ class EigenmodeSim:
     surface_contributions: tuple[SurfaceEprSpec, ...] = ()
     surface_defaults: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     junctions: tuple[PlanarJunction, ...] = ()
+    lumped_rlcs: tuple[LumpedRlc, ...] = ()
     epr_request: EprAnalysisRequest | None = None
     expression_convergence: ExpressionCacheConvergence | None = None
     prepared_geometry: PreparedPlanarGeometry | None = field(default=None, init=False)
@@ -230,6 +232,15 @@ class EigenmodeSim:
         self.surface_contributions, self.surface_defaults = resolved, normalized
         self._invalidate_model()
 
+    def add_lumped_rlc(self, treatment: LumpedRlc) -> None:
+        """Apply an electrical treatment to an explicitly declared neutral support."""
+        if not isinstance(treatment, LumpedRlc):
+            raise TypeError("treatment must be LumpedRlc")
+        if treatment.support_id in {item.support_id for item in self.lumped_rlcs}:
+            raise ValueError("support already has an RLC treatment")
+        self.lumped_rlcs = (*self.lumped_rlcs, treatment)
+        self._invalidate_model()
+
     def add_junction(self, junction: PlanarJunction) -> None:
         if not isinstance(junction, PlanarJunction):
             raise TypeError("junction must be PlanarJunction")
@@ -312,6 +323,7 @@ class EigenmodeSim:
             ],
             "surface_defaults": self.surface_defaults,
             "junctions": [item.to_payload() for item in self.junctions],
+            "lumped_rlcs": [item.to_payload() for item in self.lumped_rlcs],
             "epr_request": (
                 None if self.epr_request is None else self.epr_request.to_payload()
             ),
@@ -345,6 +357,7 @@ class EigenmodeSim:
                 prepared_stack=source_stack,
                 modeling=self.modeling,
                 junctions=self.junctions,
+                lumped_rlcs=self.lumped_rlcs,
                 contributions=self.surface_contributions,
             )
         plan = prepare_hfss_eigenmode_from_geometry(

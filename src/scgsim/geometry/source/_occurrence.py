@@ -407,6 +407,44 @@ def _occurrence_port_polygon(
     return _occurrence_polygon_record(local, transform)
 
 
+def _lumped_ring_identity(ring):
+    """Exact source ring identity, independent only of start and traversal."""
+    points = tuple(tuple(point) for point in ring)
+    if points[0] == points[-1]:
+        points = points[:-1]
+    reverse = tuple(reversed(points))
+    return min(
+        order[index:] + order[:index]
+        for order in (points, reverse)
+        for index in range(len(order))
+    )
+
+
+def _occurrence_lumped_polygon(support, *, cell, excluded_reference_indexes=()):
+    """Bind the complete authored local ring to actual original GDS geometry."""
+    from scgsim.geometry._primitives.loops import _split_gdstk_cutline_loop
+
+    declared = (
+        _lumped_ring_identity(support.exterior),
+        sorted(_lumped_ring_identity(ring) for ring in support.holes),
+    )
+    selected = []
+    for polygon in _polygons_by_layer(
+        cell, excluded_reference_indexes=excluded_reference_indexes
+    ).get(support.source_layer, ()):
+        exterior, holes = _split_gdstk_cutline_loop(_ring_from_gdstk_polygon(polygon))
+        local = LayoutPolygonSpec(support.source_polygon_id, "", exterior, holes)
+        actual = (
+            _lumped_ring_identity(exterior),
+            sorted(_lumped_ring_identity(ring) for ring in holes),
+        )
+        if actual == declared:
+            selected.append(local)
+    if len(selected) != 1:
+        raise ValueError(f"lumped support {support.support_id!r} matched {len(selected)} source polygons")
+    return selected[0]
+
+
 def _occurrence_include_polygon(
     record: Mapping[str, Any],
     *,
