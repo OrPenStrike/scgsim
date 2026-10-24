@@ -65,20 +65,32 @@ state and repository delivery separately in
 [the convergence status page](docs/convergence-status.qmd).
 
 The required delivery route is a pull request with required checks and no
-bypass. Develop branch protection is configured with a required check and no
-bypass; the hosted required check for a candidate must still complete before
-integration. Public CI uses repository-visible inputs. Pull request events,
-including drafts, pushes to `develop` or `main`, and manual dispatch run a
-Python 3.12/3.13 matrix that checks the package-version contract, builds the
-distribution, and verifies editable-source and wheel imports. A Python 3.12
-offline job runs the full public non-native test suite,
-strict Pyright on the three configured modules, and Ruff F on tracked Python
-files. A separate Python 3.12 `docs-smoke` job runs current source examples
-through file-only preparation with the pinned public PDK. The required job
-passes only when all three jobs succeed. CI does not run AEDT or Palace native
-solvers or private golden data. The Pages render runs on `develop` and `main`
-pushes or manual dispatch, with code execution disabled; it is not a
-pull-request check.
+bypass. The literal `required` check always reaches a terminal result and
+accepts only the results declared for the selected change scope. Failed or
+cancelled jobs and unexpected skips remain failures.
+
+CI first classifies the exact event comparison. Draft pull requests run this
+classification and intentionally skip product jobs; marking a pull request
+Ready starts the applicable checks. Proven Markdown prose changes in
+`README.md` or `docs/**/*.md` receive local Markdown link-path validation.
+Documents with inline-code ambiguity stay on the product path. Executable or
+unsupported content, QMD/Notebook files, shared settings, dependencies and source
+changes also use the product checks. An unavailable comparison also uses
+the product checks.
+
+Non-Draft product changes and manual dispatch retain the Python 3.12/3.13
+package-version, distribution-build, editable-import and isolated-wheel-import
+checks. The Python 3.12 offline job runs the full public offline test suite,
+strict Pyright on the three configured modules and Ruff F on tracked Python
+files. The separate Python 3.12 `docs-smoke` job runs current source examples
+through file-only preparation with the pinned public PDK. CI uses public
+inputs and excludes private golden data; it does not invoke AEDT or Palace
+solvers.
+
+Pages renders the frozen version catalogue, stable pages and history on
+`develop` and `main` pushes or manual dispatch, with code execution disabled.
+It remains separate because this coverage differs from file-only preparation;
+it is not a pull-request check.
 
 For each fix pull request, include a regression case or explain why one is not
 included, the alternative evidence used, and any remaining gap. For calculation

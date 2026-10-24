@@ -20,7 +20,180 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  change-scope:
+    runs-on: ubuntu-latest
+    outputs:
+      lane: ${{ steps.classify.outputs.lane }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Classify the exact event comparison and validate prose links
+        id: classify
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python - <<'PYTHON'
+          import difflib
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+          from urllib.parse import unquote, urlsplit
+
+          safe_path = re.compile(r"(?:docs/(?:.+/)?[^/]+\.md|README\.md)\Z")
+          fence = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+          inline_code = re.compile(r"`")
+          markup = re.compile(r"<!--|-->|<[^>]*>|\{\{|\}\}|\{%|%\}|<%|%>|\\\(|\\\)|:::|\{\s*(?:python|r|julia|ojs)(?:\s|[,}])", re.I)
+          image = re.compile(r"!\[[^]]*\]\(")
+          inline_link = re.compile(r"(?<!!)\[([^]\n]+)\]\(([^()\s]+)(?:\s+['\"][^\n]*?['\"])?\)")
+          yaml_delimiter = re.compile(r"^(?:\ufeff)?(?:---|\.\.\.)\s*$")
+
+          def git(*args):
+              return subprocess.run(["git", *args], check=True, capture_output=True).stdout
+
+          def tree_entry(revision, path):
+              return git("ls-tree", "-z", revision, "--", path)
+
+          def regular_file(revision, path):
+              entry = tree_entry(revision, path)
+              if not entry:
+                  return True
+              metadata = entry.split(b"\t", 1)[0].split()
+              return len(metadata) == 3 and metadata[0] == b"100644" and metadata[1] == b"blob"
+
+          def read_at(revision, path):
+              if not tree_entry(revision, path):
+                  return ""
+              return git("show", f"{revision}:{path}").decode("utf-8")
+
+          def safe_link_syntax(line):
+              if image.search(line):
+                  return False
+              remainder = inline_link.sub("", line)
+              return "[" not in remainder and "]" not in remainder
+
+          def has_frontmatter(text):
+              lines = text.splitlines()
+              if not lines or lines[0].lstrip("\ufeff").strip() != "---":
+                  return False
+              return any(yaml_delimiter.fullmatch(line.strip()) for line in lines[1:])
+
+          def prose_indices(text, include_ambiguous=False):
+              lines = text.splitlines()
+              prose = set()
+              in_frontmatter = bool(lines and lines[0].lstrip("\ufeff").strip() == "---")
+              fence_char = None
+              fence_size = 0
+              for index, line in enumerate(lines):
+                  if in_frontmatter:
+                      if index and yaml_delimiter.fullmatch(line.strip()):
+                          in_frontmatter = False
+                      continue
+                  marker = fence.match(line)
+                  if fence_char is not None:
+                      if marker and marker.group(1)[0] == fence_char and len(marker.group(1)) >= fence_size and not marker.group(2).strip():
+                          fence_char = None
+                      continue
+                  if marker:
+                      fence_char, fence_size = marker.group(1)[0], len(marker.group(1))
+                      continue
+                  if (line.startswith("\ufeff") or yaml_delimiter.fullmatch(line.strip())
+                      or line.startswith(("    ", "\t"))):
+                      continue
+                  if not include_ambiguous and (markup.search(line)
+                      or image.search(line) or not safe_link_syntax(line)):
+                      continue
+                  prose.add(index)
+              return prose
+
+          def prose_change(before, after):
+              if (markup.search(before) or markup.search(after)
+                  or has_frontmatter(before) or has_frontmatter(after)):
+                  return False
+              old, new = before.splitlines(), after.splitlines()
+              ambiguous_old = prose_indices(before, include_ambiguous=True)
+              ambiguous_new = prose_indices(after, include_ambiguous=True)
+              if any(inline_code.search(lines[index]) for lines, indices in ((old, ambiguous_old), (new, ambiguous_new)) for index in indices):
+                  return False
+              old_prose, new_prose = prose_indices(before), prose_indices(after)
+              for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(a=old, b=new, autojunk=False).get_opcodes():
+                  if tag == "equal":
+                      continue
+                  if any(i not in old_prose or not safe_link_syntax(old[i]) for i in range(i1, i2)):
+                      return False
+                  if any(j not in new_prose or not safe_link_syntax(new[j]) for j in range(j1, j2)):
+                      return False
+              return True
+
+          def local_links(path, text, root):
+              lines = text.splitlines()
+              ambiguous = prose_indices(text, include_ambiguous=True)
+              if any(inline_code.search(lines[index]) for index in ambiguous):
+                  raise SystemExit(f"ambiguous inline code in affected Markdown prose: {path}")
+              for index in prose_indices(text):
+                  line = lines[index]
+                  for match in inline_link.finditer(line):
+                      target = match.group(2)
+                      parsed = urlsplit(target)
+                      if parsed.scheme or parsed.netloc or target.startswith(("#", "mailto:")):
+                          continue
+                      relative = unquote(parsed.path)
+                      if not relative:
+                          continue
+                      resolved = (root / relative.lstrip("/")) if relative.startswith("/") else (root / path).parent / relative
+                      try:
+                          resolved.resolve(strict=True).relative_to(root.resolve())
+                      except (FileNotFoundError, ValueError):
+                          raise SystemExit(f"broken or out-of-repository Markdown link in {path}: {target}")
+
+          event = os.environ.get("EVENT_NAME", "")
+          action = os.environ.get("EVENT_ACTION", "")
+          base = os.environ.get("BASE_SHA", "")
+          head = os.environ.get("HEAD_SHA", "")
+          lane = "product"
+          if event == "pull_request" and action in {"opened", "synchronize", "reopened", "ready_for_review"}:
+              compare = (base, head)
+          elif event == "push":
+              compare = (base, head)
+          else:
+              compare = ("", "")
+          if all(re.fullmatch(r"[0-9a-f]{40}", value or "") for value in compare):
+              try:
+                  raw_paths = git("diff", "--name-only", "-z", compare[0], compare[1])
+                  paths = [item.decode("utf-8") for item in raw_paths.split(b"\0") if item]
+                  if paths and all(safe_path.fullmatch(path) for path in paths):
+                      root = Path.cwd().resolve()
+                      lane = "docs"
+                      postimages = {}
+                      for path in paths:
+                          if not all(regular_file(revision, path) for revision in compare):
+                              lane = "product"
+                              break
+                          before, after = (read_at(revision, path) for revision in compare)
+                          if not prose_change(before, after):
+                              lane = "product"
+                              break
+                          postimages[path] = after if tree_entry(head, path) else None
+                      if lane == "docs" and not (event == "pull_request" and os.environ.get("IS_DRAFT") == "true"):
+                          for path, content in postimages.items():
+                              if content is not None:
+                                  local_links(path, content, root)
+              except (subprocess.CalledProcessError, UnicodeDecodeError, OSError):
+                  lane = "product"
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"lane={lane}\n")
+          print(f"classified comparison as {lane}")
+          PYTHON
+
   build-and-import:
+    needs: change-scope
+    if: (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.change-scope.outputs.lane == 'product'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -116,6 +289,8 @@ jobs:
           print(pathlib.Path(scgsim.__file__).resolve())
           PY
   offline:
+    needs: change-scope
+    if: (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.change-scope.outputs.lane == 'product'
     name: Offline tests and Ruff F (Python 3.12)
     runs-on: ubuntu-latest
     steps:
@@ -163,6 +338,8 @@ jobs:
           PYTHON
 
   docs-smoke:
+    needs: change-scope
+    if: (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.change-scope.outputs.lane == 'product'
     name: Current documentation file-only preparation (Python 3.12)
     runs-on: ubuntu-latest
     env:
@@ -209,25 +386,35 @@ jobs:
   required:
     name: required
     if: ${{ always() }}
-    needs: [build-and-import, offline, docs-smoke]
+    needs: [change-scope, build-and-import, offline, docs-smoke]
     runs-on: ubuntu-latest
     steps:
       - name: Require every necessary job to succeed
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
+          EVENT_NAME: ${{ github.event_name }}
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
+          LANE: ${{ needs.change-scope.outputs.lane }}
         run: |
           python - <<'PYTHON'
           import json
           import os
 
           results = json.loads(os.environ["NEEDS_JSON"])
-          expected = {"build-and-import", "offline", "docs-smoke"}
+          expected = {"change-scope", "build-and-import", "offline", "docs-smoke"}
           if set(results) != expected:
               raise SystemExit("Required job result inventory differs")
-          unsuccessful = {
-              name: job["result"] for name, job in results.items()
-              if job["result"] != "success"
-          }
-          if unsuccessful:
-              raise SystemExit(f"Required jobs did not succeed: {unsuccessful}")
+          if results["change-scope"]["result"] != "success":
+              raise SystemExit("Change classifier or prose-link validation did not succeed")
+          lane = os.environ["LANE"]
+          if lane not in {"docs", "product"}:
+              raise SystemExit(f"Invalid classified lane: {lane!r}")
+          jobs = {name: results[name]["result"] for name in ("build-and-import", "offline", "docs-smoke")}
+          if os.environ["EVENT_NAME"] == "pull_request" and os.environ["IS_DRAFT"] == "true":
+              expected_result = "skipped"
+          else:
+              expected_result = "skipped" if lane == "docs" else "success"
+          unexpected = {name: result for name, result in jobs.items() if result != expected_result}
+          if unexpected:
+              raise SystemExit(f"Required jobs did not match {lane}/{expected_result}: {unexpected}")
           PYTHON
