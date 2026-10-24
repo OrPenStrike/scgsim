@@ -1,54 +1,25 @@
 ## Change
 
-- Behavior or maintenance scope:
-- Semantic state: `CONVERGING` / `ACCEPTED` / `STABILIZED`:
-- Delivery state:
+Describe the problem, resulting behavior and affected users. Include a concrete
+before/after example when useful, and identify any compatibility or migration
+change.
 
-## Analytic correctness evidence
+## Validation
 
-- Independent public analytic regression (normalization, participation, and group identities):
-- If no regression case is included, why not:
-- Alternative evidence used:
-- Remaining gap:
+List the checks actually run, their outcomes and any remaining coverage gap.
+For a `fix:` PR, name the regression test; if unavailable, explain why and give
+the alternative evidence. Follow [MAINTAINING.md](../MAINTAINING.md) for the
+current CI and test procedures.
 
-A historical aggregate whose calculation procedure is unknown is not a correctness
-oracle; do not derive a tolerance from it.
-
-## Returned-data compatibility
-
-- Status: `COMPLETED` / `IN PROGRESS` / `NOT RUN` / `NOT APPLICABLE`
-- Permitted artifact hashes, identity, and receipt references:
-- Raw-record preservation in the public result, including unknown values:
-- Missing-input, content-mismatch, and identity-mismatch outcomes:
-
-Keep private values, names, paths, and payloads out of public text.
-
-## Public CI and Tier A evidence
-
-Public CI uses repository-visible inputs. Pull request events, including
-drafts, pushes to `develop` or `main`, and manual dispatch run a Python
-3.12/3.13 matrix that checks the package-version contract, builds the
-distribution, and verifies editable-source and wheel imports. The
-Python 3.12 offline job runs the full public non-native test suite, strict
-Pyright on the three configured modules, and Ruff F on tracked Python files.
-A separate Python 3.12 `docs-smoke` job runs current source examples through
-file-only preparation with the pinned public PDK; the required job passes only
-when all three jobs succeed. CI does not invoke AEDT or Palace native solvers
-or read private golden data. Pages rendering on `develop` and `main` pushes or
-manual dispatch is separate from pull-request CI.
-
-- Affected Tier A behavior: `yes` / `no`
-- Assigned private golden evidence: `COMPLETED` / `NOT RUN` / `NOT APPLICABLE`
-- If `NOT RUN`, state the unavailable data or access and the affected claim:
-
-Keep private golden data outside this repository. A public CI pass does not
-substitute for required Tier A evidence.
+For scientific calculations, distinguish formula-based correctness checks from
+returned-data compatibility. An aggregate with an unknown calculation procedure
+is not a numerical oracle. For affected HFSS/EPR or batch paths (Tier A), record
+assigned private-golden checks as `COMPLETED`, `NOT RUN` or `NOT APPLICABLE`, and
+state the affected claim when data or access is unavailable. Keep private data,
+values, names and paths out of public text.
 
 ## Delivery
 
-- Target branch:
-- Required PR checks: `pending` / `complete` (identify the actual checks):
-- Develop required-check/no-bypass protection: configured; candidate's required hosted check: `pending` / `complete` (link the actual run):
-
-CI status does not determine semantic acceptance. See the
-[engineering convergence status](../docs/convergence-status.qmd).
+Link the actual required CI results and identify any remaining delivery action.
+Report Human acceptance only when explicitly given; passing CI does not imply
+acceptance or native verification.
