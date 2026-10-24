@@ -1,8 +1,18 @@
 # SCGSim Agent Guide
 
-`OrPenStrike/scgsim` is SCQ_Design's sole current reusable solver, runtime,
-and result-production authority. The SCGSim Development Lead is the sole owner
-of tracked source in this repository.
+`NCUPHY-LTLab/scgsim` is SCQ_Design's sole current reusable solver, runtime,
+and result-production authority. SCGSim Documentation independently owns
+README files, guides, explanations of established APIs, document code examples,
+site navigation, links, anchors, cards, CSS/theme adoption, and
+documentation-only configuration or rendering helpers through its own workers.
+Development owns product/runtime/schema behavior and scientific/model meaning.
+
+After protecting active writers through the one-time handoff, ordinary
+documentation work needs no new Development release or prose approval.
+Coordinate only actual overlapping hunks. Notify Development for
+synchronization and send the exact candidate to the original Git owner for
+commit, push, and remote readback; this delivery does not transfer authoring.
+Documentation ownership does not authorize new solver or scientific execution.
 
 Use the `develop-main` delivery profile. Route collaboration,
 lifecycle, ownership, and delivery policy through `$scq-collaboration-roles`,
