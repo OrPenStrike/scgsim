@@ -57,7 +57,7 @@ from .specs.hfss import (
 )
 from .specs.parse import AedtSpec, parse_aedt_spec
 from .specs.q2d import Q2dConductorSpec, Q2dRectangleSpec, Q2dSpec
-from .specs.q3d import Q3dBodySpec, Q3dNetSpec, Q3dSpec
+from .specs.q3d import Q3dBodySpec, Q3dNetSpec, Q3dSpec, Q3dTerminalPair
 
 __all__ = [
     "AedtResources",
@@ -99,6 +99,7 @@ __all__ = [
     "Q3dBodySpec",
     "Q3dNetSpec",
     "Q3dSpec",
+    "Q3dTerminalPair",
     "ResolvedRun",
     "SavedSolution",
     "SurfaceEprSpec",

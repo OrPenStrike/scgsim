@@ -60,6 +60,7 @@ from scgsim.aedt.specs.common import (
 )
 
 from scgsim.aedt.specs.modeling import Modeling
+from scgsim.aedt.specs.q3d import Q3dTerminalPair
 
 from scgsim.aedt.specs.hfss import (EigenmodeRunControl, HfssEprSpec,
                                      HfssDrivenGeometrySpec, HfssRunControl)
@@ -77,6 +78,7 @@ def prepare_q3d_from_geometry(
     materials: Mapping[str, PdkMaterial],
     net_types: Mapping[str, Literal["Signal", "Ground"]],
     physical_ground_nets: Sequence[str],
+    terminal_pairs: Mapping[str, Q3dTerminalPair] | None = None,
     run_control: MatrixRunControl | None = None,
     region_padding_um: Sequence[float],
     resources: AedtResources | None = None,
@@ -87,6 +89,8 @@ def prepare_q3d_from_geometry(
     of physical ground roles. Component/PDK source geometry remains unchanged;
     generated import layers, source trace and originals travel in the handoff.
     Omitted run_control declares model-only preparation without solve setup.
+    Optional terminal_pairs map final Net IDs to exact source Entity identities
+    and caller-selected global sides; each selected Entity must emit one body.
     """
     from scgsim.aedt.preparation.q3d_geometry import lower_q3d_geometry
 
@@ -101,6 +105,7 @@ def prepare_q3d_from_geometry(
             materials=materials,
             net_types=net_types,
             physical_ground_nets=physical_ground_nets,
+            terminal_pairs=terminal_pairs,
             run_control=run_control,
             region_padding_um=region_padding_um,
         )

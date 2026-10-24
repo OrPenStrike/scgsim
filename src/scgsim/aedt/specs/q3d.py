@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, field as dataclass_field
 
 from pathlib import Path
 
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from scgsim.aedt.specs.modeling import (
     Modeling, PhysicalLayerSpec, PhysicalLayerDeclaration, PhysicalRepresentationPlan, _physical_layers_from_payload, _request_modeling, _modeling_payload, _effective_record, _source_record_payload, _verify_effective_records,
@@ -30,6 +30,26 @@ from scgsim.aedt.specs.common import (
     _project_name_from_payload,
     _text,
 )
+
+
+@dataclass(frozen=True)
+class Q3dTerminalPair:
+    """Caller-selected global terminal sides on exact source Entity identities.
+
+    Each selected Entity must lower to exactly one body. Final Net ownership
+    is validated by Q3dNetSpec after resolving these source identities.
+    """
+
+    source_entity_id: str
+    source_side: Side
+    sink_entity_id: str
+    sink_side: Side
+
+    def __post_init__(self) -> None:
+        for name in ("source_entity_id", "sink_entity_id"):
+            object.__setattr__(self, name, _text(getattr(self, name), name))
+        if self.source_side not in get_args(Side) or self.sink_side not in get_args(Side):
+            raise ValueError("Q3D source and sink sides are invalid")
 
 
 @dataclass(frozen=True)

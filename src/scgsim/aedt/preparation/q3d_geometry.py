@@ -28,7 +28,7 @@ from scgsim.aedt.specs.common import MatrixRunControl, PdkMaterial
 from scgsim.aedt.specs.modeling import Modeling
 from scgsim.aedt.preparation.modeling import _interpret_geometry
 
-from scgsim.aedt.specs.q3d import Q3dBodySpec, Q3dNetSpec, Q3dSpec
+from scgsim.aedt.specs.q3d import Q3dBodySpec, Q3dNetSpec, Q3dSpec, Q3dTerminalPair
 
 
 def _entity_polygons(entity, polygons):
@@ -59,6 +59,7 @@ def lower_q3d_geometry(
     materials: Mapping[str, PdkMaterial],
     net_types: Mapping[str, Literal["Signal", "Ground"]],
     physical_ground_nets: Sequence[str],
+    terminal_pairs: Mapping[str, Q3dTerminalPair] | None = None,
     run_control: MatrixRunControl | None = None,
     region_padding_um: Sequence[float],
 ) -> Q3dSpec:
@@ -66,6 +67,11 @@ def lower_q3d_geometry(
     aedt_version = normalize_aedt_version(aedt_version)
     if not isinstance(snapshot, GeometryPlanSnapshot):
         raise TypeError("snapshot must be GeometryPlanSnapshot")
+    if terminal_pairs is not None and not isinstance(terminal_pairs, Mapping):
+        raise TypeError("terminal_pairs must map final Net IDs to Q3dTerminalPair")
+    pairs = {} if terminal_pairs is None else dict(terminal_pairs)
+    if any(not isinstance(pair, Q3dTerminalPair) for pair in pairs.values()):
+        raise TypeError("terminal_pairs values must be Q3dTerminalPair")
     source = snapshot.geometry_input
     if source.boundary_curves or source.boundary_reconstruction:
         raise NotImplementedError(
@@ -85,6 +91,8 @@ def lower_q3d_geometry(
     net_ids = {entity.net_id for entity in conductors}
     if set(net_types) != net_ids:
         raise ValueError("net_types must cover exactly the final conductor Nets")
+    if not set(pairs) <= net_ids:
+        raise ValueError("terminal_pairs must select final conductor Nets")
     ground_nets = tuple(physical_ground_nets)
     if isinstance(physical_ground_nets, str | bytes) or not set(ground_nets) <= net_ids:
         raise ValueError("physical_ground_nets must select final conductor Nets")
@@ -181,6 +189,32 @@ def lower_q3d_geometry(
             )
             if entity.material_kind == "conductor":
                 members[entity.net_id].append(body_id)
+    bodies_by_entity = {}
+    for body in bodies:
+        bodies_by_entity.setdefault(body.source_entity_id, []).append(body.body_id)
+
+    def terminal_body(entity_id: str) -> str:
+        matches = bodies_by_entity.get(entity_id, ())
+        if not matches:
+            raise ValueError(f"Q3D terminal source Entity {entity_id!r} has no emitted body")
+        if len(matches) != 1:
+            raise ValueError(
+                f"Q3D terminal source Entity {entity_id!r} maps to multiple bodies"
+            )
+        return matches[0]
+
+    nets = []
+    for net_id in sorted(net_ids):
+        pair = pairs.get(net_id)
+        nets.append(Q3dNetSpec(
+            name=net_id,
+            net_type=net_types[net_id],
+            object_names=tuple(members[net_id]),
+            source_object=None if pair is None else terminal_body(pair.source_entity_id),
+            source_side=None if pair is None else pair.source_side,
+            sink_object=None if pair is None else terminal_body(pair.sink_entity_id),
+            sink_side=None if pair is None else pair.sink_side,
+        ))
     directory.mkdir(parents=True, exist_ok=True)
     original_path = directory / "source.gds"
     original_path.write_bytes(snapshot.gds_bytes)
@@ -228,10 +262,7 @@ def lower_q3d_geometry(
         materials=materials,
         vacuum_material_id=vacuum_id,
         bodies=tuple(bodies),
-        nets=tuple(
-            Q3dNetSpec(net_id, net_types[net_id], tuple(members[net_id]))
-            for net_id in sorted(net_ids)
-        ),
+        nets=tuple(nets),
         run_control=run_control,
         region_padding_um=region_padding_um,
         solve_ac_rl=False,
