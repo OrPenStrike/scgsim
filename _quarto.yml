@@ -20,12 +20,12 @@ website:
   search:
     location: navbar
     type: overlay
-  repo-url: https://github.com/OrPenStrike/scgsim
+  repo-url: https://github.com/NCUPHY-LTLab/scgsim
   repo-actions: [source, issue]
   page-footer:
     right:
-      - text: "Maintainer guide"
-        href: docs/ownership.qmd
+      - text: "Contributing"
+        href: docs/contributing.qmd
   navbar:
     left:
       - text: "Overview"
@@ -35,7 +35,9 @@ website:
       - text: "Concept"
         href: docs/concepts/problems.qmd
       - text: "Contract"
-        href: docs/backend-support.qmd
+        href: docs/reference.qmd
+      - text: "Contribution"
+        href: docs/contributing.qmd
   sidebar:
     - id: overview
       title: "Pages"
@@ -50,40 +52,41 @@ website:
       collapse-level: 1
       contents:
         - docs/examples.qmd
-        - section: "Getting Started"
+        - docs/course/installation.qmd
+        - section: "By simulation goal"
           contents:
-            - docs/course/installation.qmd
             - docs/tutorials/capacitance.qmd
+            - docs/tutorials/resonance.qmd
             - docs/tutorials/resonance-epr.qmd
-        - section: "Working with Your Model"
+            - docs/tutorials/scattering.qmd
+            - docs/tutorials/transmission-line.qmd
+        - section: "Prepare and inspect a model"
           contents:
             - docs/course/working-model.qmd
             - docs/course/source-observations.qmd
-            - docs/course/solver-observations.qmd
-            - docs/course/returned-results.qmd
             - docs/course/aedt-inputs.qmd
-            - docs/course/palace-electrostatic.qmd
-            - docs/course/palace-eigenmode.qmd
-            - docs/course/palace-surface-bands.qmd
-            - docs/course/aedt-eigenmode.qmd
-            - docs/course/aedt-driven-modal.qmd
-            - docs/course/aedt-driven-terminal.qmd
-            - docs/course/aedt-q3d.qmd
-            - docs/course/aedt-q2d.qmd
-        - section: "Historical references"
-          contents:
-            - docs/history/aedt-capacitance-pre-v3.qmd
-        - section: "Advanced"
+            - docs/course/solver-observations.qmd
+        - section: "Execute and read results"
           contents:
             - docs/course/execute.qmd
-            - docs/course/aedt-hpc-sweep.qmd
+            - docs/course/returned-results.qmd
             - docs/course/aedt-saved-fields.qmd
             - docs/course/offline-epr.qmd
-            - section: "Flip-chip Xmon example"
-              contents:
-                - docs/tutorial-xmon-input.qmd
-                - docs/tutorial-xmon-palace.qmd
-                - docs/tutorial-xmon-aedt.qmd
+        - section: "Backend examples"
+          contents:
+            - docs/course/palace-electrostatic.qmd
+            - docs/course/palace-surface-bands.qmd
+            - docs/course/aedt-eigenmode.qmd
+            - docs/course/aedt-q3d.qmd
+            - docs/course/aedt-hpc-sweep.qmd
+        - section: "Flip-chip Xmon examples"
+          contents:
+            - docs/tutorial-xmon-input.qmd
+            - docs/tutorial-xmon-palace.qmd
+            - docs/tutorial-xmon-aedt.qmd
+        - section: "Historical reference"
+          contents:
+            - docs/history/aedt-capacitance-pre-v3.qmd
     - id: concept
       title: "Pages"
       style: floating
@@ -98,20 +101,41 @@ website:
       style: floating
       collapse-level: 1
       contents:
-        - docs/convergence-status.qmd
+        - docs/reference.qmd
         - docs/backend-support.qmd
-        - section: "Public contracts"
+        - section: "Geometry and physical model"
           contents:
             - docs/geometry-sgb.qmd
+            - docs/geometry-preview.qmd
+            - docs/specs/physical-representation.qmd
             - docs/specs/palace-electrostatic-sgb.qmd
             - docs/specs/palace-eigenmode.qmd
+        - section: "Execution and results"
+          contents:
             - docs/specs/aedt-runtime.qmd
-            - docs/api-migration.qmd
             - docs/execution-profiles.qmd
-            - docs/geometry-preview.qmd
             - docs/mesh-quality.qmd
             - docs/report-model.qmd
+            - docs/api-migration.qmd
             - docs/notebook-ux.qmd
+    - id: contribution
+      title: "Pages"
+      style: floating
+      collapse-level: 1
+      contents:
+        - docs/contributing.qmd
+        - docs/documentation-map.qmd
+        - docs/ownership.qmd
+        - section: "Project background"
+          contents:
+            - docs/architecture.qmd
+            - docs/goals-and-upstream.qmd
+            - docs/provenance.qmd
+            - docs/roadmap.qmd
+        - section: "Maintenance records"
+          contents:
+            - docs/errors.qmd
+            - docs/convergence-status.qmd
 
 format:
   askr-html:

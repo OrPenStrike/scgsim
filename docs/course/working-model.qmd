@@ -85,7 +85,7 @@ component = gf.get_component(
 ![The Circular Pad source layout on a 1000 µm die; the detail marks the east-side non-metal junction locator.](../assets/circular-pad-layout.png){#fig-circular-pad-source-layout}
 
 Source layout from the [current public OrPen Circular Pad study at
-`ecc9062`](https://github.com/OrPenStrike/orpen-sc-pdk/blob/ecc90623b62e55f95afaa5a1f1048a71f81cae52/notebooks/ComponentSimulation/CircularPad/evidence/source_layout.png).
+`ecc9062`](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/blob/ecc90623b62e55f95afaa5a1f1048a71f81cae52/notebooks/ComponentSimulation/CircularPad/evidence/source_layout.png).
 It shows the authored source geometry and locator, not the solved field.
 
 This is the Circle Pad source used by the linked LC workflow, not the optional

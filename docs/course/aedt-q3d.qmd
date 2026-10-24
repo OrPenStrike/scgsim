@@ -6,8 +6,9 @@ scgsim-status: "ACCEPTED"
 scgsim-id: "docs/course/aedt-q3d"
 ---
 
-Continue from [CPW inputs](aedt-inputs.qmd) for the public dimensions and PDK
-materials. That lesson's GDS mapping is for ordinary HFSS; current Q3D accepts
+For a complete pad-capacitance workflow, start with [extract a pad capacitance](../tutorials/capacitance.qmd).
+This backend reference uses [CPW inputs](aedt-inputs.qmd) for the public
+dimensions and PDK materials. That lesson's GDS mapping is for ordinary HFSS; current Q3D accepts
 explicit body geometry under `scgsim.aedt.q3d.v3`. This source-free example
 declares the CPW outlines and their finite Z intervals directly. It does not
 import or convert the shared GDS.

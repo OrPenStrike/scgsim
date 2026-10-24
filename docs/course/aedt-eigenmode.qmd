@@ -6,8 +6,9 @@ scgsim-status: "CONVERGING"
 scgsim-id: "docs/course/aedt-eigenmode"
 ---
 
-Continue from [CPW inputs](aedt-inputs.qmd) in the same session. Ordinary HFSS
-Eigenmode has no driven excitation ports. It searches for the requested modes
+For a complete mode workflow, start with [find a resonant mode](../tutorials/resonance.qmd).
+This backend reference continues from [CPW inputs](aedt-inputs.qmd). Ordinary
+HFSS Eigenmode has no driven excitation ports. It searches for the requested modes
 using an explicit adaptive setup; it does not create a source-first Surface-EPR
 catalogue or saved-field analysis request merely because its name is Eigenmode.
 The Eigenmode API can include a generic linear RLC model element through

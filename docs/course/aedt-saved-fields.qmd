@@ -6,7 +6,9 @@ scgsim-status: "CONVERGING"
 scgsim-id: "docs/course/aedt-saved-fields"
 ---
 
-Prerequisite: a completed source-first
+For the complete mode-and-participation workflow, start with
+[read mode energy participation](../tutorials/resonance-epr.qmd). This saved-field
+reference requires a completed source-first
 [AEDT Eigenmode/EPR run](../tutorial-xmon-aedt.qmd), the complete returned
 saved-field cohort, and its matching prepared geometry and request. Follow
 [full-run resolution](returned-results.qmd) first. A project file alone is

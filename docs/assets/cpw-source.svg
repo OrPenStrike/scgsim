@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 390" role="img" aria-labelledby="title desc">
+  <title id="title">Declared finite-ground CPW source geometry</title>
+  <desc id="desc">A 500 micrometre long substrate rectangle carries a 10 micrometre center signal with 6 micrometre gaps and two 80 micrometre grounds. Modal integration lines are shown at the negative and positive X end faces. Geometry only, no solver results.</desc>
+  <rect width="960" height="390" fill="#ffffff"/>
+  <text x="48" y="36" font-family="sans-serif" font-size="22" font-weight="700" fill="#172554">Finite-ground CPW source · dimensions in µm</text>
+  <rect x="100" y="73" width="700" height="254" rx="4" fill="#e8edf2" stroke="#64748b" stroke-width="2"/>
+  <text x="790" y="90" text-anchor="end" font-family="sans-serif" font-size="15" fill="#334155">Si substrate · 500 × 182</text>
+  <rect x="100" y="73" width="700" height="112" fill="#596579"/>
+  <rect x="100" y="215" width="700" height="112" fill="#596579"/>
+  <rect x="100" y="193" width="700" height="14" fill="#c28b18"/>
+  <text x="450" y="146" text-anchor="middle" font-family="sans-serif" font-size="16" font-weight="700" fill="#ffffff">Ground · 80</text>
+  <text x="450" y="281" text-anchor="middle" font-family="sans-serif" font-size="16" font-weight="700" fill="#ffffff">Ground · 80</text>
+  <text x="126" y="191" font-family="sans-serif" font-size="12" fill="#0f766e">6 µm gap</text>
+  <text x="126" y="221" font-family="sans-serif" font-size="12" fill="#0f766e">6 µm gap</text>
+  <text x="450" y="190" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="700" fill="#7c4a03">Signal · 10</text>
+  <line x1="100" y1="200" x2="100" y2="172" stroke="#1769aa" stroke-width="4"/>
+  <line x1="800" y1="200" x2="800" y2="172" stroke="#1769aa" stroke-width="4"/>
+  <text x="100" y="158" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#155e75">Port 1 · −X</text>
+  <text x="800" y="158" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#155e75">Port 2 · +X</text>
+  <line x1="100" y1="350" x2="800" y2="350" stroke="#475569" stroke-width="1.5"/>
+  <line x1="100" y1="344" x2="100" y2="356" stroke="#475569" stroke-width="1.5"/>
+  <line x1="800" y1="344" x2="800" y2="356" stroke="#475569" stroke-width="1.5"/>
+  <text x="450" y="374" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#334155">500 µm · source length</text>
+  <text x="820" y="214" font-family="sans-serif" font-size="13" fill="#155e75">Modal integration-line</text>
+  <text x="820" y="231" font-family="sans-serif" font-size="13" fill="#155e75">endpoints are declared</text>
+</svg>

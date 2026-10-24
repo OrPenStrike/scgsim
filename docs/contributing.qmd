@@ -1,0 +1,21 @@
+---
+title: "Contribute to SCGSim"
+description: "Set up the SCGSim development environment and find contributor references."
+sidebar: contribution
+---
+
+Use this page to prepare a SCGSim source checkout for documentation and package
+contributions. Install [uv](https://docs.astral.sh/uv/getting-started/installation/)
+and Git first; the [installation tutorial](course/installation.qmd) covers a
+study project's Python environment and native solver prerequisites.
+
+```bash
+git clone --branch develop https://github.com/NCUPHY-LTLab/scgsim.git
+cd scgsim
+uv sync --extra palace --extra dev
+```
+
+Read [architecture and data flow](architecture.qmd) for module ownership,
+the [maintainer guide](https://github.com/NCUPHY-LTLab/scgsim/blob/develop/MAINTAINING.md)
+for repository and documentation maintenance, and the
+[documentation map](documentation-map.qmd) to find each page's role.

@@ -1,0 +1,60 @@
+---
+title: "SCGSim reference"
+description: "Find the model, mesh, handoff, and result topic you need."
+sidebar: contract
+---
+
+Use this topic index to move between concepts, supported behavior, and detailed
+contracts. The linked pages remain the source for their respective definitions.
+
+## Complete goal tutorials {#goal-tutorials}
+
+Choose a complete reader workflow by calculation goal:
+
+| Calculation goal | Tutorial |
+| --- | --- |
+| Terminal capacitance | [Extract a pad capacitance](tutorials/capacitance.qmd) |
+| Resonant mode | [Find a resonant mode](tutorials/resonance.qmd) |
+| Mode energy participation | [Read mode energy participation](tutorials/resonance-epr.qmd) |
+| Driven CPW scattering response | [Extract a CPW scattering response](tutorials/scattering.qmd) |
+| CPW per-unit-length RLGC | [Extract CPW transmission-line parameters](tutorials/transmission-line.qmd) |
+
+## Model and materials {#model-materials}
+
+Start with the [physical problem](concepts/problems.qmd) and
+[model assumptions](concepts/model-and-numerics.qmd#define-the-physical-model).
+The [physical representation contract](specs/physical-representation.qmd#typed-source-carrier-and-plan)
+describes how source declarations reach backend preparation.
+
+## Conductors and ports {#conductors-ports}
+
+Read [Entities, occurrences, and Nets](concepts/geometry.qmd#entity-occurrence-and-net)
+with the [driven-response concept](concepts/problems.qmd#driven-response-excite-a-port-at-a-frequency).
+The [model preparation tutorial](course/working-model.qmd) shows how those
+choices enter a selected case; the [CPW scattering tutorial](tutorials/scattering.qmd#configure-port-models)
+compares its Modal and Wave Terminal declarations.
+
+## Mesh and adaptation {#mesh-adaptation}
+
+The [mesh diagnostic contract](mesh-quality.qmd#input-and-ownership) defines
+what the stored-mesh reader measures. The [prepared-backend tutorial](course/solver-observations.qmd)
+shows where to inspect the mesh and native preparation before execution.
+
+## Execution and handoff {#execution-handoff}
+
+Use the [execution profile contract](execution-profiles.qmd#handoff-lifecycle)
+for portable handoffs and caller-controlled solver runs, then follow the
+[handoff tutorial](course/execute.qmd).
+
+## Results and reports {#results-reports}
+
+The [report contract](report-model.qmd#common-envelope) describes result
+identity, availability, and presentation. The
+[returned-results tutorial](course/returned-results.qmd#interpret-for-scq-use)
+shows how to read a completed package for a selected use.
+
+## Saved fields and offline loss {#saved-fields-offline-loss}
+
+Use the [saved-field tutorial](course/aedt-saved-fields.qmd#recover-the-exact-prepared-model)
+for native field evaluation and the [offline EPR tutorial](course/offline-epr.qmd#interpret-an-assumption-change)
+for assumption changes on recorded results.

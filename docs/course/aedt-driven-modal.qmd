@@ -6,10 +6,12 @@ scgsim-status: "CONVERGING"
 scgsim-id: "docs/course/aedt-driven-modal"
 ---
 
-Continue from [CPW inputs](aedt-inputs.qmd). Driven Modal asks for a network
-response, not unexcited resonant modes. Its ports use explicit integration
-lines. The two ordered ports on the CPW end faces establish excitation and
-reported port order; a picture of the gap cannot replace those line endpoints.
+For a complete workflow, start with the [CPW scattering tutorial](../tutorials/scattering.qmd#configure-port-models).
+This page remains the detailed Driven Modal reference and links to the shared
+[CPW input lesson](aedt-inputs.qmd). Driven Modal asks for a network response,
+not unexcited resonant modes. Its ports use explicit integration lines. The two
+ordered ports on the CPW end faces establish excitation and reported port order;
+a picture of the gap cannot replace those line endpoints.
 The inputs page's equal-Z M1 mapping is a historical sheet request. This
 current Thin Film example supplies the CPW source owner's explicit `NB_FILM`
 interval and lower contact side; it does not claim that c997 embeds this

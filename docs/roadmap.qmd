@@ -13,5 +13,5 @@ not add solver families or redefine the physical outputs.
 
 Palace Driven and Magnetostatic remain future work. Meep remains outside
 SCGSim's scope. Use the [support table](backend-support.qmd) for implemented
-calculations; use the [maintainer entry](https://github.com/OrPenStrike/scgsim/blob/develop/MAINTAINING.md)
+calculations; use the [maintainer entry](https://github.com/NCUPHY-LTLab/scgsim/blob/develop/MAINTAINING.md)
 for repository and release work.

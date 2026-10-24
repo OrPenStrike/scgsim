@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 520" role="img" aria-labelledby="title desc">
+  <title id="title">Explicit Q2D CPW cross-section</title>
+  <desc id="desc">Four declared rectangles: 200 by 500 micrometre silicon substrate, 10 by 0.2 micrometre signal, and two 40 by 0.2 micrometre grounds with 10 micrometre gaps. The vertical scale is enlarged for visibility. Geometry only, no solver results.</desc>
+  <rect width="760" height="520" fill="#ffffff"/>
+  <text x="42" y="40" font-family="sans-serif" font-size="22" font-weight="700" fill="#172554">Q2D CPW · baseline declared rectangles</text>
+  <text x="42" y="66" font-family="sans-serif" font-size="14" fill="#475569">Cross-section geometry only · vertical scale enlarged for clarity</text>
+  <rect x="110" y="142" width="500" height="300" rx="3" fill="#dce9f4" stroke="#64748b" stroke-width="2"/>
+  <text x="360" y="286" text-anchor="middle" font-family="sans-serif" font-size="20" font-weight="700" fill="#38536b">Si substrate</text>
+  <text x="360" y="310" text-anchor="middle" font-family="sans-serif" font-size="16" fill="#38536b">x: −100…+100 µm · y: −500…0 µm</text>
+  <rect x="222.5" y="132" width="100" height="10" fill="#596579"/>
+  <rect x="347.5" y="132" width="25" height="10" fill="#c28b18"/>
+  <rect x="397.5" y="132" width="100" height="10" fill="#596579"/>
+  <text x="272.5" y="120" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#334155">GroundLeft · 40</text>
+  <text x="360" y="111" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="700" fill="#7c4a03">Signal · 10</text>
+  <text x="447.5" y="120" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#334155">GroundRight · 40</text>
+  <line x1="322.5" y1="148" x2="347.5" y2="148" stroke="#0f766e" stroke-width="2"/>
+  <line x1="372.5" y1="148" x2="397.5" y2="148" stroke="#0f766e" stroke-width="2"/>
+  <text x="335" y="170" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#0f766e">10 µm gap</text>
+  <text x="385" y="170" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#0f766e">10 µm gap</text>
+  <line x1="110" y1="472" x2="610" y2="472" stroke="#475569" stroke-width="1.5"/>
+  <line x1="110" y1="466" x2="110" y2="478" stroke="#475569" stroke-width="1.5"/>
+  <line x1="610" y1="466" x2="610" y2="478" stroke="#475569" stroke-width="1.5"/>
+  <text x="360" y="500" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#334155">Substrate width · 200 µm</text>
+  <text x="632" y="139" font-family="sans-serif" font-size="13" fill="#334155">Metal thickness: 0.2 µm</text>
+  <text x="632" y="157" font-family="sans-serif" font-size="13" fill="#334155">displayed enlarged</text>
+</svg>

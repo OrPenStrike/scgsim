@@ -6,7 +6,9 @@ scgsim-status: "CONVERGING"
 scgsim-id: "docs/course/offline-epr"
 ---
 
-Prerequisite: an actual detached EPR result from a verified Palace Eigenmode
+For the complete mode-and-participation workflow, start with
+[read mode energy participation](../tutorials/resonance-epr.qmd). This offline
+reference requires an actual detached EPR result from a verified Palace Eigenmode
 return, an AEDT adaptive-history record, or the separate final AEDT
 [saved-field analysis](aedt-saved-fields.qmd). This lesson changes film/loss
 assumptions on recorded evidence. It does not change patch selection, build CAD,

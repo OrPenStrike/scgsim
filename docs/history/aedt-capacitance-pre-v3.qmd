@@ -24,9 +24,9 @@ Its authored inputs are:
 | Substrate | Silicon, 500 µm thick |
 
 The canonical public source is OrPen's pinned revision
-[`51985d9`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/51985d9507025e8241205712e866c0b804de29b9).
-Its [`aedt_q3d.ipynb`](https://github.com/OrPenStrike/orpen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/ComponentSimulation/SimplePad/aedt_q3d.ipynb)
-and [editable QMD](https://github.com/OrPenStrike/orpen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/src/ComponentSimulation/SimplePad/aedt_q3d.qmd)
+[`51985d9`](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/tree/51985d9507025e8241205712e866c0b804de29b9).
+Its [`aedt_q3d.ipynb`](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/ComponentSimulation/SimplePad/aedt_q3d.ipynb)
+and [editable QMD](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/src/ComponentSimulation/SimplePad/aedt_q3d.qmd)
 define the earlier GDS-import workflow.
 
 ![The public SimplePad layout: centered pad, surrounding Ground and authored east-edge lumped-port locator.](../assets/simple-pad-layout.png){#fig-simple-pad-layout}
@@ -72,8 +72,8 @@ this Q3D request used an open Region. The two results describe their respective
 model and boundary choices, not a required numerical agreement.
 
 The reference output context and full-precision rows are available in the
-public [SimplePad evidence README](https://github.com/OrPenStrike/orpen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/ComponentSimulation/SimplePad/evidence/README.md)
-and [results CSV](https://github.com/OrPenStrike/orpen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/ComponentSimulation/SimplePad/evidence/results.csv).
+public [SimplePad evidence README](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/ComponentSimulation/SimplePad/evidence/README.md)
+and [results CSV](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/ComponentSimulation/SimplePad/evidence/results.csv).
 The recorded SimplePad source is `24ae5a4`, with the same component and
 notebook bytes as public OrPen revision `51985d9`; the SCGSim source was
 `1.0.1` at `9c032e3`.

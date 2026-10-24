@@ -23,7 +23,7 @@ executing it.
 The goal is one source snapshot shared by two backends. Start with
 [installation](course/installation.qmd), and retain `snapshot` in this session.
 
-The [pinned public OrPen Xmon sources](https://github.com/OrPenStrike/orpen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/src/ComponentSimulation/Kosen2024_Xmon)
+The [pinned public OrPen Xmon sources](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/src/ComponentSimulation/Kosen2024_Xmon)
 provide the Palace Route B lumped-port inductance of $11.78\,\mathrm{nH}$ used
 in the backend tutorials. The AEDT tutorial sets capacitance to zero as an
 explicit inductive-only circuit-model assumption; this is not a measured zero

@@ -9,7 +9,7 @@ scgsim-id: "docs/architecture"
 This secondary implementation reference is for contributors. For a researcher
 introduction, start with [semantic geometry](concepts/geometry.qmd) or the
 [tutorials](examples.qmd). Repository procedures live in the
-[maintainer entry](https://github.com/OrPenStrike/scgsim/blob/develop/MAINTAINING.md).
+[maintainer entry](https://github.com/NCUPHY-LTLab/scgsim/blob/develop/MAINTAINING.md).
 
 SCGSim keeps PDK facts, component intent, semantic geometry, solver preparation,
 execution, result loading, and presentation distinguishable. A solver backend

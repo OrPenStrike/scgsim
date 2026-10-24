@@ -14,7 +14,9 @@ described in the [Q3D lesson](aedt-q3d.qmd), not this GDS import mapping;
 source-backed Q3D preparation is a separate GeometryPlan frontend. Q2D has
 its own explicit [cross-section lesson](aedt-q2d.qmd).
 
-The public specimen and executable notebook sources belong to
+Use the complete [CPW scattering tutorial](../tutorials/scattering.qmd) for a
+standalone Driven Modal or Wave Terminal workflow. This page keeps shared
+backend input details. The public specimen and executable notebook sources belong to
 [OrPen's pinned CPW group](../examples.qmd#public-inputs). Its CPW is 500 µm
 long, with a 10 µm signal, 6 µm gaps, 80 µm grounds and a 500 µm substrate.
 Those are example design inputs, not measured device geometry or universal
@@ -81,9 +83,10 @@ PDK provenance. Each GDS layer/datatype pair must match the declared imports.
 Inspecting the coupon is source observation only; actual native object type,
 material and assignments are read back during execution.
 
-The native six-face padding order is `(+X, -X, +Y, -Y, +Z, -Z)`, matching PyAEDT.
-It differs from the Q2D four-value order. Use the spec's documented order rather
-than copying comments from a different family.
+The 3D six-face padding order is `(+X, -X, +Y, -Y, +Z, -Z)`, matching PyAEDT.
+The Q2D public four-value order is `(+X, -X, +Y, -Y)`; Q2D reorders it
+internally for the native Region call. Keep the tuple length and order for the
+selected family.
 
 Keep `source_gds`, `materials`, `layer_imports`, `object_bindings` and
 `ground_objects` for the HFSS branch. Continue to

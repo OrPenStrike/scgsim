@@ -1,0 +1,59 @@
+---
+title: "Documentation map"
+description: "Find the reader path for SCGSim topics and their OrcaPen source pages."
+sidebar: contribution
+---
+
+Use Tutorial to choose one of the five complete calculation workflows.
+Backend course pages retain their paths and anchors as detailed references.
+
+## Page migration
+
+| Current pages | Treatment in the site |
+| --- | --- |
+| `README.md`, `index.qmd`, `docs/course/installation.qmd` | Retain as package overview and setup entry points. |
+| `docs/examples.qmd` | Rewrite as the simulation-goal chooser. |
+| `docs/course/*.qmd` | Retain backend and task detail at existing URLs; link to the complete goal guides. |
+| `docs/tutorials/*.qmd` | Retain the five complete goal guides linked from Tutorial and the reference index. |
+| `docs/concepts/*.qmd`, `docs/eigenmode-epr.qmd` | Retain in Concept. |
+| `docs/backend-support.qmd`, `docs/specs/*.qmd`, `docs/execution-profiles.qmd`, `docs/mesh-quality.qmd`, `docs/report-model.qmd`, `docs/api-migration.qmd`, `docs/notebook-ux.qmd` | Retain in Contract as the source for supported behavior and detailed interfaces. |
+| `docs/architecture.qmd`, `docs/goals-and-upstream.qmd`, `docs/provenance.qmd`, `docs/roadmap.qmd`, `docs/errors.qmd`, `docs/convergence-status.qmd`, `docs/ownership.qmd` | Keep their URLs and group them under Contribution as project and maintenance references. |
+| `docs/history/aedt-capacitance-pre-v3.qmd` | Keep in the Historical reference group. |
+| `docs/history/curved-source-installation.qmd` | Keep as the pinned historical environment and native Palace setup for the Circular Pad study. |
+
+## Goal versions and OrcaPen source links
+
+Each guide uses SCGSim `2.0.0rc11` at [source revision `90fb50e`](https://github.com/NCUPHY-LTLab/scgsim/tree/90fb50ef9de80fa6e556d2f2a09fb45707efeea0).
+The linked OrcaPen source owns the component or cross-section facts; use the
+SCGSim pin printed in the guide when adapting its workflow.
+
+| Goal | Complete SCGSim guide | OrcaPen component or cross-section source |
+| --- | --- | --- |
+| Capacitance | [Pad capacitance](tutorials/capacitance.qmd) | PDK [`51985d9`](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/tree/51985d9507025e8241205712e866c0b804de29b9): [SimplePad Palace electrostatic](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/src/ComponentSimulation/SimplePad/palace_electrostatic.qmd), [Q3D](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/src/ComponentSimulation/SimplePad/aedt_q3d.qmd) |
+| Resonance | [Resonant mode](tutorials/resonance.qmd) | PDK [`51985d9`](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/tree/51985d9507025e8241205712e866c0b804de29b9): [SimplePad Palace Eigenmode](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/src/ComponentSimulation/SimplePad/palace_eigenmode.qmd), [HFSS Eigenmode](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/src/ComponentSimulation/SimplePad/aedt_hfss_eigenmode.qmd) |
+| EPR | [Mode energy participation](tutorials/resonance-epr.qmd) | PDK [`51985d9`](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/tree/51985d9507025e8241205712e866c0b804de29b9): [SimplePad Palace Eigenmode](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/src/ComponentSimulation/SimplePad/palace_eigenmode.qmd), [HFSS Eigenmode](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/src/ComponentSimulation/SimplePad/aedt_hfss_eigenmode.qmd) |
+| Scattering | [CPW scattering response](tutorials/scattering.qmd) | PDK [`35b4dc1`](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9): [HFSS Driven Modal](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/blob/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/ComponentSimulation/CpwFiniteGround/aedt_hfss_driven_modal.ipynb), [HFSS Driven Terminal](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/blob/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/ComponentSimulation/CpwFiniteGround/aedt_hfss_driven_terminal.ipynb) |
+| Transmission line | [CPW per-unit-length RLGC](tutorials/transmission-line.qmd) | PDK [`35b4dc1`](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/tree/35b4dc1cdd3f921badcac2fe57a98366315ae8d9): [Finite-ground CPW Q2D](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/blob/35b4dc1cdd3f921badcac2fe57a98366315ae8d9/notebooks/CrossSectionSimulation/CpwFiniteGround/aedt_q2d.ipynb) |
+
+Goal-guide figures reuse published source images or show the explicitly declared
+geometry. This documentation pass checked source/API references and site links;
+it added no native solver runs.
+
+## OrcaPen to SCGSim topics
+
+OrcaPen supplies the component and process-specific case. Link its page to the
+SCGSim topic that owns the reusable model, solver, mesh, handoff, or result
+detail. Resolve cross-site links to the SCGSim revision named by the selected
+OrcaPen tutorial.
+
+| OrcaPen source page | SCGSim topic entry |
+| --- | --- |
+| `docs/notebooks.qmd` | [Simulation overview](examples.qmd) and [topic index](reference.qmd). |
+| `docs/simulation/requirements/electrostatic-capacitance.qmd` | [Model and materials](reference.qmd#model-materials) and [conductors and ports](reference.qmd#conductors-ports). |
+| `docs/simulation/requirements/eigenmode.qmd`, `docs/simulation/requirements/epr-loss.qmd` | [Model and materials](reference.qmd#model-materials) and [saved fields and offline loss](reference.qmd#saved-fields-offline-loss). |
+| `docs/simulation/tools/mesh-fem-amr.qmd` | [Mesh and adaptation](reference.qmd#mesh-adaptation). |
+| `docs/simulation/tools/handoff-resolve-report.qmd` | [Execution and handoff](reference.qmd#execution-handoff) and [results and reports](reference.qmd#results-reports). |
+
+The OrcaPen links above identify component-source revisions. For reusable
+SCGSim interfaces, continue from each goal guide's pinned version and the
+matching topic entry in the [SCGSim reference](reference.qmd).

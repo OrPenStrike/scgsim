@@ -6,8 +6,9 @@ scgsim-status: "CONVERGING"
 scgsim-id: "docs/course/palace-electrostatic"
 ---
 
-Use the `snapshot` from [source observations](source-observations.qmd). This
-branch asks for Electrostatic terminal response rather than resonant modes.
+For a complete extraction workflow, start with [pad capacitance](../tutorials/capacitance.qmd).
+This backend reference uses the `snapshot` from [source observations](source-observations.qmd).
+The branch asks for Electrostatic terminal response rather than resonant modes.
 The public OrPen [Xmon notebook group](../examples.qmd#public-inputs) owns the
 component example; this lesson explains the reusable SCGSim stages.
 

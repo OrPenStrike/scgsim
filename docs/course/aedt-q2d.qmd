@@ -6,7 +6,8 @@ scgsim-status: "CONVERGING"
 scgsim-id: "docs/course/aedt-q2d"
 ---
 
-Start after [installation](installation.qmd). Q2D takes explicit cross-section
+Start from the complete [CPW transmission-line tutorial](../tutorials/transmission-line.qmd).
+This page retains the backend-specific Q2D reference. Q2D takes explicit cross-section
 rectangles; it does not import a GDS, derive a slice from the Xmon snapshot or
 infer a transmission line from a 3D picture. The public
 [OrPen cross-section source](../examples.qmd#public-inputs) supplies this
@@ -60,8 +61,9 @@ size against the intended gaps; print the source spec before relying on native
 geometry. The vacuum belongs to the Region, not an authored vacuum rectangle.
 There is one `ReferenceGround` group covering both ground rectangles and at
 least one `SignalLine`; every superconducting rectangle belongs to exactly one
-group. The four-value Region padding uses **(-X, +X, -Y, +Y)**, unlike the
-six-value native order in the 3D input lesson.
+group. The public four-value Q2D Region padding order is **(+X, -X, +Y, -Y)**;
+the runtime reorders it for the native Region call. The 3D input tuple is
+six-value **(+X, -X, +Y, -Y, +Z, -Z)**.
 
 After [execution](execute.qmd), [resolve the full return](returned-results.qmd).
 Q2D writes one native `results/q2d/rlgc_matrix.csv`,

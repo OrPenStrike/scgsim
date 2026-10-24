@@ -7,7 +7,7 @@ scgsim-id: "docs/ownership"
 ---
 
 SCGSim owns the reusable geometry, solver preparation, handoff, result and
-report APIs. [OrPen SC PDK](https://github.com/OrPenStrike/orpen-sc-pdk) owns public
+report APIs. [OrPen SC PDK](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk) owns public
 component geometry, material/stack facts and executable component notebooks.
 A Python script or notebook can call SCGSim; no parent workspace is required.
 
@@ -17,7 +17,7 @@ provides exact interface references. Existing document URLs remain available.
 
 Repository layout, implementation responsibilities, documentation builds and
 release procedures belong to the secondary
-[maintainer entry](https://github.com/OrPenStrike/scgsim/blob/develop/MAINTAINING.md).
+[maintainer entry](https://github.com/NCUPHY-LTLab/scgsim/blob/develop/MAINTAINING.md).
 
 ## Accepted SCGSim 2.0 ownership
 
@@ -104,7 +104,7 @@ separately owned and must not be implied by a directory reorganization.
 | [Goals and derivation](goals-and-upstream.qmd) | Current scope and upstream relationship |
 | [Roadmap](roadmap.qmd) | Deferred families and documentation direction |
 | [Historical errors](errors.qmd) | Revision-bound diagnostic observations |
-| [Repository maintenance](https://github.com/OrPenStrike/scgsim/blob/develop/MAINTAINING.md) | Build, version catalogue and publication procedure |
+| [Repository maintenance](https://github.com/NCUPHY-LTLab/scgsim/blob/develop/MAINTAINING.md) | Build, version catalogue and publication procedure |
 
 These secondary references retain implementation detail outside the researcher
 learning sequence. Contract pages specify public APIs and physical result

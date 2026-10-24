@@ -40,7 +40,7 @@ The study author chooses physical assumptions and interprets the quantities.
 ## Derivation history {#starting-source-identities}
 
 Historical starting-source identities are listed in the
-[repository maintainer record](https://github.com/OrPenStrike/scgsim/blob/develop/MAINTAINING.md#implementation-and-project-references).
+[repository maintainer record](https://github.com/NCUPHY-LTLab/scgsim/blob/develop/MAINTAINING.md#implementation-and-project-references).
 They describe origin, not additional supported APIs. Current source geometry
 uses `scgsim.geometry` and its compiler surface, not a direct external SGB
 consumer.

@@ -6,7 +6,8 @@ scgsim-status: "CONVERGING"
 scgsim-id: "docs/course/palace-eigenmode"
 ---
 
-Prerequisite: the shared `snapshot` from
+For a complete mode workflow, start with [find a resonant mode](../tutorials/resonance.qmd).
+This backend reference uses the shared `snapshot` from
 [source observations](source-observations.qmd) and the Palace preparation
 extra. Eigenmode asks for resonances of the configured field model. It does not
 require a surface-loss model, junction port or EPR request merely to run.
@@ -124,10 +125,10 @@ single-mesh sequence.
 ## Circular Pad LC study
 
 The current public OrPen lesson is revision
-[`ecc9062`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/ecc90623b62e55f95afaa5a1f1048a71f81cae52): the
-[canonical source lesson](https://github.com/OrPenStrike/orpen-sc-pdk/blob/ecc90623b62e55f95afaa5a1f1048a71f81cae52/notebooks/src/ComponentSimulation/CircularPad/palace_eigenmode.qmd),
-its [derived notebook](https://github.com/OrPenStrike/orpen-sc-pdk/blob/ecc90623b62e55f95afaa5a1f1048a71f81cae52/notebooks/ComponentSimulation/CircularPad/palace_eigenmode.ipynb),
-and [Fresh08 result evidence](https://github.com/OrPenStrike/orpen-sc-pdk/blob/ecc90623b62e55f95afaa5a1f1048a71f81cae52/notebooks/ComponentSimulation/CircularPad/evidence/README.md).
+[`ecc9062`](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/tree/ecc90623b62e55f95afaa5a1f1048a71f81cae52): the
+[canonical source lesson](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/blob/ecc90623b62e55f95afaa5a1f1048a71f81cae52/notebooks/src/ComponentSimulation/CircularPad/palace_eigenmode.qmd),
+its [derived notebook](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/blob/ecc90623b62e55f95afaa5a1f1048a71f81cae52/notebooks/ComponentSimulation/CircularPad/palace_eigenmode.ipynb),
+and [Fresh08 result evidence](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/blob/ecc90623b62e55f95afaa5a1f1048a71f81cae52/notebooks/ComponentSimulation/CircularPad/evidence/README.md).
 The source defines a 100 µm pad radius and 20 µm radial gap on a single-die
 stack with 500 µm Si and 0.2 µm Al. It authors a 2 µm-wide east-facing
 junction port and declares a linear 10 nH inductive branch with C=0 (no added
@@ -159,7 +160,7 @@ Fresh08 completed one native execution, four refinements and five
 solve/estimate snapshots. Receipt-bound Resolve selected the complete final
 snapshot and the existing Report completed. The final mode-1 frequency is
 **5.573354161115 GHz**. The frequency history and native indicator are shown
-in the figure and [frequency/AMR CSV](https://github.com/OrPenStrike/orpen-sc-pdk/blob/ecc90623b62e55f95afaa5a1f1048a71f81cae52/notebooks/ComponentSimulation/CircularPad/evidence/frequency_amr.csv).
+in the figure and [frequency/AMR CSV](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/blob/ecc90623b62e55f95afaa5a1f1048a71f81cae52/notebooks/ComponentSimulation/CircularPad/evidence/frequency_amr.csv).
 
 ![Fresh08 mode-1 frequency and native error indicator across five snapshots.](../assets/circular-pad-frequency-amr.png){#fig-circular-pad-frequency-amr}
 
@@ -176,7 +177,7 @@ retained run artifacts that are not included with the public bundle. To
 prepare your own model, select `prepare_handoff`; select `run` to prepare and
 launch Palace with a fresh `RUN_ID`. The native Palace executable is installed
 separately, as described above. The result has nine surface, two bulk and one
-junction contribution. Its [typed EPR CSV](https://github.com/OrPenStrike/orpen-sc-pdk/blob/ecc90623b62e55f95afaa5a1f1048a71f81cae52/notebooks/ComponentSimulation/CircularPad/evidence/typed_epr.csv)
+junction contribution. Its [typed EPR CSV](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/blob/ecc90623b62e55f95afaa5a1f1048a71f81cae52/notebooks/ComponentSimulation/CircularPad/evidence/typed_epr.csv)
 preserves Palace's signed convention: the junction value is
 **−0.9948401783541** (`signed_palace=true`), not absolute-valued or interpreted
 as negative physical stored energy. The surface values are unmasked,
@@ -199,7 +200,7 @@ separately hashed surviving final-boundary VTU showed local non-affine
 coordinates after refinement. The VTU piece is not listed in the strict
 returned receipt, and one cell does not establish exact R100 fidelity, global
 geometry accuracy or shared-node motion; details are in the
-[public evidence page](https://github.com/OrPenStrike/orpen-sc-pdk/blob/ecc90623b62e55f95afaa5a1f1048a71f81cae52/notebooks/ComponentSimulation/CircularPad/evidence/README.md).
+[public evidence page](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/blob/ecc90623b62e55f95afaa5a1f1048a71f81cae52/notebooks/ComponentSimulation/CircularPad/evidence/README.md).
 :::
 
 ## Execution provenance
@@ -212,5 +213,5 @@ runtime bytes match public SCGSim develop commit
 revision, not a stable release). The native Palace source was
 `4e9e1b7232b4c8ca8b964be7e70f1848f578de37`; its CLI version was not identified.
 The later OrPen checkpoint `1590199` and this published lesson revision
-`ecc9062` were not Fresh08 execution inputs. The [public run manifest](https://github.com/OrPenStrike/orpen-sc-pdk/blob/ecc90623b62e55f95afaa5a1f1048a71f81cae52/notebooks/ComponentSimulation/CircularPad/evidence/run_set.json)
+`ecc9062` were not Fresh08 execution inputs. The [public run manifest](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/blob/ecc90623b62e55f95afaa5a1f1048a71f81cae52/notebooks/ComponentSimulation/CircularPad/evidence/run_set.json)
 binds the detailed source and artifact identities.

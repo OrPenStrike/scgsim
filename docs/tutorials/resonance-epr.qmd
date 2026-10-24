@@ -1,464 +1,487 @@
 ---
-title: "Find a resonance and read EPR"
-description: "Solve a simple pad-and-ground resonator with Palace or HFSS, then read its frequency and participation report."
+title: "Read mode energy participation"
+description: "Prepare a standalone SimplePad EPR notebook with Palace or HFSS."
 scgsim-kind: "course"
 scgsim-status: "CONVERGING"
 scgsim-id: "docs/tutorials/resonance-epr"
+jupyter:
+  kernelspec:
+    display_name: Python 3
+    language: python
+    name: python3
+execute:
+  enabled: false
 ---
 
-Start from the square pad and surrounding ground in the
-[capacitance example](capacitance.qmd). Add an explicit inductive branch between
-them. The pad's electric energy and the branch's magnetic energy form a simple
-resonator: this lesson finds its mode frequency and reads where that mode's
-energy is stored.
+## 1. What you will get
 
-Keep the [layout and material inputs](capacitance.qmd#prepare-the-physical-model)
-from the capacitance lesson: a centered 200 µm square pad, uniform 20 µm gap,
-1000 µm square single die, and 0.2 µm top Aluminum on 500 µm Silicon. For this
-Eigenmode model only, add an authored lumped sheet across the east-edge gap:
-`x = 100..120 µm`, `y = −1..1 µm`. Use the authored non-metal port rather than recreating a metal bridge. Its linear circuit inputs are **10 nH** and
-**C = 0 F**; the capacitance extraction omits this branch.
+This notebook builds a linear SimplePad resonator, solves one Eigenmode with Palace or HFSS, and plots the returned surface, bulk and branch participation for that mode. Each route includes source construction, native handoff and fresh-session result reading.
 
-::: {.callout-note title="A declared linear resonator"}
-The sheet represents a lumped inductive branch, not a physical galvanic short
-or a measured nonlinear qubit model. There is no second die, backside metal,
-readout or bump structure. These inputs define the example, not its numerical
-accuracy or a measured device.
-:::
+![SimplePad model layout used by the mode and EPR examples.](../assets/simple-pad-layout.png){#fig-epr-simple-pad-layout}
 
-Interface-film and bulk-loss values are additional modeling assumptions, rather
-than properties inferred from the layout. Keep these values and the backend's
-actual material readback with the nominal PDK stack so the EPR report has a
-clear physical meaning. [EPR concepts](../eigenmode-epr.qmd) explain surface,
-bulk and junction participation when you need the definitions.
+The model uses a 200 µm square pad, a 20 µm gap and a 10 nH inductive branch across the east edge. Interface-film and bulk-loss settings are declared assumptions; the notebook reports energy participation, not a measured loss or device lifetime.
 
-Use the [published SimplePad source `51985d9`](https://github.com/OrPenStrike/orpen-sc-pdk/tree/51985d9507025e8241205712e866c0b804de29b9)
-and the [shared layout picture](capacitance.qmd#fig-simple-pad-layout).
-The notebooks below define the actual model and controls. The reference
-observations show the mode frequency and where its energy is stored.
+## 2. Prepare your environment
 
-## Prepare, run and read your first result
+Create a project with Python 3.12 or 3.13. Install Git and [uv](https://docs.astral.sh/uv/getting-started/installation/); uv fetches the pinned source repositories and manages this project's `.venv` and `uv.lock`.
 
-Use the canonical SimplePad notebook for the backend you choose. Its cells
-already define the component, materials and backend bindings; you edit the
-model and run controls rather than rebuilding those bindings for a first run.
-The links below open or download the canonical notebooks at the published
-OrPen revision. Keep that revision with your model and controls. `OUTPUT_ROOT` is `Path.cwd() / ".artifacts" / "SimplePad"`;
-`RUN_ID` names the package below that directory.
+```bash
+uv init --python 3.12 pad-epr
+cd pad-epr
+uv add 'scgsim[palace,aedt-epr] @ git+https://github.com/NCUPHY-LTLab/scgsim.git@90fb50ef9de80fa6e556d2f2a09fb45707efeea0' \
+  'orpen-sc-pdk @ git+https://github.com/NCUPHY-LTLab/orcapen-sc-pdk.git@51985d9507025e8241205712e866c0b804de29b9' \
+  ipykernel
+uv run python -c "from importlib.metadata import version; print(version('scgsim'))"
+uv run --with jupyter jupyter lab
+```
 
-:::: {.panel-tabset group="solver"}
+This selects SCGSim `2.0.0rc11` and the SimplePad PDK source revision `51985d9507025e8241205712e866c0b804de29b9` (`orpen-sc-pdk`, imported as `orpen_sc_pdk`).
 
-### Palace
-
-Choose [palace_eigenmode.ipynb](https://github.com/OrPenStrike/orpen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/ComponentSimulation/SimplePad/palace_eigenmode.ipynb)
-([download](https://raw.githubusercontent.com/OrPenStrike/orpen-sc-pdk/51985d9507025e8241205712e866c0b804de29b9/notebooks/ComponentSimulation/SimplePad/palace_eigenmode.ipynb),
-[editable QMD](https://github.com/OrPenStrike/orpen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/src/ComponentSimulation/SimplePad/palace_eigenmode.qmd)). Its mode controls are `NUM_MODES = 1`,
-`SEARCH_FREQUENCY_HZ = 1e9` and `EIGENMODE_TOLERANCE = 1e-6`.
-`PORT_INDUCTANCE_H = 10e-9` supplies the authored inductive branch.
-Mesh sizes are `REFINED_MESH_SIZE_UM = 10.0` and `MAX_MESH_SIZE_UM = 200.0`;
-`FEM_ORDER = 2`, `AMR_MAX_PASSES = 10`, `AMR_TOLERANCE = 0.02` and
-`SAVE_FIELDS = 1` configure the numerical request and saved fields.
-The exterior uses Palace's natural PMC convention.
-
-The launch controls are `MACHINE_PROFILE = "direct-local"`,
-`PALACE_EXECUTABLE = "palace"`, `SETUP_COMMANDS = ("module load palace",)` and
-`RESOURCES = {"processes": 8, "threads": 1, "command_style": "wrapper"}`;
-adapt the executable/module and resources to your host.
-
-### AEDT
-
-Choose [aedt_hfss_eigenmode.ipynb](https://github.com/OrPenStrike/orpen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/ComponentSimulation/SimplePad/aedt_hfss_eigenmode.ipynb)
-([download](https://raw.githubusercontent.com/OrPenStrike/orpen-sc-pdk/51985d9507025e8241205712e866c0b804de29b9/notebooks/ComponentSimulation/SimplePad/aedt_hfss_eigenmode.ipynb),
-[editable QMD](https://github.com/OrPenStrike/orpen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/src/ComponentSimulation/SimplePad/aedt_hfss_eigenmode.qmd)). Its controls are `NUM_MODES = 1`,
-`SEARCH_FREQUENCY_GHZ = 1.0`, `MAXIMUM_PASSES = 10` and
-`CONVERGENCE_PERCENT = 1.0`. The authored junction uses
-`PORT_INDUCTANCE_H = 10e-9` and `PORT_CAPACITANCE_F = 0.0`.
-
-The host request uses `AEDT_VERSION = "2024.2"`, `PYAEDT_VERSION = "1.3.0"`
-and `RESOURCES = AedtResources(cores=4, ram_limit_percent=80)`. The notebook
-makes no explicit outer enclosure assignment; do not infer its implicit
-native boundary type from the shared layout.
-
-::::
-
-Both notebooks use Route B and the attributed `LiteratureCentral` interface
-assumptions. Search frequency, native stopping controls and loss assumptions
-are declared inputs, not a measured resonance or an accuracy recommendation.
-The source Route B choice is upstream of AEDT; the preparation below separately
-selects `modeling="solid"` for its snapshot's physical stack.
-
-::: {.callout-note title="Plan for the reference run's cost"}
-The reference Palace Eigenmode run used 8 MPI processes × 1 OMP thread,
-with elapsed time 14,385.602 s (about 4 hours) and reported peak node memory
-44,553.406 MB. Use this recorded cost when choosing a host; it is neither a
-minimum-resource requirement nor a guarantee of your run's time or memory.
-:::
-
-1. In the selected notebook, set `RUN_ID` to a fresh name and choose
-   `WORKFLOW_ACTION = "prepare_handoff"`. Execute its preparation cells to
-   create `HANDOFF` without starting the solver. Keep its printed run directory;
-   for Palace, also retain `HANDOFF.handoff_id` independently.
-2. Run the generated script from that directory on the configured solver host:
-   `bash run_palace.sh` or `bash run_aedt.sh`. Transfer the complete package
-   first if the host is remote. Alternatively, choose `WORKFLOW_ACTION = "run"`
-   with a fresh `RUN_ID` and execute the notebook: this action prepares a new
-   package and launches its script. It does not resume an already prepared run.
-3. Retrieve the complete returned directory. In a fresh notebook kernel, set
-   `WORKFLOW_ACTION = "analyze_handoff"` and provide
-   `SIMPLE_PAD_RETURNED_RUN_DIR` in the environment. For Palace also provide
-   `SIMPLE_PAD_PALACE_HANDOFF_ID` from the independently retained ID. Execute the
-   analysis cells to read the actual return and display its report.
-
-The solver executable, host setup and any required license must be available.
-The Palace notebook inspects a returned package before resolving a complete
-result; an incomplete return remains a partial report. AEDT resolves its
-returned package before displaying results. Neither preparation nor a failed
-run supplies an invented result.
-
-The analysis displays `result.show_all_results()` (AEDT uses
-`show_details=True`); AEDT also exposes `result.physics_results()` and
-`result.epr_result()` for the recorded rows.
-
-### Read the mode and its energy
-
-Find **mode 1** and its frequency in GHz, then read the participation beside
-its material, interface or circuit-element owner. Participation is
-dimensionless. The completed example provides these reference observations,
-rounded for reading:
-
-:::: {.panel-tabset group="solver"}
-
-### Palace
-
-| Quantity for mode 1 | Observation |
+| Backend | Native software needed on the solver host |
 |---|---|
-| Mode frequency | 5.137791 GHz |
-| Silicon electric participation | 0.920574 |
-| Vacuum electric participation | 0.079426 |
-| Authored port, native signed participation | 0.993926 |
+| Palace | Official Palace 0.18.1 plus a site MPI wrapper accepting `-np` and `-nt` |
+| HFSS | AEDT 2023.2 or 2024.2, PyAEDT 1.3.0 and a suitable license |
 
-The returned report also contains eight native MA/MS/SA interface rows with
-side identity. Keep each interface and side label with its contribution;
-a single surface number would hide which film the field samples.
+Python extras provide preparation libraries. Install the selected native solver separately. See [SCGSim installation](../course/installation.qmd) for host setup details.
 
-![Reference SimplePad mode-1 frequency and native adaptive-indicator history from Palace.](../assets/simple-pad-palace-em.png){#fig-simple-pad-palace-em}
+Check: the version command prints `2.0.0rc11`; Jupyter uses this project's Python environment.
 
-[Open figure at full size](../assets/simple-pad-palace-em.png)
+## 3. Choose your settings
 
-### AEDT
+Edit this cell before preparing a run. Lengths are in micrometres, inductance in henries, film thickness begins in PDK micrometres and is converted to metres for HFSS, and the Palace search target is in hertz.
 
-| Quantity for mode 1 | Observation |
-|---|---|
-| Mode frequency | 4.879060 GHz |
-| Silicon electric participation | 0.893092 |
-| Vacuum electric participation | 0.106908 |
-| Junction `jj`, inductive energy ratio $p_L$ | 0.995816 |
-| Junction `jj`, capacitive energy ratio $p_C$ | 0 |
+```{python}
+#| id: epr-settings
+from pathlib import Path
 
-The HFSS participation values come from the separate candidate EPR analysis
-of the existing native solution described below. Five unmasked interface
-contributions retain their owner and interface labels. The requested 0 µm
-mask is an alternative estimate, not another band to add to the baseline.
+PAD_SIDE_UM = 200.0
+GAP_UM = 20.0
+DIE_SIDE_UM = 1000.0
+PORT_LOCATOR_WIDTH_UM = 2.0
+VACUUM_PADDING_UM = (250.0, 250.0, 1000.0)
+PORT_INDUCTANCE_H = 10e-9
+PORT_CAPACITANCE_F = 0.0
+NUM_MODES = 1
+SEARCH_FREQUENCY_HZ = 1e9
+EIGENMODE_TOLERANCE = 1e-6
+REFINED_MESH_SIZE_UM = 10.0
+MAX_MESH_SIZE_UM = 200.0
+FEM_ORDER = 2
+AMR_MAX_PASSES = 10
+AMR_TOLERANCE = 0.02
+AEDT_MAXIMUM_PASSES = 10
+AEDT_DELTA_FREQUENCY_PERCENT = 1.0
+AEDT_VERSION = "2024.2"  # Select 2023.2 or 2024.2 for your licensed host.
+INTERFACE_KINDS = ("MA", "MS", "SA")
+INTERFACE_PRESET_PREFIX = "LiteratureCentral"
+SURFACE_MARGINS_UM = (0.0,)
+OUTPUT_ROOT = Path(".artifacts/SimplePad")
+PALACE_RUN_ID = "pad-epr-palace-01"
+HFSS_RUN_ID = "pad-epr-hfss-01"
+PALACE_HANDOFF_NOTE = OUTPUT_ROOT / f"{PALACE_RUN_ID}-handoff.json"
 
-![Separately derived HFSS mode-1 surface, bulk and junction participations for SimplePad; each channel retains its owner.](../assets/simple-pad-hfss-epr.png){#fig-simple-pad-hfss-epr}
+PALACE_EXECUTABLE = "palace"  # Set to your site's MPI wrapper accepting -np/-nt.
+PALACE_RESOURCES = {
+    "processes": 8,
+    "threads": 1,
+    "command_style": "wrapper",
+}
+PALACE_SETUP_COMMANDS = ()
+AEDT_CORES = 4
+AEDT_RAM_LIMIT_PERCENT = 80
+PRESET_NAMES = {
+    kind: f"{INTERFACE_PRESET_PREFIX}_{kind}"
+    for kind in INTERFACE_KINDS
+}
+```
 
-[Open figure at full size](../assets/simple-pad-hfss-epr.png)
+Mesh size, FEM order and adaptive controls affect different parts of the numerical request. A maximum pass count is a limit, not a statement that every pass will complete. Review actual returned mode and EPR rows with these settings.
 
-::::
+Check: choose the film preset, AEDT release and a fresh run ID before preparing the model.
 
-The bulk rows show that most electric energy lies in Silicon for these models.
-The port/junction rows describe the authored linear branch. Palace's native
-signed port participation and HFSS's nonnegative inductive/capacitive energy
-ratios have different definitions; do not treat them as interchangeable
-junction measurements. The frequencies belong to the declared linear models,
-not a measured qubit transition or nonlinear $f_{01}$.
+## 4. Build the model {#prepare-the-shared-geometry}
 
-For a loss interpretation, read the selected interface participation with its
-film thickness, permittivity and loss tangent. The `LiteratureCentral` films,
-including their 2 nm modeling thickness, are synthetic assumptions. Keep the
-unmasked baseline and each alternative mask separate. HFSS sidewall film
-energy remains uncomputed. Native solver Q and a known-loss subtotal derived
-from these selected channels answer different questions; neither establishes
-a full physical device Q or $T_1$.
+Both backends use the same explicit `pad` and `ground` Nets, PDK material records and vacuum envelope. The authored port locator connects the physical model to the declared linear branch without adding metal.
 
-Use the public [reference quantities](https://github.com/OrPenStrike/orpen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/ComponentSimulation/SimplePad/evidence/results.csv),
-[Palace surface rows](https://github.com/OrPenStrike/orpen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/ComponentSimulation/SimplePad/evidence/surface_epr.csv) and
-[HFSS participation rows](https://github.com/OrPenStrike/orpen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/ComponentSimulation/SimplePad/evidence/hfss_epr.csv) for full-precision data.
-The [output context](https://github.com/OrPenStrike/orpen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/ComponentSimulation/SimplePad/evidence/README.md) explains their original and derived stages.
+### Create the shared source
 
-::: {.callout-note title="Reference output context" collapse="true"}
-The original mode calculations used SCGSim `1.0.1` at `9c032e3` and SimplePad
-source `24ae5a4`, whose component/notebook bytes match the linked `51985d9`
-revision. Palace's completed return was resolved with its expected handoff
-identity and displayed in the report. HFSS's original returned-result report
-contains the mode frequency; its original EPR remains partial.
-
-The HFSS participation table uses a separate SCGSim `1.0.2rc1` derivation on
-that existing solution. All ten adaptive-pass EPR records were completed;
-the detached `resolve_epr_result`, `plot_epr_result` and `show_epr` paths read
-and displayed that derived result. This performed no new Analyze/solve and
-did not regenerate the original ordinary strict return receipt or change its
-native status. The manual ordinary-return calls below retain their own scope;
-they do not replace the original partial EPR with this separate result.
-
-These values are observations, not numerical targets, an accuracy criterion
-or a requirement that the two backends agree. Their exterior field models
-remain distinct. [EPR concepts](../eigenmode-epr.qmd) explain the normalization
-and known-loss scope; the [AEDT EPR reference](../specs/aedt-runtime.qmd#public-epr-candidate-surface)
-explains the detached public result interface.
-:::
-
-
-::: {.callout-tip title="Read the quantity your study needs"}
-For a frequency study, inspect that mode's frequency and available changes.
-For a loss study, inspect the relevant participation as well. Keep the native
-status and chosen controls beside those observations; a frequency trend alone
-does not describe the change in every EPR contribution.
-:::
-
-Next [modify your model](../course/working-model.qmd). The deeper
-[Palace EPR](../tutorial-xmon-palace.qmd) and
-[HFSS EPR](../tutorial-xmon-aedt.qmd) examples explain interface selection and
-source bindings. Use [saved-field analysis](../course/aedt-saved-fields.qmd)
-for new native field evaluations or [offline reanalysis](../course/offline-epr.qmd)
-for changing loss assumptions on recorded EPR evidence.
-
-## Python API alternative
-
-Use these APIs in a script or notebook when you want to author the setup
-yourself. Start with the shared source, then follow only your selected backend
-through configuration, handoff and fresh-session resolution.
-
-::::: {.callout-note title="Python setup, bindings and complete result flow" collapse="true"}
-
-## Prepare the shared geometry
-
-Run the [common component setup](capacitance.qmd#create-the-shared-source) in
-your preparation session. It defines `component`, `layer_stack`,
-`material_records` and `output_root`. Both Eigenmode backends then consume the
-same named GeometryPlan snapshot:
-
-```python
+```{python}
+#| id: epr-source
+import gdsfactory as gf
+import orpen_sc_pdk
+from orpen_sc_pdk import (
+    get_interface_preset_records,
+    get_material_records,
+    validate_interface_preset_records,
+)
+from orpen_sc_pdk.tech import get_single_die_layer_stack
+from IPython.display import display
 from scgsim.geometry import GeometryPlan
 
+orpen_sc_pdk.activate()
+gf.clear_cache()
+component = gf.get_component(
+    "square_pad_capacitor",
+    pad_side_um=PAD_SIDE_UM,
+    gap_um=GAP_UM,
+    die_side_um=DIE_SIDE_UM,
+    junction_width_um=PORT_LOCATOR_WIDTH_UM,
+)
+layer_stack = get_single_die_layer_stack()
+material_records = get_material_records()
 plan = GeometryPlan(
-    component=component, root_id="chip", layer_stack=layer_stack,
-    material_records=material_records, coupon_padding_um=0.0,
+    component=component,
+    root_id="chip",
+    layer_stack=layer_stack,
+    material_records=material_records,
+    coupon_padding_um=0.0,
 )
 plan.set_nets({"pad": ("chip/PAD",), "ground": ("chip/GROUND",)})
-plan.set_vacuum_region(padding=(250.0, 250.0, 1000.0))
+plan.set_vacuum_region(padding=VACUUM_PADDING_UM)
 snapshot = plan.prepare()
-presets = validate_interface_preset_records(get_interface_preset_records())
+interface_records = validate_interface_preset_records(
+    get_interface_preset_records()
+)
+display(component)
+print(component.dbbox())
 ```
 
-The non-metal locator extends one source database unit onto each terminal
-(`x = 99.999..120.001 µm`) for binding; the physical gap remains 20 µm.
-Padding is in micrometres. `LiteratureCentral_MA`, `_MS` and `_SA` are
-attributed interface assumptions from the PDK, not measured loss data.
+The `LiteratureCentral` MA/MS/SA films are attributed synthetic modeling assumptions. The actual result keeps surface, bulk and branch participation separate, so changing one loss assumption does not change the others.
 
-## Configure the mode calculation
+Check: inspect the component preview, explicit pad/Ground Nets and selected film records. See [model and materials](../reference.qmd#model-materials) and [conductors and ports](../reference.qmd#conductors-ports).
 
-The canonical notebooks request one mode with a 1 GHz search input and a
-10 nH inductive branch. Choose one backend; keep these controls and its actual
-native observations with the mode you interpret. Use a new run name for each
-preparation.
+## 5. Configure the simulation {#configure-the-mode-calculation}
 
-::: {.panel-tabset group="solver"}
+Select one solver tab. Both request mode 1 with the same inductive source branch and interface assumptions; HFSS also binds each surface contribution to the prepared geometry catalogue.
+
+:::: {.panel-tabset group="epr-backend"}
 
 ### Palace
 
-```python
+```{python}
+#| id: epr-palace-config
 from scgsim.palace import EigenmodeSim
 
-run_id = "pad-resonance-palace-01"
-sim = EigenmodeSim()
-sim.set_plan(snapshot)
-sim.set_output_dir(output_root / run_id)
-sim.set_surface_epr(
+PORT_NAME = "chip/o_junction_lumped"
+interface_presets = {
+    kind: interface_records[PRESET_NAMES[kind]]
+    for kind in INTERFACE_KINDS
+}
+palace_sim = EigenmodeSim()
+palace_sim.set_plan(snapshot)
+palace_sim.set_output_dir(OUTPUT_ROOT / PALACE_RUN_ID)
+palace_sim.set_surface_epr(
     representation="B",
-    specs={kind: {
-        **{key: presets[f"LiteratureCentral_{kind}"][key]
-           for key in ("thickness", "permittivity", "loss_tangent", "source")},
-        "preset": f"LiteratureCentral_{kind}",
-    } for kind in ("MA", "MS", "SA")},
+    specs={
+        kind: {
+            "thickness": interface_presets[kind]["thickness"],
+            "permittivity": interface_presets[kind]["permittivity"],
+            "loss_tangent": interface_presets[kind]["loss_tangent"],
+            "source": interface_presets[kind]["source"],
+            "preset": PRESET_NAMES[kind],
+        }
+        for kind in INTERFACE_KINDS
+    },
 )
-port_name = "chip/o_junction_lumped"
-sim.add_port(
-    port_name, layer="D0_TOP_M1", layout_sheet=True, inductance=10e-9,
+palace_sim.add_port(
+    PORT_NAME,
+    layer="D0_TOP_M1",
+    layout_sheet=True,
+    inductance=PORT_INDUCTANCE_H,
 )
-sim.set_epr_request(
-    surface_interfaces=("MA", "MS", "SA"),
-    bulk_domain_ids=None, port_names=(port_name,),
+palace_sim.set_epr_request(
+    surface_interfaces=INTERFACE_KINDS,
+    bulk_domain_ids=None,
+    port_names=(PORT_NAME,),
 )
-sim.set_eigenmode(num_modes=1, target=1e9, tolerance=1e-6, save=1)
-sim.set_mesh(refined_mesh_size=10.0, max_mesh_size=200.0)
-sim.set_numerical(
-    order=2, tolerance=1e-6, max_iterations=2000,
-    solver_type="Default", preconditioner="Default", device="CPU",
-    amr_max_passes=10, amr_tolerance=0.02, amr_update_fraction=0.15,
-    amr_nonconformal=False, save_adapt_iterations=True,
-    output_paraview=True, output_grid_function=False,
+palace_sim.set_eigenmode(
+    num_modes=NUM_MODES,
+    target=SEARCH_FREQUENCY_HZ,
+    tolerance=EIGENMODE_TOLERANCE,
+    save=1,
 )
-mesh_path = sim.mesh()
-config_path = sim.write_config()
+palace_sim.set_mesh(
+    size_policy="scgsim_default",
+    refined_mesh_size=REFINED_MESH_SIZE_UM,
+    max_mesh_size=MAX_MESH_SIZE_UM,
+)
+palace_sim.set_numerical(
+    order=FEM_ORDER,
+    tolerance=EIGENMODE_TOLERANCE,
+    max_iterations=2000,
+    solver_type="Default",
+    preconditioner="Default",
+    device="CPU",
+    amr_max_passes=AMR_MAX_PASSES,
+    amr_tolerance=AMR_TOLERANCE,
+    amr_update_fraction=0.15,
+    amr_nonconformal=False,
+    save_adapt_iterations=True,
+    output_paraview=True,
+    output_grid_function=False,
+)
 ```
 
-The port inductance is in henries, search target in hertz and mesh sizes in
-micrometres. Palace's port API is inductive-only; C = 0 does not add a
-capacitive branch. The unspecified exterior uses Palace's natural PMC
-convention. Surface, bulk and port quantities remain separate in the report.
+The explicit `scgsim_default` mesh policy keeps the selected size controls active. Palace's port declares inductance in henries; it does not add a capacitive branch, so `PORT_CAPACITANCE_F = 0.0` remains a model note.
 
-### AEDT
+### HFSS
 
-HFSS uses the authored port to build a junction-aware source catalogue. The
-interface records below bind each requested film to that prepared source;
-the notebook owns the full setup rather than a second source parser here.
-
-```python
+```{python}
+#| id: epr-hfss-config
 from scgsim.aedt import (
-    AedtResources, EigenmodeSim, EigenmodeRunControl, EprAnalysisRequest,
-    SurfaceEprSpec, planar_junction_from_port, prepare_planar_geometry_input,
+    AedtResources,
+    EigenmodeRunControl,
+    EigenmodeSim as HfssEigenmodeSim,
+    EprAnalysisRequest,
+    SurfaceEprSpec,
+    planar_junction_from_port,
+    prepare_planar_geometry_input,
 )
 
-run_id = "pad-resonance-hfss-01"
-junction = planar_junction_from_port(
-    snapshot.geometry_input, port_name="chip/o_junction_lumped",
-    junction_id="jj", terminal_a_net="pad", terminal_b_net="ground",
-    inductance_h=10e-9, capacitance_f=0.0,
+HFSS_RESOURCES = AedtResources(
+    cores=AEDT_CORES,
+    ram_limit_percent=AEDT_RAM_LIMIT_PERCENT,
 )
-prepared = prepare_planar_geometry_input(
-    snapshot.geometry_input, prepared_stack=snapshot.stack,
-    modeling="solid", junctions=(junction,),
+PORT_NAME = "chip/o_junction_lumped"
+junction = planar_junction_from_port(
+    snapshot.geometry_input,
+    port_name=PORT_NAME,
+    junction_id="jj",
+    terminal_a_net="pad",
+    terminal_b_net="ground",
+    inductance_h=PORT_INDUCTANCE_H,
+    capacitance_f=PORT_CAPACITANCE_F,
+)
+prepared_geometry = prepare_planar_geometry_input(
+    snapshot.geometry_input,
+    prepared_stack=snapshot.stack,
+    modeling="solid",
+    junctions=(junction,),
 )
 surface_specs = []
-for record in prepared.contribution_catalog:
+for record in prepared_geometry.contribution_catalog:
     kind = record["interface_kind"]
-    if kind not in ("MA", "MS", "SA"):
+    if kind not in INTERFACE_KINDS:
         continue
-    preset_name = f"LiteratureCentral_{kind}"
-    preset = presets[preset_name]
+    preset_name = PRESET_NAMES[kind]
+    preset = interface_records[preset_name]
     surface_specs.append(SurfaceEprSpec(
         contribution_id=record["contribution_id"],
         source_polygon_id=record["source_polygon_ids"][0],
-        interface_kind=kind, field_side=record["field_side"],
-        margins_um=(0.0,), film_thickness_m=preset["thickness"] * 1e-6,
+        interface_kind=kind,
+        field_side=record["field_side"],
+        margins_um=SURFACE_MARGINS_UM,
+        film_thickness_m=preset["thickness"] * 1e-6,
         film_relative_permittivity=preset["permittivity"],
-        loss_tangent=preset["loss_tangent"], source=preset["source"],
+        loss_tangent=preset["loss_tangent"],
+        source=preset["source"],
         preset=preset_name,
     ))
-AEDT_VERSION = "2024.2"  # This example explicitly selects AEDT 2024.2.
-sim = EigenmodeSim(modeling="solid", aedt_version=AEDT_VERSION)
-sim.set_plan(snapshot)
-sim.set_output_dir(output_root / run_id)
-sim.set_surface_epr(contributions=surface_specs)
-sim.add_junction(junction)
-sim.set_epr_request(EprAnalysisRequest(
+hfss_sim = HfssEigenmodeSim(modeling="solid", aedt_version=AEDT_VERSION)
+hfss_sim.set_plan(snapshot)
+hfss_sim.set_output_dir(OUTPUT_ROOT / HFSS_RUN_ID)
+hfss_sim.set_surface_epr(contributions=surface_specs)
+hfss_sim.add_junction(junction)
+hfss_sim.set_epr_request(EprAnalysisRequest(
     mode_indices=(1,),
-    surface_contribution_ids=tuple(item.contribution_id for item in surface_specs),
-    junction_ids=("jj",), bulk_domain_ids=None,
-))
-sim.set_eigenmode(
-    project_name=run_id, design_name="SimplePadEigenmode",
-    run_control=EigenmodeRunControl(
-        setup_name="Setup1", minimum_frequency_ghz=1.0, num_modes=1,
-        maximum_passes=10, maximum_delta_frequency_percent=1.0,
+    surface_contribution_ids=tuple(
+        item.contribution_id for item in surface_specs
     ),
-    resources=AedtResources(cores=4, ram_limit_percent=80),
+    junction_ids=("jj",),
+    bulk_domain_ids=None,
+))
+hfss_sim.set_eigenmode(
+    project_name=HFSS_RUN_ID,
+    design_name="SimplePadEigenmodeEpr",
+    run_control=EigenmodeRunControl(
+        setup_name="Setup1",
+        minimum_frequency_ghz=SEARCH_FREQUENCY_HZ / 1e9,
+        num_modes=NUM_MODES,
+        maximum_passes=AEDT_MAXIMUM_PASSES,
+        maximum_delta_frequency_percent=AEDT_DELTA_FREQUENCY_PERCENT,
+    ),
+    resources=HFSS_RESOURCES,
 )
-handoff = sim.prepare_handoff()
 ```
 
-The film thickness is converted from PDK micrometres to metres; the native
-frequency request is in GHz. The request retains all configured bulk domains
-and the authored junction alongside the selected interface contributions. This
-is HFSS Eigenmode/EPR, rather than ordinary mode-only HFSS. The notebook uses
-AEDT 2024.2/PyAEDT 1.3.0 and makes no explicit outer enclosure assignment;
-do not infer its implicit native boundary type or backend equivalence from
-shared layout alone. Ten passes and the native 1% delta-frequency target are
-controls, not proof that a quantity is adequate for your study.
+HFSS film thickness is converted from micrometres to metres. The catalogue supplies each source contribution, interface kind and field side; the `LiteratureCentral` records supply the explicitly selected film assumptions.
 
-:::
+Check: confirm the contribution catalogue, `jj` junction and mode-1 request. See [mesh and adaptation](../reference.qmd#mesh-adaptation).
 
-## Execute the calculation
+::::
 
-After writing the Palace mesh/config, create its handoff using the notebook's
-launch shape, adapted to your actual solver host:
+## 6. Inspect and run
 
-```python
-handoff = sim.prepare_handoff(
-    profile="direct-local", executable="palace",
-    resources={"processes": 8, "threads": 1, "command_style": "wrapper"},
-    setup_commands=("module load palace",),
-)
-expected_handoff_id = handoff.handoff_id
-print(handoff.run_dir, expected_handoff_id)
-```
+Prepare the selected backend, then inspect its mesh and generated configuration or request before execution. With `command_style="wrapper"`, set `PALACE_EXECUTABLE` to your site's Palace MPI wrapper that accepts `-np` and `-nt`; keep `PALACE_SETUP_COMMANDS` empty for direct-local use, or set it to your site's documented setup commands. For a direct Palace ELF binary, follow the [execution and handoff reference](../reference.qmd#execution-handoff) to choose its matching launcher settings.
 
-Keep the preparation ID independently before transfer. The AEDT tab already
-prepares its package. Transfer the complete handoff when the solver is on
-another computer, then run from its extracted run directory:
-
-::: {.panel-tabset group="solver"}
+:::: {.panel-tabset group="epr-backend"}
 
 ### Palace
 
-```bash
-bash run_palace.sh
+```{python}
+#| id: epr-palace-run
+import json
+
+palace_mesh = palace_sim.mesh()
+palace_config = palace_sim.write_config()
+palace_handoff = palace_sim.prepare_handoff(
+    profile="direct-local",
+    executable=PALACE_EXECUTABLE,
+    resources=PALACE_RESOURCES,
+    setup_commands=PALACE_SETUP_COMMANDS,
+)
+PALACE_HANDOFF_NOTE.parent.mkdir(parents=True, exist_ok=True)
+PALACE_HANDOFF_NOTE.write_text(
+    json.dumps(
+        {
+            "run_dir": str(palace_handoff.run_dir),
+            "handoff_id": palace_handoff.handoff_id,
+        },
+        indent=2,
+    ),
+    encoding="utf-8",
+)
+print(palace_mesh, palace_config, palace_handoff.run_dir)
+print("Saved handoff identity:", PALACE_HANDOFF_NOTE)
 ```
 
-### AEDT
+### HFSS
 
-```bash
-bash run_aedt.sh
+```{python}
+#| id: epr-hfss-run
+hfss_handoff = hfss_sim.prepare_handoff()
+print(hfss_handoff.spec_path, hfss_handoff.archive_path)
 ```
 
-:::
+::::
 
-Retrieve the whole returned directory after the run. The
-[execution lesson](../course/execute.qmd) describes host setup and remote/Slurm
-use. The Python preparation steps do not start the native solver.
+Inspect the generated mesh, configuration or HFSS specification and archive. For a remote host, transfer the complete archive and run its script there; the next cells execute locally on the selected solver host.
 
-## Display the mode and participation
+:::: {.panel-tabset group="epr-backend"}
 
-Open a fresh analysis session and set `SIMPLE_PAD_RETURNED_RUN_DIR` to the
-complete retrieved package. For Palace, set `SIMPLE_PAD_PALACE_HANDOFF_ID` from
-your independently retained preparation ID.
+### Palace
 
-```python
-import os
+```{python}
+#| id: epr-palace-execute
+import subprocess
+
+subprocess.run(
+    ["bash", str(palace_handoff.script_path)],
+    cwd=palace_handoff.run_dir,
+    check=True,
+)
+```
+
+### HFSS
+
+```{python}
+#| id: epr-hfss-execute
+import subprocess
+
+subprocess.run(
+    ["bash", str(hfss_handoff.script_path)],
+    cwd=hfss_handoff.run_dir,
+    check=True,
+)
+```
+
+::::
+
+Retrieve the complete returned directory after execution. AEDT Desktop must run on the same host as SCGSim and the selected licensed AEDT release.
+
+Check: preparation prints a unique run directory; after execution retrieve the full package. See [execution and handoff](../reference.qmd#execution-handoff).
+
+## 7. Read and plot results {#display-the-mode-and-participation}
+
+Use a fresh analysis kernel and the generated local run directory. For a transferred return, change only `RETURNED_RUN_DIR` to the returned folder; the independently saved Palace handoff note remains in the study project. Surface, bulk and branch participation are dimensionless. Keep mode identity and, for HFSS, native pass identity with each plotted record.
+
+:::: {.panel-tabset group="epr-backend"}
+
+### Palace
+
+```{python}
+#| id: epr-palace-results
+import json
 from pathlib import Path
-returned_run_dir = Path(os.environ["SIMPLE_PAD_RETURNED_RUN_DIR"])
-```
+from IPython.display import display
+from scgsim.palace import resolve_palace_result, show_epr
 
-Read the mode and participation owners as described in the reference outputs
-above. The ordinary returned-result report and a separately derived EPR result
-retain their distinct identities.
-
-::: {.panel-tabset group="solver"}
-
-### Palace
-
-```python
-from scgsim.palace import resolve_palace_result
-
-expected_handoff_id = os.environ["SIMPLE_PAD_PALACE_HANDOFF_ID"]
-result = resolve_palace_result(
-    returned_run_dir, expected_handoff_id=expected_handoff_id,
+PALACE_HANDOFF_NOTE = Path(
+    ".artifacts/SimplePad/pad-epr-palace-01-handoff.json"
 )
-result.show_all_results()
+handoff_record = json.loads(PALACE_HANDOFF_NOTE.read_text(encoding="utf-8"))
+RETURNED_RUN_DIR = Path(handoff_record["run_dir"])
+EXPECTED_HANDOFF_ID = handoff_record["handoff_id"]
+resolved = resolve_palace_result(
+    RETURNED_RUN_DIR,
+    expected_handoff_id=EXPECTED_HANDOFF_ID,
+)
+resolved.show_all_results()
+epr_result = resolved.epr_result()
+print("Recorded modes:", sorted({row["mode"] for row in epr_result.rows}))
+MODE = 1  # Select a mode shown by the previous line.
+display(show_epr(epr_result, mode=MODE))
 ```
 
-### AEDT
+Palace reports its port participation with its native signed convention. Read the sign, port name and units of the source model together with the surface and bulk values.
 
-```python
-from scgsim.aedt import resolve_results
+### HFSS
 
-result = resolve_results(returned_run_dir)
-result.show_all_results(show_details=True)
-physics_rows = result.physics_results()
-epr_rows = result.epr_result()
+```{python}
+#| id: epr-hfss-results
+from pathlib import Path
+from IPython.display import display
+from scgsim.aedt import resolve_results, show_epr, plot_epr_result
+
+RETURNED_RUN_DIR = Path(".artifacts/SimplePad/pad-epr-hfss-01")
+resolved = resolve_results(RETURNED_RUN_DIR)
+resolved.show_all_results(show_details=True)
+epr_history = resolved.epr_result()
+print("Recorded mode/pass/status:", sorted({
+    (row["mode"], row["native_pass"], row["status"])
+    for row in epr_history.rows
+}))
+MODE = 1
+MODE_PASSES = sorted({
+    row["native_pass"] for row in epr_history.rows if row["mode"] == MODE
+})
+if not MODE_PASSES:
+    raise ValueError(f"No EPR passes were recorded for mode {MODE}")
+NATIVE_PASS = MODE_PASSES[-1]
+display(show_epr(epr_history, mode=MODE, native_pass=NATIVE_PASS))
+display(plot_epr_result(
+    epr_history,
+    mode=MODE,
+    native_pass=NATIVE_PASS,
+    show_convergence=True,
+))
 ```
 
-:::
+The code selects the last pass recorded for mode 1; change `MODE` to inspect another mode. The table and plots keep surface contributions, bulk domains, inductive junction participation and capacitive participation as separate quantities.
 
-:::::
+::::
+
+Check: the plot title identifies the selected mode and HFSS pass; retain dimensionless values with owner/interface labels. See [results and reports](../reference.qmd#results-reports).
+
+### Historical SimplePad observations
+
+The original mode returns used SCGSim 1.0.1; the HFSS EPR table was separately derived from the existing solution with SCGSim 1.0.2rc1.
+
+| Historical mode-1 report | Palace | HFSS |
+|---|---:|---:|
+| Frequency | 5.137791 GHz | 4.879060 GHz |
+| Silicon electric participation | 0.920574 | 0.893092 |
+| Vacuum electric participation | 0.079426 | 0.106908 |
+| Branch energy participation | signed port 0.993926 | $p_L$ 0.995816; $p_C$ 0 |
+
+![SimplePad HFSS surface, bulk and junction participations.](../assets/simple-pad-hfss-epr.png){#fig-simple-pad-hfss-epr}
+
+## 8. Adapt this notebook
+
+Change the source dimensions, branch inductance, selected film records and run controls in the central settings cell. Rebuild the source and regenerate the handoff whenever the geometry or material stack changes. Keep the exact interface side, owner, mode and native pass when interpreting contributions.
+
+A zero-loss assumption is not a measured material value, and a participation by itself is not device Q or $T_1$. For the mode-frequency workflow without EPR, use the standalone [resonance notebook](resonance.qmd); for capacitance matrices, use [pad capacitance](capacitance.qmd). The [EPR concepts](../eigenmode-epr.qmd), [Palace Eigenmode reference](../course/palace-eigenmode.qmd) and [AEDT EPR guide](../course/offline-epr.qmd) explain result definitions and additional analysis paths. For later analysis of saved fields or an assumption-only update, see [saved fields and offline loss](../reference.qmd#saved-fields-offline-loss).
+
+Public SimplePad sources at the same PDK revision: [Palace Eigenmode](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/src/ComponentSimulation/SimplePad/palace_eigenmode.qmd) and [AEDT HFSS Eigenmode](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/src/ComponentSimulation/SimplePad/aedt_hfss_eigenmode.qmd); the [public evidence index](https://github.com/NCUPHY-LTLab/orcapen-sc-pdk/blob/51985d9507025e8241205712e866c0b804de29b9/notebooks/ComponentSimulation/SimplePad/evidence/README.md) records the original HFSS EPR result as partial and the separate existing-solution observation.
+
+Check: prepare a fresh handoff after each geometry or film-setting change and inspect the returned mode/pass report before reanalysis.

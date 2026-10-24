@@ -49,9 +49,8 @@ Keep the three high-order controls separate: `geometry_order` creates the mesh
 geometry, FEM order controls the field approximation, and Palace
 `HighOrderOutput` controls serialization. Palace's native import default
 `RemoveCurvature=false` preserves imported high-order geometry nodes. For EPR,
-the [Palace Surface EPR contract](../specs/palace-electrostatic-sgb.qmd#curved-positive-inset-distance)
-explains the positive-inset perimeter approximation and the unchanged unmasked
-and zero-margin path.
+the [current Palace surface-distance-band contract](../specs/palace-eigenmode.qmd#surface-distance-bands-converging)
+defines the source-bound bands separately from the `MA`/`MS`/`SA` selectors.
 
 An algebraic eigenpair residual and an adaptive mesh indicator describe
 different quantities. A frequency can change little while a field-sensitive
